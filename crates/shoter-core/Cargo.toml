@@ -1,0 +1,23 @@
+[package]
+name = "shoter-core"
+description = "Platform-independent core of AdvantShoter: settings, history, imaging, Box.com client, link rewriting"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+url = "2"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp"] }
+tokio = { version = "1", features = ["sync", "time", "net", "io-util", "macros", "rt"] }
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "json", "multipart", "form", "query", "http2", "charset", "system-proxy"] }
+log = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }
+wiremock = "0.6"

@@ -1,0 +1,28 @@
+# Vendored from https://github.com/mg-chao/snow-shot (snow-crates/crates/snow-ui-selector),
+# commit 9ca44a60f3a49c2c36071d1a06ef721883ba0259, Apache-2.0 (see LICENSE / COPYRIGHT).
+# Only the manifest was changed: workspace-inherited values were inlined and the
+# examples (which need extra features) were dropped.
+[package]
+name = "snow-ui-selector"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+name = "snow_ui_selector"
+path = "src/lib.rs"
+
+[target.'cfg(windows)'.dependencies]
+crossbeam-channel = "0.5"
+rstar = "0.12.2"
+windows = { version = "0.62.2", features = [
+    "Win32_UI_Accessibility", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_System_Threading", "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+accessibility-sys = "0.2.0"
+core-foundation = "0.10.1"
+core-foundation-sys = "0.8"

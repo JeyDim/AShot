@@ -1,0 +1,45 @@
+[package]
+name = "advantshoter"
+description = "AdvantShoter — скриншоты с редактором и ссылками через Box.com"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+default-run = "advantshoter"
+
+[lib]
+name = "advantshoter_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+shoter-core = { path = "../crates/shoter-core" }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-log = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "time", "macros"] }
+log = "0.4"
+image = { version = "0.25", default-features = false, features = ["png"] }
+arboard = { version = "3", default-features = false, features = ["image-data"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[target.'cfg(windows)'.dependencies]
+snow-ui-selector = { path = "../vendor/snow-ui-selector" }
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dwm",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Security_Cryptography",
+    "Win32_System_Threading",
+] }

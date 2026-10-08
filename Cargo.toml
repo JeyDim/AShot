@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = ["crates/shoter-core", "src-tauri", "vendor/snow-ui-selector"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Advant"]
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
+
+# Image processing (capture, crop, PNG/BMP encoding) is noticeably slow in debug builds.
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
