@@ -3,7 +3,7 @@
 export type AfterCapture = 'ask' | 'openEditor' | 'copy' | 'save' | 'upload';
 export type FullscreenMode = 'currentMonitor' | 'allMonitors';
 export type ThemeSetting = 'system' | 'light' | 'dark';
-export type ImageFormat = 'png' | 'jpeg';
+export type ImageFormat = 'png' | 'jpeg' | 'webp';
 export type BoxAuthMode = 'oAuth' | 'clientCredentials' | 'developerToken';
 export type CaptureMode = 'region' | 'window' | 'windowPick' | 'fullscreen' | 'lastRegion';
 export type Action = 'edit' | 'copy' | 'save' | 'saveAs' | 'upload' | 'store';

@@ -262,11 +262,13 @@ impl HistoryStore {
         Ok(())
     }
 
-    pub fn clear(&self) -> Result<()> {
-        for item in self.list() {
+    /// Deletes every item; returns how many there were.
+    pub fn clear(&self) -> Result<usize> {
+        let items = self.list();
+        for item in &items {
             self.delete(&item.id)?;
         }
-        Ok(())
+        Ok(items.len())
     }
 
     fn prune(&self) -> Result<()> {
@@ -351,7 +353,8 @@ mod tests {
         store.add(b"2", b"t", 1, 1, "region").unwrap();
         store.delete(&a.id).unwrap();
         assert_eq!(store.list().len(), 1);
-        store.clear().unwrap();
+        assert_eq!(store.clear().unwrap(), 1);
         assert!(store.list().is_empty());
+        assert_eq!(store.clear().unwrap(), 0);
     }
 }

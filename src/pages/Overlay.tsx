@@ -948,7 +948,7 @@ export default function Overlay() {
       {barPos && (
         <div
           ref={measureBar}
-          className="animate-pop-in absolute flex w-max flex-wrap items-center justify-end gap-1 rounded-[18px] bg-surface/95 p-1.5 shadow-(--shadow-pop) ring-1 ring-white/6 backdrop-blur"
+          className="animate-pop-in absolute flex w-max flex-wrap items-center justify-end gap-1 rounded-[18px] bg-surface/95 p-1.5 shadow-(--shadow-pop) ring-1 ring-border backdrop-blur"
           style={{ left: barPos.left, top: barPos.top, maxWidth: window.innerWidth - 16 }}
           onMouseDown={(e) => e.stopPropagation()}
         >

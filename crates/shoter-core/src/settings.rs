@@ -46,6 +46,8 @@ pub enum ImageFormat {
     #[default]
     Png,
     Jpeg,
+    /// Lossless WebP: same pixels as PNG, usually a smaller file.
+    Webp,
 }
 
 impl ImageFormat {
@@ -53,6 +55,25 @@ impl ImageFormat {
         match self {
             ImageFormat::Png => "png",
             ImageFormat::Jpeg => "jpg",
+            ImageFormat::Webp => "webp",
+        }
+    }
+
+    pub fn mime(self) -> &'static str {
+        match self {
+            ImageFormat::Png => "image/png",
+            ImageFormat::Jpeg => "image/jpeg",
+            ImageFormat::Webp => "image/webp",
+        }
+    }
+
+    /// Format by file extension (`jpg`, `JPEG`, `webp`, …).
+    pub fn from_extension(ext: &str) -> Option<Self> {
+        match ext.to_ascii_lowercase().as_str() {
+            "png" => Some(ImageFormat::Png),
+            "jpg" | "jpeg" => Some(ImageFormat::Jpeg),
+            "webp" => Some(ImageFormat::Webp),
+            _ => None,
         }
     }
 }
@@ -306,6 +327,15 @@ pub fn hotkey_label(accelerator: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_formats() {
+        assert_eq!(ImageFormat::from_extension("JPEG"), Some(ImageFormat::Jpeg));
+        assert_eq!(ImageFormat::from_extension("webp"), Some(ImageFormat::Webp));
+        assert_eq!(ImageFormat::from_extension("gif"), None);
+        assert_eq!(ImageFormat::Webp.extension(), "webp");
+        assert_eq!(serde_json::to_string(&ImageFormat::Webp).unwrap(), "\"webp\"");
+    }
 
     #[test]
     fn hotkey_labels() {

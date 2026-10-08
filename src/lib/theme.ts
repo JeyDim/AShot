@@ -36,10 +36,9 @@ async function apply(setting: ThemeSetting) {
 
 /**
  * Applies the theme setting and follows its changes (and Windows' own theme while the
- * setting is "system"). `forced` keeps a fixed theme (the capture overlay is always dark).
+ * setting is "system").
  */
-export function initTheme(forced?: 'light' | 'dark') {
-  if (forced) return setTheme(forced);
+export function initTheme() {
   // Last known theme first – no flash while the settings load.
   let cached: string | null = null;
   try {

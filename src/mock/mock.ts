@@ -153,6 +153,8 @@ export async function installMocks() {
                 hasDeveloperToken: false,
                 redirectUri: 'https://www.box.com/home/',
               };
+        case 'history_clear':
+          return history.splice(0).length;
         case 'update_state': {
           // ?update=available|downloading|upToDate|error|disabled — states of «О программе».
           const phase = query.get('update') ?? 'idle';

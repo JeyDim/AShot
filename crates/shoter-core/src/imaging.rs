@@ -5,6 +5,7 @@ use std::io::Cursor;
 use image::codecs::bmp::BmpEncoder;
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+use image::codecs::webp::WebPEncoder;
 use image::{DynamicImage, ExtendedColorType, ImageEncoder, Rgba, RgbaImage};
 
 use crate::geometry::Rect;
@@ -96,6 +97,13 @@ pub fn encode_jpeg(img: &RgbaImage, quality: u8) -> Result<Vec<u8>> {
     Ok(out.into_inner())
 }
 
+/// Lossless WebP (the pure-Rust encoder has no lossy mode; screenshots compress well anyway).
+pub fn encode_webp(img: &RgbaImage) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(img.len() / 4);
+    WebPEncoder::new_lossless(&mut out).encode(img.as_raw(), img.width(), img.height(), ExtendedColorType::Rgba8)?;
+    Ok(out)
+}
+
 pub fn decode(bytes: &[u8]) -> Result<RgbaImage> {
     Ok(image::load_from_memory(bytes)?.into_rgba8())
 }
@@ -142,7 +150,7 @@ mod tests {
         assert_eq!(t.dimensions(), (100, 50));
         assert_eq!(thumbnail(&img, 1000, 1000).dimensions(), (400, 200));
 
-        for bytes in [encode_png(&img).unwrap(), encode_png_fast(&img).unwrap(), encode_bmp(&img).unwrap()] {
+        for bytes in [encode_png(&img).unwrap(), encode_png_fast(&img).unwrap(), encode_bmp(&img).unwrap(), encode_webp(&img).unwrap()] {
             let back = decode(&bytes).unwrap();
             assert_eq!(back.dimensions(), (400, 200));
             assert_eq!(back.get_pixel(5, 5).0, [10, 20, 30, 255]);

@@ -36,7 +36,7 @@ pub fn window_theme(app: &AppHandle) -> Option<Theme> {
     }
 }
 
-/// Re-applies the theme setting to the open windows (overlays always stay dark).
+/// Re-applies the theme setting to the native frames of open windows (overlays have none).
 pub fn apply_theme(app: &AppHandle) {
     let theme = window_theme(app);
     for (label, window) in app.webview_windows() {
@@ -323,6 +323,8 @@ pub fn open_settings(app: &AppHandle, section: Option<&str>) {
         .title("Настройки — AShot")
         .inner_size(840.0, 640.0)
         .min_inner_size(720.0, 520.0)
+        // Own title bar (drag area, minimize / close) is drawn by the page.
+        .decorations(false)
         .center()
         .theme(window_theme(app))
         .build();

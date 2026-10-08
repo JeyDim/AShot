@@ -109,6 +109,10 @@ fn encode_as(png: Vec<u8>, format: ImageFormat, quality: u8) -> Result<Vec<u8>, 
             let img = imaging::decode(&png).map_err(|e| e.to_string())?;
             imaging::encode_jpeg(&img, quality).map_err(|e| e.to_string())
         }
+        ImageFormat::Webp => {
+            let img = imaging::decode(&png).map_err(|e| e.to_string())?;
+            imaging::encode_webp(&img).map_err(|e| e.to_string())
+        }
     }
 }
 
@@ -181,16 +185,16 @@ pub async fn save_item_as(app: &AppHandle, id: &str) -> Result<Option<PathBuf>, 
         .set_file_name(file_name)
         .add_filter("PNG", &["png"])
         .add_filter("JPEG", &["jpg", "jpeg"])
+        .add_filter("WebP", &["webp"])
         .save_file(move |path| {
             let _ = tx.send(path);
         });
     let Some(path) = rx.await.ok().flatten() else { return Ok(None) };
     let path = path.into_path().map_err(|e| e.to_string())?;
     let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    let (format, path) = match ext.as_str() {
-        "jpg" | "jpeg" => (ImageFormat::Jpeg, path),
-        "png" => (ImageFormat::Png, path),
-        _ => (ImageFormat::Png, path.with_extension("png")),
+    let (format, path) = match ImageFormat::from_extension(&ext) {
+        Some(format) => (format, path),
+        None => (ImageFormat::Png, path.with_extension("png")),
     };
     write_image(app, id, path, format).await.map(Some)
 }
@@ -221,10 +225,7 @@ pub async fn upload_item(app: &AppHandle, id: &str) -> Result<String, String> {
         filename::first_number(&filename::format(&settings.file_name_pattern, Local::now(), item.width, item.height)),
         format.extension()
     );
-    let mime = match format {
-        ImageFormat::Png => "image/png",
-        ImageFormat::Jpeg => "image/jpeg",
-    };
+    let mime = format.mime();
 
     let mut result = upload_once(app, &name, data.clone(), mime).await;
     // Not signed in yet / token expired or revoked: open the Box sign-in page right away

@@ -306,10 +306,11 @@ pub fn history_delete(app: AppHandle, id: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
-pub fn history_clear(app: AppHandle) -> CmdResult<()> {
-    app.state::<AppState>().history.clear().map_err(err)?;
+/// Returns how many screenshots were deleted.
+pub fn history_clear(app: AppHandle) -> CmdResult<usize> {
+    let deleted = app.state::<AppState>().history.clear().map_err(err)?;
     actions::notify_history(&app);
-    Ok(())
+    Ok(deleted)
 }
 
 #[tauri::command]

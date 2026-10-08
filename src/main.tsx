@@ -44,8 +44,8 @@ async function start() {
     await installMocks();
   }
   const { page } = route();
-  // The capture overlay sits on top of any screenshot: always dark.
-  initTheme(page === 'overlay' ? 'dark' : undefined);
+  // Every window follows the theme setting, the capture overlay's toolbars too.
+  initTheme();
   if (page === 'panel' || page === 'toast') document.body.classList.add('transparent');
   if (page === 'overlay') document.body.style.background = '#000';
   createRoot(document.getElementById('root')!).render(

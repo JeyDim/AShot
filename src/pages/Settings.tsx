@@ -12,7 +12,9 @@ import {
   FolderOpen,
   Info,
   Keyboard,
+  Minus,
   Monitor,
+  Power,
   RefreshCw,
   RotateCcw,
   Save,
@@ -23,7 +25,8 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type InputHTMLAttributes, type ReactNode } from 'react';
 import { Button, IconButton, Input, Logo, Range, Segmented, Select, Spinner, Switch } from '../components/ui';
-import { acceleratorFromEvent, hotkeyLabel } from '../lib/format';
+import { acceleratorFromEvent, hotkeyLabel, plural } from '../lib/format';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useTauriEvent } from '../lib/hooks';
 import { api, errorText, type SettingsSection } from '../lib/ipc';
 import type { AppInfo, AppSettings, BoxStatus, Hotkeys, SettingsView, UpdateState } from '../lib/types';
@@ -136,9 +139,14 @@ export default function Settings({ initial }: { initial?: string }) {
   return (
     <div className="flex h-full bg-bg">
       <aside className="flex w-[210px] shrink-0 flex-col gap-0.5 px-2.5 py-4">
-        <div className="flex items-center gap-2.5 px-2.5 pt-1 pb-4">
-          <Logo size={26} radius={315} />
-          <span className="text-[14px] font-bold">Настройки</span>
+        {/* No native title bar: the header and the top of the page move the window. */}
+        <div className="flex items-center gap-2.5 px-2.5 pt-1 pb-4" data-tauri-drag-region>
+          <span className="pointer-events-none">
+            <Logo size={26} radius={315} />
+          </span>
+          <span className="text-[14px] font-bold" data-tauri-drag-region>
+            Настройки
+          </span>
         </div>
         <nav className="flex flex-col gap-0.5">
           {SECTIONS.map((s) => (
@@ -156,7 +164,14 @@ export default function Settings({ initial }: { initial?: string }) {
             </button>
           ))}
         </nav>
-        <div className="flex-1" />
+        <div className="flex-1" data-tauri-drag-region />
+        <button
+          onClick={() => api.quit()}
+          className="mb-2 flex h-[38px] items-center gap-2.5 rounded-full px-3 text-[14px] text-muted transition-colors hover:bg-danger/10 hover:text-danger"
+        >
+          <Power size={18} />
+          Выйти из AShot
+        </button>
         <div className={clsx('flex items-center gap-1.5 px-3 text-[12px]', problems.length ? 'text-danger' : 'text-muted')}>
           {saving ? (
             <>
@@ -175,7 +190,15 @@ export default function Settings({ initial }: { initial?: string }) {
       </aside>
 
       <main className="my-2 mr-2 flex min-w-0 flex-1 flex-col overflow-hidden rounded-[14px] bg-surface">
-        <div className="min-h-0 flex-1 overflow-y-auto px-7 py-6">
+        <div className="flex h-10 shrink-0 items-center justify-end gap-0.5 px-1.5" data-tauri-drag-region>
+          <IconButton tip="Свернуть" tipPos="bottom" size={30} onClick={() => getCurrentWindow().minimize()}>
+            <Minus size={17} />
+          </IconButton>
+          <IconButton tip="Закрыть" tipPos="left" size={30} tone="danger" onClick={() => getCurrentWindow().close()}>
+            <X size={17} />
+          </IconButton>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-7 pb-6">
           <div className="mx-auto flex max-w-[640px] flex-col gap-5">
             {problems.length > 0 && (
               <div className="flex gap-2.5 rounded-xl bg-danger/10 px-3.5 py-3 text-[12.5px] leading-relaxed text-danger">
@@ -415,6 +438,14 @@ function Saving({ s, update, view }: { s: AppSettings; update: Update; view: Set
   const [limit, setLimit] = useState(s.historyLimit);
   const [quality, setQuality] = useState(s.jpegQuality);
   const [confirmClear, setConfirmClear] = useState(false);
+  // How many screenshots the last "Очистить" removed (shown for 5 s).
+  const [cleared, setCleared] = useState<number | null>(null);
+  const [clearError, setClearError] = useState('');
+  useEffect(() => {
+    if (cleared === null) return;
+    const t = window.setTimeout(() => setCleared(null), 5000);
+    return () => window.clearTimeout(t);
+  }, [cleared]);
   useEffect(() => setLimit(s.historyLimit), [s.historyLimit]);
   useEffect(() => setQuality(s.jpegQuality), [s.jpegQuality]);
   useEffect(() => {
@@ -443,7 +474,7 @@ function Saving({ s, update, view }: { s: AppSettings; update: Update; view: Set
         .replaceAll('{fff}', p(d.getMilliseconds(), 3))
         .replaceAll('{w}', '1280')
         .replaceAll('{h}', '720')
-        .replaceAll('{rand}', 'k3x9qa') + (s.imageFormat === 'png' ? '.png' : '.jpg')
+        .replaceAll('{rand}', 'k3x9qa') + ({ png: '.png', jpeg: '.jpg', webp: '.webp' } as const)[s.imageFormat]
     );
   }, [s.fileNamePattern, s.imageFormat]);
 
@@ -502,6 +533,7 @@ function Saving({ s, update, view }: { s: AppSettings; update: Update; view: Set
             options={[
               { value: 'png', label: 'PNG' },
               { value: 'jpeg', label: 'JPG' },
+              { value: 'webp', label: 'WebP' },
             ]}
           />
         </Row>
@@ -515,17 +547,28 @@ function Saving({ s, update, view }: { s: AppSettings; update: Update; view: Set
         <Row label="Хранить последних снимков" hint="Временное хранилище: снимки можно снова открыть из трея">
           <Range label="Хранить последних снимков" value={limit} min={1} max={50} onChange={setLimit} onCommit={(v) => update({ historyLimit: v })} />
         </Row>
-        <Row label="Очистить историю" hint="Файлы в папке снимков не удаляются">
-          <Button
-            variant="danger"
-            onClick={() => {
-              if (!confirmClear) return setConfirmClear(true);
-              setConfirmClear(false);
-              api.historyClear();
-            }}
-          >
-            {confirmClear ? 'Точно очистить?' : 'Очистить'}
-          </Button>
+        <Row label="Очистить историю" hint={clearError || 'Файлы в папке снимков не удаляются'}>
+          {cleared !== null ? (
+            <span className="flex h-9 items-center gap-1.5 text-[13.5px] font-medium text-success" role="status">
+              <Check size={16} />
+              {cleared ? `Удалено ${cleared} ${plural(cleared, 'снимок', 'снимка', 'снимков')}` : 'История уже пуста'}
+            </span>
+          ) : (
+            <Button
+              variant="danger"
+              onClick={() => {
+                if (!confirmClear) return setConfirmClear(true);
+                setConfirmClear(false);
+                setClearError('');
+                api
+                  .historyClear()
+                  .then(setCleared)
+                  .catch((e) => setClearError(errorText(e)));
+              }}
+            >
+              {confirmClear ? 'Точно очистить?' : 'Очистить'}
+            </Button>
+          )}
         </Row>
       </Group>
     </>
@@ -672,7 +715,8 @@ function BoxSection({ s, update, flush, defaultTemplate }: { s: AppSettings; upd
             className="w-[250px] shrink-0"
           >
             <option value="open">Все, у кого есть ссылка</option>
-            <option value="company">Только сотрудники компании</option>
+            {/* Not offered any more; kept visible only for settings that already use it. */}
+            {box.sharedLinkAccess === 'company' && <option value="company">Только сотрудники компании</option>}
             <option value="collaborators">Только участники папки</option>
           </Select>
         </Row>
@@ -682,15 +726,11 @@ function BoxSection({ s, update, flush, defaultTemplate }: { s: AppSettings; upd
         <Row label="Заменять ссылку Box по шаблону" hint="Выключено — обычная ссылка app.box.com/s/…">
           <Switch checked={links.rewrite} onChange={(v) => update({ links: { rewrite: v } })} label="Заменять ссылку Box по шаблону" />
         </Row>
-        <Row label="Шаблон ссылки" hint="Пусто — по умолчанию сборки. {id} — код Box, {ext} — расширение, {name} — имя файла">
-          <TextField
-            className="font-mono"
-            value={links.template}
-            placeholder={defaultTemplate}
-            disabled={!links.rewrite}
-            onChange={(v) => update({ links: { template: v } }, TYPING)}
-          />
-        </Row>
+        {links.rewrite && (
+          <Row label="Шаблон ссылки" hint="Пусто — по умолчанию сборки. {id} — код Box, {ext} — расширение, {name} — имя файла">
+            <TextField className="font-mono" value={links.template} placeholder={defaultTemplate} onChange={(v) => update({ links: { template: v } }, TYPING)} />
+          </Row>
+        )}
       </Group>
 
       <Group title="После загрузки">
@@ -702,16 +742,18 @@ function BoxSection({ s, update, flush, defaultTemplate }: { s: AppSettings; upd
         </Row>
       </Group>
 
-      <div className="flex flex-col gap-0.5 overflow-hidden rounded-xl bg-surface-2 px-3.5 py-3 font-mono text-[12px] leading-[1.7]">
-        <div className="truncate">
-          <span className="text-muted">было{'  '}</span>
-          {strip(SAMPLE_BOX_LINK)}
+      {links.rewrite && (
+        <div className="flex flex-col gap-0.5 overflow-hidden rounded-xl bg-surface-2 px-3.5 py-3 font-mono text-[12px] leading-[1.7]">
+          <div className="truncate">
+            <span className="text-muted">было{'  '}</span>
+            {strip(SAMPLE_BOX_LINK)}
+          </div>
+          <div className="truncate">
+            <span className="text-muted">стало </span>
+            {strip(preview || SAMPLE_BOX_LINK)}
+          </div>
         </div>
-        <div className="truncate">
-          <span className="text-muted">стало </span>
-          {strip(links.rewrite && preview ? preview : SAMPLE_BOX_LINK)}
-        </div>
-      </div>
+      )}
 
       <section className="flex flex-col gap-0.5">
         <button onClick={() => setAdvanced((a) => !a)} className="flex items-center gap-1 self-start pb-1.5 text-[12px] text-muted transition-colors hover:text-text">
