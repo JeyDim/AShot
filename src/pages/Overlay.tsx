@@ -193,10 +193,10 @@ export default function Overlay() {
 
   function drawMagnifier(ctx: CanvasRenderingContext2D, st: S, k: number, W: number, H: number) {
     const img = st.img!;
-    const cells = 15;
-    const size = Math.round(150 * k);
+    const cells = 17;
+    const size = Math.round(170 * k);
     const cell = size / cells;
-    const infoH = Math.round(46 * k);
+    const infoH = Math.round(50 * k);
     const off = Math.round(26 * k);
     let x = st.mouse.x + off;
     let y = st.mouse.y + off;
@@ -206,16 +206,16 @@ export default function Overlay() {
     const sy = Math.round(st.mouse.y) - Math.floor(cells / 2);
 
     ctx.save();
-    roundRect(ctx, x, y, size, size + infoH, 10 * k);
+    roundRect(ctx, x, y, size, size + infoH, 12 * k);
     ctx.fillStyle = '#0c0e14';
     ctx.fill();
     ctx.save();
-    roundRect(ctx, x, y, size, size, 10 * k);
+    roundRect(ctx, x, y, size, size, 12 * k);
     ctx.clip();
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(img, sx, sy, cells, cells, x, y, size, size);
     // pixel grid
-    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (let i = 1; i < cells; i++) {
@@ -225,8 +225,11 @@ export default function Overlay() {
       ctx.lineTo(x + size, y + i * cell);
     }
     ctx.stroke();
-    // center pixel
+    // crosshair + center pixel
     const c = Math.floor(cells / 2);
+    ctx.fillStyle = 'rgba(123,123,255,0.22)';
+    ctx.fillRect(x, y + c * cell, size, cell);
+    ctx.fillRect(x + c * cell, y, cell, size);
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = Math.max(1, 1.5 * k);
     ctx.strokeRect(x + c * cell, y + c * cell, cell, cell);
@@ -235,32 +238,39 @@ export default function Overlay() {
     // info: coordinates + color
     const px = Math.min(Math.max(0, Math.round(st.mouse.x)), img.naturalWidth - 1);
     const py = Math.min(Math.max(0, Math.round(st.mouse.y)), img.naturalHeight - 1);
-    let hex = '';
-    if (st.sampler) {
-      const d = st.sampler.getImageData(px, py, 1, 1).data;
-      hex = rgbToHex(d[0], d[1], d[2]);
-    }
     const bx = st.prep?.monitor.bounds.x ?? 0;
     const by = st.prep?.monitor.bounds.y ?? 0;
-    ctx.font = `500 ${Math.round(11.5 * k)}px "Segoe UI Variable Text", "Segoe UI", sans-serif`;
     ctx.textBaseline = 'middle';
+    const row1 = y + size + infoH * 0.3;
+    const row2 = y + size + infoH * 0.7;
+    ctx.font = `500 ${Math.round(11.5 * k)}px "Segoe UI Variable Text", "Segoe UI", sans-serif`;
     ctx.fillStyle = '#a1a9b8';
-    const row1 = y + size + infoH * 0.32;
-    const row2 = y + size + infoH * 0.72;
-    ctx.fillText(`X ${px + bx}   Y ${py + by}`, x + 10 * k, row1);
-    if (hex) {
+    ctx.fillText(`X ${px + bx}  Y ${py + by}`, x + 10 * k, row1);
+    if (st.sampler) {
+      const d = st.sampler.getImageData(px, py, 1, 1).data;
+      const hex = rgbToHex(d[0], d[1], d[2]);
       ctx.fillStyle = hex;
       roundRect(ctx, x + 10 * k, row2 - 6 * k, 12 * k, 12 * k, 3 * k);
       ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
       ctx.fillStyle = '#eceef3';
+      ctx.font = `600 ${Math.round(11.5 * k)}px "Cascadia Mono", Consolas, monospace`;
       ctx.fillText(hex, x + 28 * k, row2);
-      ctx.fillStyle = '#6c7486';
-      ctx.textAlign = 'right';
-      ctx.fillText('C — копировать', x + size - 10 * k, row2);
+      // "C" key hint
+      const kw = 16 * k;
+      roundRect(ctx, x + size - 10 * k - kw, row2 - 8 * k, kw, 16 * k, 4 * k);
+      ctx.fillStyle = '#232833';
+      ctx.fill();
+      ctx.fillStyle = '#a1a9b8';
+      ctx.font = `600 ${Math.round(10.5 * k)}px "Segoe UI", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText('C', x + size - 10 * k - kw / 2, row2 + 0.5);
     }
     ctx.restore();
     ctx.lineWidth = 1;
-    roundRect(ctx, x + 0.5, y + 0.5, size - 1, size + infoH - 1, 10 * k);
+    roundRect(ctx, x + 0.5, y + 0.5, size - 1, size + infoH - 1, 12 * k);
     ctx.strokeStyle = 'rgba(255,255,255,0.12)';
     ctx.stroke();
   }
@@ -644,6 +654,9 @@ export default function Overlay() {
           <span className="font-medium">{mode === 'windowPick' ? 'Кликните по окну или элементу' : 'Выделите область или кликните по окну'}</span>
           <span className="text-subtle">·</span>
           <span className="text-muted">колесо — уровень элемента</span>
+          <span className="text-subtle">·</span>
+          <span className="kbd">C</span>
+          <span className="text-muted">цвет</span>
           <span className="text-subtle">·</span>
           <span className="kbd">Esc</span>
           <span className="text-muted">отмена</span>

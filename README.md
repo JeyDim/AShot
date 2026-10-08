@@ -1,0 +1,166 @@
+# AdvantShoter
+
+Скриншоты экрана из трея Windows: выделение области, окна или отдельного элемента,
+рисование поверх снимка, история последних снимков и публикация в Box.com
+со ссылками вида **`advant.one/…`**, которые открываются и на телефоне.
+
+Прототип по функциям — [Greenshot](https://getgreenshot.org/); часть UX и модуль
+подсветки элементов взяты из [Snow Shot](https://github.com/mg-chao/snow-shot).
+
+<p align="center">
+  <img src="docs/screenshots/tray-panel.png" width="360" alt="Панель в трее">
+  &nbsp;
+  <img src="docs/screenshots/toast-link.png" width="380" alt="Ссылка скопирована">
+</p>
+
+![Выделение области](docs/screenshots/overlay-selected.png)
+![Редактор](docs/screenshots/editor.png)
+
+## Возможности
+
+**Трей**
+- Панель по клику на иконку: крупные кнопки в одну линию сверху — *Область*, *Окно*,
+  *Весь экран*, *Повторить* (с подсказкой горячих клавиш).
+- Переключатель «Показывать курсор» — **выключен по умолчанию**.
+- Последние 10 снимков (лимит настраивается): миниатюра, время, ссылка `advant.one/…`
+  в один клик, копирование, загрузка, сохранение, удаление. Клик по миниатюре — открыть в редакторе.
+- Окно «О программе» с версией, коммитом и датой сборки.
+
+**Выделение** (`PrtSc`)
+- Экран «замораживается»; тянем рамку мышью или кликаем по подсвеченному **окну
+  или элементу внутри окна** (кнопка, панель, список — через UI Automation). Колесо мыши — уровень элемента.
+- Лупа с сеткой пикселей, координатами и цветом (`C` — скопировать HEX).
+- Рамку можно двигать и тянуть за 8 ручек, стрелки — сдвиг на 1 px (Shift — 10 px, Ctrl — размер), `F` — весь монитор.
+- Панель действий рядом с выделением: ✏️ редактор (`Enter`), копировать (`Ctrl+C`),
+  сохранить (`Ctrl+S`), **получить ссылку** (`Ctrl+U`), отмена (`Esc`).
+
+**Редактор**
+- Прямоугольник, эллипс, стрелка, линия, карандаш, маркер, текст, нумерация шагов,
+  пикселизация (скрыть данные), обрезка. Shift — квадрат / 45° / прямая.
+- Палитра + свой цвет, 3 толщины (`1`/`2`/`3`), выбор и перемещение, ручки размера,
+  отмена/повтор, масштаб (`Ctrl+колесо`, `Ctrl+0`, `Ctrl+1`), панорама (пробел / средняя кнопка).
+- Аннотации сохраняются отдельно от исходника — снимок из истории можно **переоткрыть и
+  продолжить редактировать** фигуры.
+
+**Сохранение и публикация**
+- Буфер обмена (PNG + DIB — вставляется в мессенджеры, Office, браузер).
+- «Сохранить» — в папку (по умолчанию `Pictures\AdvantShoter`) по шаблону имени; «Сохранить как…» — PNG/JPEG.
+- «Получить ссылку» — загрузка в папку Box через API, создание общей ссылки и **замена
+  домена**: `https://app.box.com/s/3rud4dfakga5r953wt77anhyzo27tm7r` →
+  `https://advant.one/3rud4dfakga5r953wt77anhyzo27tm7r`. Ссылка сразу в буфере обмена.
+- Временное хранилище: каждый снимок автоматически попадает в историю (`%LOCALAPPDATA%\one.advant.shoter\history`).
+
+## Горячие клавиши (по умолчанию)
+
+| Действие | Клавиши |
+| --- | --- |
+| Снимок области / окна / элемента | `PrtSc` |
+| Активное окно | `Alt + PrtSc` |
+| Весь экран | `Ctrl + PrtSc` |
+| Повторить последнюю область | `Shift + PrtSc` |
+
+Меняются в «Настройки → Горячие клавиши». В Windows 11 `PrtSc` по умолчанию занят «Ножницами» —
+отключите *Параметры → Специальные возможности → Клавиатура → «Использовать кнопку PrtSc для открытия функции захвата экрана»*.
+
+## Установка
+
+Каждый пуш собирается в GitHub Actions (**Actions → Build → артефакт `AdvantShoter-windows-…`**):
+
+- `AdvantShoter_x.y.z_x64-setup.exe` — установщик (для текущего пользователя, без прав администратора);
+- `AdvantShoter_x.y.z_x64_ru-RU.msi` — MSI для развёртывания;
+- `AdvantShoter-portable-<commit>.exe` — запуск без установки.
+
+Тег `v*` (например, `v0.2.0`) дополнительно публикует GitHub Release с этими файлами.
+Сборки пока не подписаны — при первом запуске SmartScreen попросит подтвердить запуск.
+Нужен WebView2 (есть в Windows 10/11; установщик докачает при отсутствии).
+
+## Подключение Box.com
+
+Настройки → **Box.com**. Поддерживаются три способа:
+
+1. **Вход через браузер (OAuth 2.0)** — рекомендуемый для сотрудников.
+   1. [Box Developer Console](https://app.box.com/developers/console) → *Create Platform App* →
+      *Custom App* → **User Authentication (OAuth 2.0)**.
+   2. В *Configuration*: Redirect URI `http://localhost:47615/callback`,
+      Application Scopes: **Read and write all files and folders**.
+   3. Скопируйте *Client ID* и *Client Secret* в AdvantShoter → «Войти через браузер».
+2. **Сервисный аккаунт (Client Credentials Grant)** — без входа пользователей: приложение типа
+   *Server Authentication (Client Credentials Grant)*, одобренное администратором Box; нужны Client ID,
+   Client Secret и Enterprise ID (или User ID, чтобы загружать от имени пользователя).
+3. **Developer token** — временный токен из консоли (60 минут), для проверки.
+
+Далее укажите **ID папки** (число из `app.box.com/folder/<ID>`, `0` — корень) и доступ по ссылке.
+Чтобы ссылка открывалась на телефоне без входа, нужен доступ **«Все, у кого есть ссылка» (open)** —
+если администратор Box его запретил, приложение предупредит.
+
+Секреты (Client Secret, токены) хранятся отдельно от настроек и зашифрованы Windows DPAPI
+(`%APPDATA%\one.advant.shoter\secrets.dat`).
+
+## Ссылки advant.one
+
+Настройки → **Ссылки**: шаблон `https://advant.one/{id}` (`{id}` — код ссылки Box,
+`{ext}` — расширение, `{name}` — имя файла). Можно указать просто `advant.one`.
+
+Домен-прокси должен отдавать файл по коду ссылки. Готовый пример на Cloudflare Workers —
+[`proxy/cloudflare-worker`](proxy/cloudflare-worker): отдаёт картинку inline (открывается в браузере
+телефона и в превью мессенджеров) и пропускает остальные пути на основной сайт.
+
+## Разработка
+
+Стек: **Tauri 2** (Rust) + **React 19 / TypeScript / Tailwind 4** + **Konva** (редактор).
+
+```bash
+npm install
+npm run tauri dev        # запуск с hot-reload (Windows)
+npm run tauri build      # установщики в target/release/bundle
+```
+
+Нужны Rust (stable), Node 22, на Windows — MSVC Build Tools и WebView2.
+
+Без Windows интерфейс можно разрабатывать в браузере на мок-данных:
+`npm run dev` и открыть `http://localhost:1420/?mock#/panel` (маршруты: `panel`, `overlay`,
+`overlay` + `&selected`, `editor/a1`, `settings`, `about`, `toast`).
+Скриншоты для README: `npm run build && npx vite preview --port 4173`, затем `npm run screens`.
+
+Тесты: `cargo test -p shoter-core` (ядро: Box API на моках, история, ссылки, изображения),
+`npm test` (геометрия выделения, модель редактора, пикселизация, форматирование), `npm run typecheck`.
+
+### Дизайн
+
+Весь внешний вид задаётся токенами в [`src/styles.css`](src/styles.css) (`@theme`: цвета, радиусы,
+шрифты, тени) — новый дизайн натягивается правкой токенов и компонентов в
+[`src/components/ui.tsx`](src/components/ui.tsx), без изменений логики.
+
+### Структура
+
+```
+crates/shoter-core/      ядро без зависимостей от ОС: настройки, история, Box API, OAuth, ссылки, изображения
+src-tauri/src/
+  capture/               захват (GDI по мониторам, курсор, список окон)
+  overlay.rs flow.rs     окна выделения по мониторам и сценарий снимка
+  uiselect.rs            подсветка элементов (UI Automation, snow-ui-selector)
+  actions.rs             копировать / сохранить / загрузить в Box
+  tray.rs ui.rs          трей, панель, уведомления, окна
+  hotkeys.rs commands.rs горячие клавиши, команды для UI
+  secrets.rs protocol.rs DPAPI, протокол shot:// для картинок
+src/
+  pages/TrayPanel.tsx    панель в трее
+  pages/Overlay.tsx      выделение (+ overlay/geometry.ts)
+  pages/editor/          редактор (Konva): модель, фигуры, тулбар
+  pages/Settings.tsx About.tsx Toast.tsx
+  mock/                  мок-режим для разработки UI в браузере
+vendor/snow-ui-selector/ модуль Snow Shot (Apache-2.0)
+proxy/cloudflare-worker/ пример прокси для advant.one
+```
+
+### Ограничения текущей версии
+
+- Только Windows (10/11). Ядро и UI кроссплатформенные, захват экрана — пока только Windows.
+- Выделение рамкой — в пределах одного монитора; «Весь экран → Все мониторы» и снимок окна,
+  попадающего на несколько мониторов, работают.
+
+## Лицензии сторонних компонентов
+
+- [snow-ui-selector](vendor/snow-ui-selector) из Snow Shot — Apache-2.0, © mg-chao.
+- [Lucide](https://lucide.dev) — ISC; [Tauri](https://tauri.app) — MIT/Apache-2.0;
+  [Konva](https://konvajs.org) — MIT; React — MIT.

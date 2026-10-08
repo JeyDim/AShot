@@ -1,5 +1,6 @@
 import clsx from 'clsx';
 import {
+  ChevronDown,
   Circle,
   Copy,
   Crop,
@@ -18,7 +19,7 @@ import {
   Type,
   Undo2,
 } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, IconButton } from '../../components/ui';
 import type { Action } from '../../lib/types';
 import { PALETTE, type Tool } from './model';
@@ -57,11 +58,12 @@ export function Toolbar(props: {
   act: (a: Action) => void;
 }) {
   const { tool, setTool, color, setColor, size, setSize, busy, act } = props;
+  const width = useWindowWidth();
   return (
-    <div className="flex h-[58px] shrink-0 items-center gap-2 overflow-x-auto border-b border-border bg-surface px-3" data-tauri-drag-region>
+    <div className={clsx('flex h-[58px] shrink-0 items-center overflow-x-auto border-b border-border bg-surface px-3', width < 1180 ? 'gap-1.5' : 'gap-2')} data-tauri-drag-region>
       <div className="flex items-center gap-0.5 rounded-[12px] bg-surface-2 p-1 ring-1 ring-inset ring-border">
         {TOOLS.map((t) => (
-          <IconButton key={t.id} tip={`${t.label} · ${t.key}`} active={tool === t.id} size={38} onClick={() => setTool(t.id)}>
+          <IconButton key={t.id} tip={`${t.label} · ${t.key}`} active={tool === t.id} size={width < 1180 ? 33 : 38} onClick={() => setTool(t.id)}>
             {t.icon}
           </IconButton>
         ))}
@@ -69,31 +71,7 @@ export function Toolbar(props: {
 
       <Divider />
 
-      <div className="flex items-center gap-1.5" role="radiogroup" aria-label="Цвет">
-        {PALETTE.map((c) => (
-          <button
-            key={c}
-            data-tip={c}
-            onClick={() => setColor(c)}
-            className={clsx(
-              'h-[22px] w-[22px] shrink-0 rounded-full ring-offset-2 ring-offset-surface transition-transform hover:scale-110',
-              color.toUpperCase() === c ? 'ring-2 ring-white' : 'ring-1 ring-white/15',
-            )}
-            style={{ background: c }}
-          />
-        ))}
-        <label
-          data-tip="Свой цвет"
-          className={clsx(
-            'relative flex h-[22px] w-[22px] shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-full ring-offset-2 ring-offset-surface',
-            PALETTE.includes(color.toUpperCase()) ? 'ring-1 ring-white/15' : 'ring-2 ring-white',
-          )}
-          style={{ background: PALETTE.includes(color.toUpperCase()) ? 'conic-gradient(#f43, #fc0, #3c6, #09f, #a5d, #f43)' : color }}
-        >
-          <Plus size={12} className="text-white drop-shadow" />
-          <input type="color" value={color} onChange={(e) => setColor(e.target.value.toUpperCase())} className="absolute inset-0 cursor-pointer opacity-0" />
-        </label>
-      </div>
+      <ColorPicker color={color} setColor={setColor} compact={width < 1440} />
 
       <Divider />
 
@@ -112,26 +90,26 @@ export function Toolbar(props: {
 
       <Divider />
 
-      <IconButton tip="Отменить · Ctrl+Z" size={36} disabled={!props.canUndo} onClick={props.undo}>
+      <IconButton tip="Отменить · Ctrl+Z" size={width < 1180 ? 32 : 36} disabled={!props.canUndo} onClick={props.undo}>
         <Undo2 size={18} />
       </IconButton>
-      <IconButton tip="Повторить · Ctrl+Y" size={36} disabled={!props.canRedo} onClick={props.redo}>
+      <IconButton tip="Повторить · Ctrl+Y" size={width < 1180 ? 32 : 36} disabled={!props.canRedo} onClick={props.redo}>
         <Redo2 size={18} />
       </IconButton>
 
       <div className="min-w-4 flex-1" data-tauri-drag-region />
 
       <Button variant="secondary" icon={<Copy size={16} />} loading={busy === 'copy'} tip="Копировать в буфер · Ctrl+C" onClick={() => act('copy')}>
-        <span className="max-[1260px]:hidden">Копировать</span>
+        {width >= 1560 && 'Копировать'}
       </Button>
       <Button variant="secondary" icon={<Save size={16} />} loading={busy === 'save'} tip="Сохранить в папку снимков · Ctrl+S" onClick={() => act('save')}>
-        <span className="max-[1260px]:hidden">Сохранить</span>
+        {width >= 1560 && 'Сохранить'}
       </Button>
       <IconButton tip="Сохранить как… · Ctrl+Shift+S" tipPos="left" size={36} onClick={() => act('saveAs')}>
         <Download size={18} />
       </IconButton>
       <Button variant="primary" icon={<Link2 size={17} />} loading={busy === 'upload'} tip="Загрузить в Box и скопировать ссылку · Ctrl+U" tipPos="left" onClick={() => act('upload')}>
-        Получить ссылку
+        {width >= 1180 ? 'Получить ссылку' : width >= 980 ? 'Ссылка' : null}
       </Button>
     </div>
   );
@@ -139,4 +117,89 @@ export function Toolbar(props: {
 
 function Divider() {
   return <div className="mx-0.5 h-7 w-px shrink-0 bg-border" />;
+}
+
+function useWindowWidth() {
+  const [w, setW] = useState(window.innerWidth);
+  useEffect(() => {
+    const on = () => setW(window.innerWidth);
+    window.addEventListener('resize', on);
+    return () => window.removeEventListener('resize', on);
+  }, []);
+  return w;
+}
+
+function Swatches({ color, setColor }: { color: string; setColor: (c: string) => void }) {
+  const custom = !PALETTE.includes(color.toUpperCase());
+  return (
+    <>
+      {PALETTE.map((c) => (
+        <button
+          key={c}
+          data-tip={c}
+          onClick={() => setColor(c)}
+          className={clsx(
+            'h-[22px] w-[22px] shrink-0 rounded-full ring-offset-2 ring-offset-surface transition-transform hover:scale-110',
+            color.toUpperCase() === c ? 'ring-2 ring-white' : 'ring-1 ring-white/15',
+          )}
+          style={{ background: c }}
+        />
+      ))}
+      <label
+        data-tip="Свой цвет"
+        className={clsx(
+          'relative flex h-[22px] w-[22px] shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-full ring-offset-2 ring-offset-surface',
+          custom ? 'ring-2 ring-white' : 'ring-1 ring-white/15',
+        )}
+        style={{ background: custom ? color : 'conic-gradient(#f43, #fc0, #3c6, #09f, #a5d, #f43)' }}
+      >
+        <Plus size={12} className="text-white drop-shadow" />
+        <input type="color" value={color} onChange={(e) => setColor(e.target.value.toUpperCase())} className="absolute inset-0 cursor-pointer opacity-0" />
+      </label>
+    </>
+  );
+}
+
+function ColorPicker({ color, setColor, compact }: { color: string; setColor: (c: string) => void; compact: boolean }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener('mousedown', close);
+    return () => window.removeEventListener('mousedown', close);
+  }, [open]);
+
+  if (!compact) {
+    return (
+      <div className="flex items-center gap-1.5" role="radiogroup" aria-label="Цвет">
+        <Swatches color={color} setColor={setColor} />
+      </div>
+    );
+  }
+  return (
+    <div ref={ref} className="relative">
+      <button
+        data-tip="Цвет"
+        onClick={() => setOpen((o) => !o)}
+        className="flex h-9 items-center gap-1.5 rounded-[10px] px-2 transition-colors hover:bg-white/6"
+      >
+        <span className="h-[22px] w-[22px] rounded-full ring-2 ring-white/80" style={{ background: color }} />
+        <ChevronDown size={14} className="text-muted" />
+      </button>
+      {open && (
+        <div className="animate-pop-in fixed z-40 mt-2 flex items-center gap-2 rounded-[12px] bg-elevated p-2.5 shadow-(--shadow-pop)">
+          <Swatches
+            color={color}
+            setColor={(c) => {
+              setColor(c);
+              setOpen(false);
+            }}
+          />
+        </div>
+      )}
+    </div>
+  );
 }

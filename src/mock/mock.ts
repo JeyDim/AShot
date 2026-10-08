@@ -156,6 +156,6 @@ export async function installMocks() {
       info: { kind: 'info', title: 'AdvantShoter работает в трее', message: 'PrtSc — снимок области. Клик по иконке в трее — меню и последние снимки.', link: null, path: null, historyId: null, timeoutMs: 0 },
       saved: { kind: 'success', title: 'Сохранено', message: 'Screenshot 2026-10-08 14-21-07.png', link: null, path: 'C:\\x.png', historyId: 'a1', timeoutMs: 0 },
     };
-    setTimeout(() => emit('toast:show', payloads[kind] ?? payloads.success), 300);
+    setTimeout(() => emit('toast:show', payloads[kind] ?? payloads.success), 1000);
   }
 }

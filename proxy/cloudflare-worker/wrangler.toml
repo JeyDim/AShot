@@ -1,0 +1,13 @@
+name = "advant-one-shots"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+
+# Attach the worker to the short-link domain. With the main site on the same domain,
+# non-matching paths are passed through to the origin by the worker itself.
+routes = [
+  { pattern = "advant.one/*", zone_name = "advant.one" }
+]
+
+[vars]
+BOX_HOST = "app.box.com"
+CACHE_SECONDS = "86400"
