@@ -123,7 +123,9 @@ npm run tauri build      # установщики в target/release/bundle
 Скриншоты для README: `npm run build && npx vite preview --port 4173`, затем `npm run screens`.
 
 Тесты: `cargo test -p shoter-core` (ядро: Box API на моках, история, ссылки, изображения),
-`npm test` (геометрия выделения, модель редактора, пикселизация, форматирование), `npm run typecheck`.
+`npm test` (геометрия выделения, модель редактора, пикселизация, форматирование), `npm run typecheck`,
+`npm run smoke` — сценарий в Chromium: рисует фигуры и текст в редакторе, обрезает, экспортирует
+и проверяет PNG; в оверлее выделяет область и проверяет физические координаты (нужен `vite preview` на 4173).
 
 ### Дизайн
 
