@@ -70,7 +70,10 @@ interface S {
   lastQuery: { x: number; y: number };
 }
 
-const ACCENT = '#7b7bff';
+// Selection frame: the lime accent of the design, visible on almost any screenshot.
+const ACCENT = '#B5F000';
+const SANS = '"Roboto Variable", "Segoe UI", sans-serif';
+const MONO = '"Roboto Mono Variable", Consolas, monospace';
 
 function emptyState(): S {
   return {
@@ -270,7 +273,7 @@ export default function Overlay() {
 
       // Size label above the area (or inside when there is no room).
       const label = `${focus.width} × ${focus.height}`;
-      ctx.font = `600 ${Math.round(12 * k)}px "Segoe UI Variable Text", "Segoe UI", sans-serif`;
+      ctx.font = `500 ${Math.round(12 * k)}px ${SANS}`;
       const tw = ctx.measureText(label).width;
       const ph = Math.round(22 * k);
       const pw = tw + 16 * k;
@@ -279,7 +282,7 @@ export default function Overlay() {
       if (ly < 4 * k) ly = focus.y + 6 * k;
       lx = Math.min(Math.max(4 * k, lx), W - pw - 4 * k);
       roundRect(ctx, lx, ly, pw, ph, 6 * k);
-      ctx.fillStyle = 'rgba(12,14,20,0.85)';
+      ctx.fillStyle = 'rgba(30,30,32,0.88)';
       ctx.fill();
       ctx.fillStyle = '#fff';
       ctx.textBaseline = 'middle';
@@ -291,10 +294,10 @@ export default function Overlay() {
           const [hx, hy] = handlePoint(focus, h);
           ctx.beginPath();
           ctx.arc(hx, hy, hs, 0, Math.PI * 2);
-          ctx.fillStyle = '#fff';
+          ctx.fillStyle = ACCENT;
           ctx.fill();
           ctx.lineWidth = Math.max(1, 1.5 * k);
-          ctx.strokeStyle = ACCENT;
+          ctx.strokeStyle = '#1E1E20';
           ctx.stroke();
         }
       }
@@ -329,7 +332,7 @@ export default function Overlay() {
 
     ctx.save();
     roundRect(ctx, x, y, size, size + infoH, 12 * k);
-    ctx.fillStyle = '#0c0e14';
+    ctx.fillStyle = '#1E1E20';
     ctx.fill();
     ctx.save();
     roundRect(ctx, x, y, size, size, 12 * k);
@@ -349,7 +352,7 @@ export default function Overlay() {
     ctx.stroke();
     // crosshair + center pixel
     const c = Math.floor(cells / 2);
-    ctx.fillStyle = 'rgba(123,123,255,0.22)';
+    ctx.fillStyle = 'rgba(181,240,0,0.25)';
     ctx.fillRect(x, y + c * cell, size, cell);
     ctx.fillRect(x + c * cell, y, cell, size);
     ctx.strokeStyle = '#fff';
@@ -365,8 +368,8 @@ export default function Overlay() {
     ctx.textBaseline = 'middle';
     const row1 = y + size + infoH * 0.3;
     const row2 = y + size + infoH * 0.7;
-    ctx.font = `500 ${Math.round(11.5 * k)}px "Segoe UI Variable Text", "Segoe UI", sans-serif`;
-    ctx.fillStyle = '#a1a9b8';
+    ctx.font = `500 ${Math.round(11.5 * k)}px ${SANS}`;
+    ctx.fillStyle = '#9A9A9F';
     ctx.fillText(`X ${px + bx}  Y ${py + by}`, x + 10 * k, row1);
     if (st.sampler) {
       const d = st.sampler.getImageData(px, py, 1, 1).data;
@@ -377,16 +380,16 @@ export default function Overlay() {
       ctx.strokeStyle = 'rgba(255,255,255,0.25)';
       ctx.lineWidth = 1;
       ctx.stroke();
-      ctx.fillStyle = '#eceef3';
-      ctx.font = `600 ${Math.round(11.5 * k)}px "Cascadia Mono", Consolas, monospace`;
+      ctx.fillStyle = '#F2F2F3';
+      ctx.font = `500 ${Math.round(11.5 * k)}px ${MONO}`;
       ctx.fillText(hex, x + 28 * k, row2);
       // "C" key hint
       const kw = 16 * k;
       roundRect(ctx, x + size - 10 * k - kw, row2 - 8 * k, kw, 16 * k, 4 * k);
-      ctx.fillStyle = '#232833';
+      ctx.fillStyle = '#2A2A2D';
       ctx.fill();
-      ctx.fillStyle = '#a1a9b8';
-      ctx.font = `600 ${Math.round(10.5 * k)}px "Segoe UI", sans-serif`;
+      ctx.fillStyle = '#9A9A9F';
+      ctx.font = `500 ${Math.round(10.5 * k)}px ${SANS}`;
       ctx.textAlign = 'center';
       ctx.fillText('C', x + size - 10 * k - kw / 2, row2 + 0.5);
     }
@@ -923,7 +926,7 @@ export default function Overlay() {
       {ann.textArea}
 
       {hint && imageSrc && (
-        <div className="animate-fade-in pointer-events-none absolute top-6 left-1/2 flex -translate-x-1/2 items-center gap-3 rounded-full bg-[#0c0e14]/90 px-5 py-2.5 text-[13px] text-text shadow-(--shadow-pop)">
+        <div className="animate-fade-in pointer-events-none absolute top-6 left-1/2 flex -translate-x-1/2 items-center gap-3 rounded-full bg-surface/95 px-5 py-2.5 text-[13px] text-text shadow-(--shadow-pop)">
           <span className="font-medium">{mode === 'windowPick' ? 'Кликните по окну или элементу' : 'Выделите область или кликните по окну'}</span>
           <span className="text-subtle">·</span>
           <span className="text-muted">колесо — уровень элемента</span>
@@ -937,7 +940,7 @@ export default function Overlay() {
       )}
 
       {toast && (
-        <div className="animate-pop-in pointer-events-none absolute bottom-8 left-1/2 -translate-x-1/2 rounded-full bg-[#0c0e14]/95 px-4 py-2 text-[13px] shadow-(--shadow-pop)">
+        <div className="animate-pop-in pointer-events-none absolute bottom-8 left-1/2 -translate-x-1/2 rounded-full bg-surface/95 px-4 py-2 text-[13px] shadow-(--shadow-pop)">
           {toast}
         </div>
       )}
@@ -945,7 +948,7 @@ export default function Overlay() {
       {barPos && (
         <div
           ref={measureBar}
-          className="animate-pop-in absolute flex w-max flex-wrap items-center justify-end gap-1 rounded-[14px] bg-[#12141b]/95 p-1.5 shadow-(--shadow-pop) backdrop-blur"
+          className="animate-pop-in absolute flex w-max flex-wrap items-center justify-end gap-1 rounded-[18px] bg-surface/95 p-1.5 shadow-(--shadow-pop) ring-1 ring-white/6 backdrop-blur"
           style={{ left: barPos.left, top: barPos.top, maxWidth: window.innerWidth - 16 }}
           onMouseDown={(e) => e.stopPropagation()}
         >
@@ -958,14 +961,14 @@ export default function Overlay() {
           </div>
           <BarDivider />
           <ColorPicker color={color} setColor={changeColor} compact up={barUp} />
-          <div className="flex items-center rounded-[10px] bg-white/5 p-0.5">
+          <div className="flex items-center rounded-full bg-surface-2 p-0.5">
             {[0, 1, 2].map((v) => (
               <button
                 key={v}
                 data-tip={['Тонко · 1', 'Средне · 2', 'Толсто · 3'][v]}
                 data-tip-pos="top"
                 onClick={() => changeSize(v)}
-                className={clsx('flex h-8 w-8 items-center justify-center rounded-[8px] transition-colors', size === v ? 'bg-white/12' : 'hover:bg-white/6')}
+                className={clsx('flex h-8 w-8 items-center justify-center rounded-full transition-colors', size === v ? 'bg-surface-3' : 'hover:bg-text/6')}
               >
                 <span className="rounded-full" style={{ width: [5, 9, 14][v], height: [5, 9, 14][v], background: color }} />
               </button>
@@ -992,7 +995,7 @@ export default function Overlay() {
             data-tip="Загрузить в Box и скопировать ссылку · Ctrl+U"
             data-tip-pos="top-left"
             onClick={() => finish('upload')}
-            className="brand-gradient inline-flex h-10 items-center justify-center gap-2 rounded-[10px] px-3.5 text-[13.5px] font-semibold text-white transition hover:brightness-110"
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-full bg-lime px-4 text-[13.5px] font-medium text-on-lime transition hover:brightness-105"
           >
             <Link2 size={18} /> Ссылка
           </button>
@@ -1006,7 +1009,7 @@ export default function Overlay() {
 }
 
 function BarDivider() {
-  return <div className="mx-1 h-6 w-px shrink-0 bg-white/10" />;
+  return <div className="mx-1 h-6 w-px shrink-0 bg-border-strong" />;
 }
 
 function BarButton({ children, tip, onClick, danger }: { children: ReactNode; tip: string; onClick: () => void; danger?: boolean }) {
@@ -1016,8 +1019,8 @@ function BarButton({ children, tip, onClick, danger }: { children: ReactNode; ti
       data-tip-pos="top"
       onClick={onClick}
       className={clsx(
-        'inline-flex h-10 w-10 items-center justify-center rounded-[10px] text-[#d6d9e3] transition-colors',
-        danger ? 'hover:bg-danger/20 hover:text-danger' : 'hover:bg-white/10 hover:text-white',
+        'inline-flex h-10 w-10 items-center justify-center rounded-full text-text transition-colors',
+        danger ? 'hover:bg-danger/20 hover:text-danger' : 'hover:bg-text/10',
       )}
     >
       {children}

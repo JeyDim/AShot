@@ -1,6 +1,6 @@
 // Proxy for short screenshot links: https://advant.one/<box shared id> → the image itself.
 //
-// AdvantShoter turns https://app.box.com/s/<id> into https://advant.one/<id>.
+// AShot turns https://app.box.com/s/<id> into https://advant.one/<id>.
 // This worker serves the file behind that Box shared link *inline*, so the link opens
 // as a picture in any browser (including phones) without the Box web app or a login.
 // Requires the shared link access level "open" ("People with the link").

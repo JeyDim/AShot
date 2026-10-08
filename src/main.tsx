@@ -1,14 +1,14 @@
 import { StrictMode, Suspense, lazy } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
+import { initTheme } from './lib/theme';
 
 // Every window loads index.html with its own route in the hash: #/panel, #/overlay,
-// #/editor/<id>, #/settings, #/about, #/toast.
+// #/editor/<id>, #/settings[/<section>], #/toast.
 const TrayPanel = lazy(() => import('./pages/TrayPanel'));
 const Overlay = lazy(() => import('./pages/Overlay'));
 const Editor = lazy(() => import('./pages/editor/Editor'));
 const Settings = lazy(() => import('./pages/Settings'));
-const About = lazy(() => import('./pages/About'));
 const Toast = lazy(() => import('./pages/Toast'));
 
 function route() {
@@ -29,7 +29,7 @@ function App() {
     case 'settings':
       return <Settings initial={param} />;
     case 'about':
-      return <About />;
+      return <Settings initial="about" />;
     case 'toast':
       return <Toast />;
     default:
@@ -44,6 +44,8 @@ async function start() {
     await installMocks();
   }
   const { page } = route();
+  // The capture overlay sits on top of any screenshot: always dark.
+  initTheme(page === 'overlay' ? 'dark' : undefined);
   if (page === 'panel' || page === 'toast') document.body.classList.add('transparent');
   if (page === 'overlay') document.body.style.background = '#000';
   createRoot(document.getElementById('root')!).render(

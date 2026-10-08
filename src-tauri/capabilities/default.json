@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissions for all AdvantShoter windows (panel, overlays, editor, settings, about, toast). The app loads only its own bundled UI.",
+  "description": "Permissions for all AShot windows (panel, overlays, editor, settings, toast). The app loads only its own bundled UI.",
   "windows": ["*"],
   "permissions": [
     "core:default",

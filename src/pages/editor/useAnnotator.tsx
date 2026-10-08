@@ -401,9 +401,9 @@ export function useAnnotator(o: AnnotatorOptions) {
         enabledAnchors={selected?.type === 'text' ? ['top-left', 'top-right', 'bottom-left', 'bottom-right'] : undefined}
         anchorSize={9}
         anchorCornerRadius={5}
-        anchorStroke="#7b7bff"
-        anchorFill="#fff"
-        borderStroke="#7b7bff"
+        anchorStroke="#1E1E20"
+        anchorFill="#B5F000"
+        borderStroke="#B5F000"
         borderDash={[4, 3]}
         padding={4}
         boundBoxFunc={(oldBox, newBox) => (Math.abs(newBox.width) < 4 || Math.abs(newBox.height) < 4 ? oldBox : newBox)}
@@ -416,8 +416,8 @@ export function useAnnotator(o: AnnotatorOptions) {
             x={lineSel.points[i * 2]}
             y={lineSel.points[i * 2 + 1]}
             radius={anchorR}
-            fill="#fff"
-            stroke="#7b7bff"
+            fill="#B5F000"
+            stroke="#1E1E20"
             strokeWidth={2 / view.zoom}
             draggable
             onDragStart={beginGesture}
@@ -467,7 +467,7 @@ export function useAnnotator(o: AnnotatorOptions) {
         }}
         onBlur={commitText}
         rows={Math.max(1, textEdit.text.split('\n').length)}
-        className="absolute z-20 resize-none overflow-hidden border border-dashed border-accent/70 bg-black/20 p-0 font-bold outline-none placeholder:text-white/40"
+        className="absolute z-20 resize-none overflow-hidden border border-dashed border-lime/80 bg-black/20 p-0 font-bold outline-none placeholder:text-white/40"
         style={{
           left: textBox.left,
           top: textBox.top,

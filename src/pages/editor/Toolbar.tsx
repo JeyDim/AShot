@@ -61,7 +61,7 @@ export function Toolbar(props: {
   const width = useWindowWidth();
   return (
     <div className={clsx('flex h-[58px] shrink-0 items-center overflow-x-auto border-b border-border bg-surface px-3', width < 1180 ? 'gap-1.5' : 'gap-2')} data-tauri-drag-region>
-      <div className="flex items-center gap-0.5 rounded-[12px] bg-surface-2 p-1 ring-1 ring-inset ring-border">
+      <div className="flex items-center gap-0.5 rounded-full bg-surface-2 p-1">
         {TOOLS.map((t) => (
           <IconButton key={t.id} tip={`${t.label} · ${t.key}`} active={tool === t.id} size={width < 1180 ? 33 : 38} onClick={() => setTool(t.id)}>
             {t.icon}
@@ -75,13 +75,13 @@ export function Toolbar(props: {
 
       <Divider />
 
-      <div className="flex items-center gap-0.5 rounded-[10px] bg-surface-2 p-0.5 ring-1 ring-inset ring-border">
+      <div className="flex items-center gap-0.5 rounded-full bg-surface-2 p-0.5">
         {[0, 1, 2].map((s) => (
           <button
             key={s}
             data-tip={['Тонко · 1', 'Средне · 2', 'Толсто · 3'][s]}
             onClick={() => setSize(s)}
-            className={clsx('flex h-8 w-8 items-center justify-center rounded-[8px] transition-colors', size === s ? 'bg-surface-3 ring-1 ring-inset ring-white/10' : 'hover:bg-white/5')}
+            className={clsx('flex h-8 w-8 items-center justify-center rounded-full transition-colors', size === s ? 'bg-surface ring-1 ring-inset ring-border-strong' : 'hover:bg-text/6')}
           >
             <span className="rounded-full" style={{ width: [5, 9, 14][s], height: [5, 9, 14][s], background: color }} />
           </button>
@@ -140,7 +140,7 @@ function Swatches({ color, setColor }: { color: string; setColor: (c: string) =>
           onClick={() => setColor(c)}
           className={clsx(
             'h-[22px] w-[22px] shrink-0 rounded-full ring-offset-2 ring-offset-surface transition-transform hover:scale-110',
-            color.toUpperCase() === c ? 'ring-2 ring-white' : 'ring-1 ring-white/15',
+            color.toUpperCase() === c ? 'ring-2 ring-text' : 'ring-1 ring-text/15',
           )}
           style={{ background: c }}
         />
@@ -149,7 +149,7 @@ function Swatches({ color, setColor }: { color: string; setColor: (c: string) =>
         data-tip="Свой цвет"
         className={clsx(
           'relative flex h-[22px] w-[22px] shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-full ring-offset-2 ring-offset-surface',
-          custom ? 'ring-2 ring-white' : 'ring-1 ring-white/15',
+          custom ? 'ring-2 ring-text' : 'ring-1 ring-text/15',
         )}
         style={{ background: custom ? color : 'conic-gradient(#f43, #fc0, #3c6, #09f, #a5d, #f43)' }}
       >
@@ -184,14 +184,14 @@ export function ColorPicker({ color, setColor, compact, up }: { color: string; s
       <button
         data-tip="Цвет"
         onClick={() => setOpen((o) => !o)}
-        className="flex h-9 items-center gap-1.5 rounded-[10px] px-2 transition-colors hover:bg-white/6"
+        className="flex h-9 items-center gap-1.5 rounded-full px-2 transition-colors hover:bg-text/6"
       >
-        <span className="h-[22px] w-[22px] rounded-full ring-2 ring-white/80" style={{ background: color }} />
+        <span className="h-[22px] w-[22px] rounded-full ring-2 ring-text/80" style={{ background: color }} />
         <ChevronDown size={14} className="text-muted" />
       </button>
       {open && (
         <div
-          className="animate-pop-in fixed z-40 mt-2 flex items-center gap-2 rounded-[12px] bg-elevated p-2.5 shadow-(--shadow-pop)"
+          className="animate-pop-in fixed z-40 mt-2 flex items-center gap-2 rounded-full bg-elevated p-2.5 shadow-(--shadow-pop) ring-1 ring-border"
           // `up`: open above the button (toolbar near the bottom of the screen).
           style={up ? { transform: 'translateY(calc(-100% - 52px))' } : undefined}
         >

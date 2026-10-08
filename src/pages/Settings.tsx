@@ -1,155 +1,298 @@
-// Settings window.
+// Settings window: sections in the sidebar, every change is saved right away.
 import clsx from 'clsx';
-import { ChevronRight, Cloud, FolderOpen, Keyboard, Link2, LogIn, LogOut, MousePointerClick, Save, ShieldCheck, SlidersHorizontal } from 'lucide-react';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Button, Input, Kbd, Logo, Segmented, Select, Spinner, Switch } from '../components/ui';
-import { acceleratorFromEvent } from '../lib/format';
+import {
+  AlertTriangle,
+  AppWindow,
+  Check,
+  ChevronRight,
+  Cloud,
+  Copy,
+  ExternalLink,
+  FileText,
+  FolderOpen,
+  Info,
+  Keyboard,
+  Monitor,
+  RotateCcw,
+  Save,
+  Scan,
+  ShieldCheck,
+  SlidersHorizontal,
+  X,
+} from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type InputHTMLAttributes, type ReactNode } from 'react';
+import { Button, IconButton, Input, Logo, Range, Segmented, Select, Spinner, Switch } from '../components/ui';
+import { acceleratorFromEvent, hotkeyLabel } from '../lib/format';
 import { useTauriEvent } from '../lib/hooks';
-import { api, errorText } from '../lib/ipc';
-import type { AppSettings, BoxStatus, Hotkeys, SettingsView } from '../lib/types';
+import { api, errorText, type SettingsSection } from '../lib/ipc';
+import type { AppInfo, AppSettings, BoxStatus, Hotkeys, SettingsView } from '../lib/types';
 
-type Section = 'general' | 'hotkeys' | 'saving' | 'box' | 'links';
+type Section = Exclude<SettingsSection, 'links'>;
 
 const SECTIONS: { id: Section; label: string; icon: ReactNode }[] = [
-  { id: 'general', label: 'Основные', icon: <SlidersHorizontal size={17} /> },
-  { id: 'hotkeys', label: 'Горячие клавиши', icon: <Keyboard size={17} /> },
-  { id: 'saving', label: 'Сохранение', icon: <Save size={17} /> },
-  { id: 'box', label: 'Box.com', icon: <Cloud size={17} /> },
-  { id: 'links', label: 'Ссылки', icon: <Link2 size={17} /> },
+  { id: 'general', label: 'Снимок', icon: <SlidersHorizontal size={18} /> },
+  { id: 'hotkeys', label: 'Горячие клавиши', icon: <Keyboard size={18} /> },
+  { id: 'saving', label: 'Сохранение', icon: <Save size={18} /> },
+  { id: 'box', label: 'Загрузка и ссылки', icon: <Cloud size={18} /> },
+  { id: 'about', label: 'О программе', icon: <Info size={18} /> },
 ];
 
-export default function Settings({ initial }: { initial?: string }) {
+function toSection(s?: string | null): Section {
+  if (s === 'links') return 'box';
+  return SECTIONS.find((x) => x.id === s)?.id ?? 'general';
+}
+
+/** Recursive patch: nested settings objects (box, links, hotkeys) merge key by key. */
+type Patch = { [K in keyof AppSettings]?: AppSettings[K] extends object ? Partial<AppSettings[K]> : AppSettings[K] };
+
+function merge<T>(target: T, patch: object): T {
+  const out: Record<string, unknown> = { ...(target as Record<string, unknown>) };
+  for (const [k, v] of Object.entries(patch)) {
+    const cur = out[k];
+    out[k] = v && typeof v === 'object' && !Array.isArray(v) && cur && typeof cur === 'object' ? merge(cur, v) : v;
+  }
+  return out as T;
+}
+
+/** Local copy of the settings + debounced saving of the changed keys. */
+function useAutosave() {
   const [view, setView] = useState<SettingsView | null>(null);
-  const [draft, setDraft] = useState<AppSettings | null>(null);
-  const [section, setSection] = useState<Section>(() => (SECTIONS.some((s) => s.id === initial) ? (initial as Section) : 'general'));
-  useTauriEvent<string>('settings:section', (e) => {
-    if (SECTIONS.some((s) => s.id === e.payload)) setSection(e.payload as Section);
-  });
+  const [settings, setSettings] = useState<AppSettings | null>(null);
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  const [problems, setProblems] = useState<string[]>([]);
+  const pending = useRef<Patch>({});
+  const timer = useRef<number | undefined>(undefined);
+  const queue = useRef<Promise<void>>(Promise.resolve());
+  const inFlight = useRef(0);
 
   useEffect(() => {
     api.settingsGet().then((v) => {
       setView(v);
-      setDraft(v.settings);
+      setSettings(v.settings);
     });
   }, []);
 
-  const dirty = useMemo(() => !!view && !!draft && JSON.stringify(view.settings) !== JSON.stringify(draft), [view, draft]);
+  const idle = () => !Object.keys(pending.current).length && timer.current === undefined && inFlight.current === 0;
 
-  if (!draft || !view) return <div className="h-full bg-bg" />;
-
-  const set = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => setDraft({ ...draft, [key]: value });
-
-  const save = async () => {
+  const flush = useCallback(() => {
+    window.clearTimeout(timer.current);
+    timer.current = undefined;
+    const patch = pending.current;
+    if (!Object.keys(patch).length) return queue.current;
+    pending.current = {};
+    inFlight.current += 1;
     setSaving(true);
-    setMessage(null);
-    try {
-      const problems = await api.settingsSet(draft);
-      const fresh = await api.settingsGet();
-      setView(fresh);
-      setDraft(fresh.settings);
-      setMessage(problems.length ? { kind: 'error', text: problems.join('\n') } : { kind: 'ok', text: 'Настройки сохранены' });
-    } catch (e) {
-      setMessage({ kind: 'error', text: errorText(e) });
-    } finally {
-      setSaving(false);
-    }
-  };
+    // One request at a time, so a later change never lands before an earlier one.
+    queue.current = queue.current.then(async () => {
+      try {
+        const r = await api.settingsPatch(patch);
+        setProblems(r.problems);
+        inFlight.current -= 1;
+        // Values may come back normalized (link template, folder name).
+        if (idle()) setSettings(r.settings);
+      } catch (e) {
+        inFlight.current -= 1;
+        setProblems([errorText(e)]);
+      } finally {
+        if (inFlight.current === 0) setSaving(false);
+      }
+    });
+    return queue.current;
+  }, []);
+
+  /** `delay` – for typing: wait for a pause before saving. */
+  const update = useCallback(
+    (patch: Patch, delay = 0) => {
+      setSettings((s) => (s ? merge(s, patch) : s));
+      pending.current = merge(pending.current, patch);
+      window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(flush, delay);
+    },
+    [flush],
+  );
+
+  // Changes made elsewhere (tray, editor, another settings window).
+  useTauriEvent<AppSettings>('settings:changed', (e) => {
+    if (idle()) setSettings(e.payload);
+  });
+  useEffect(() => {
+    window.addEventListener('blur', flush);
+    return () => window.removeEventListener('blur', flush);
+  }, [flush]);
+
+  return { view, settings, update, flush, saving, problems };
+}
+
+type Update = (patch: Patch, delay?: number) => void;
+
+export default function Settings({ initial }: { initial?: string }) {
+  const { view, settings, update, flush, saving, problems } = useAutosave();
+  const [section, setSection] = useState<Section>(() => toSection(initial));
+  useTauriEvent<string>('settings:section', (e) => setSection(toSection(e.payload)));
+
+  if (!settings || !view) return <div className="h-full bg-bg" />;
 
   return (
     <div className="flex h-full bg-bg">
-      <aside className="flex w-[220px] shrink-0 flex-col border-r border-border bg-surface px-3 py-4">
-        <div className="mb-4 flex items-center gap-2.5 px-2">
-          <Logo size={26} />
-          <span className="font-display text-[15px] font-semibold">Настройки</span>
+      <aside className="flex w-[210px] shrink-0 flex-col gap-0.5 px-2.5 py-4">
+        <div className="flex items-center gap-2.5 px-2.5 pt-1 pb-4">
+          <Logo size={26} radius={315} />
+          <span className="text-[14px] font-bold">Настройки</span>
         </div>
         <nav className="flex flex-col gap-0.5">
           {SECTIONS.map((s) => (
             <button
               key={s.id}
               onClick={() => setSection(s.id)}
+              aria-current={section === s.id ? 'page' : undefined}
               className={clsx(
-                'flex h-9 items-center gap-2.5 rounded-[10px] px-3 text-[13.5px] transition-colors',
-                section === s.id ? 'bg-accent-soft text-text ring-1 ring-inset ring-accent/30' : 'text-muted hover:bg-white/5 hover:text-text',
+                'flex h-[38px] items-center gap-2.5 rounded-full px-3 text-[14px] transition-colors',
+                section === s.id ? 'bg-primary text-on-primary' : 'text-text hover:bg-text/6',
               )}
             >
-              <span className={section === s.id ? 'text-[#a9a9ff]' : ''}>{s.icon}</span>
+              {s.icon}
               {s.label}
             </button>
           ))}
         </nav>
+        <div className="flex-1" />
+        <div className={clsx('flex items-center gap-1.5 px-3 text-[12px]', problems.length ? 'text-danger' : 'text-muted')}>
+          {saving ? (
+            <>
+              <Spinner size={13} /> Сохраняю…
+            </>
+          ) : problems.length ? (
+            <>
+              <AlertTriangle size={14} /> Есть проблемы
+            </>
+          ) : (
+            <>
+              <Check size={15} className="text-success" /> Сохраняется сразу
+            </>
+          )}
+        </div>
       </aside>
 
-      <main className="flex min-w-0 flex-1 flex-col">
-        <div className="min-h-0 flex-1 overflow-y-auto px-8 py-7">
-          <div className="mx-auto max-w-[620px]">
-            {section === 'general' && <General draft={draft} set={set} />}
-            {section === 'hotkeys' && <HotkeysSection value={draft.hotkeys} onChange={(h) => set('hotkeys', h)} />}
-            {section === 'saving' && <Saving draft={draft} set={set} view={view} />}
-            {section === 'box' && <BoxSection draft={draft} set={set} />}
-            {section === 'links' && <Links draft={draft} set={set} />}
+      <main className="my-2 mr-2 flex min-w-0 flex-1 flex-col overflow-hidden rounded-[14px] bg-surface">
+        <div className="min-h-0 flex-1 overflow-y-auto px-7 py-6">
+          <div className="mx-auto flex max-w-[640px] flex-col gap-5">
+            {problems.length > 0 && (
+              <div className="flex gap-2.5 rounded-xl bg-danger/10 px-3.5 py-3 text-[12.5px] leading-relaxed text-danger">
+                <AlertTriangle size={17} className="mt-px shrink-0" />
+                <div className="whitespace-pre-line">{problems.join('\n')}</div>
+              </div>
+            )}
+            {section === 'general' && <General s={settings} update={update} />}
+            {section === 'hotkeys' && <HotkeysSection value={settings.hotkeys} onChange={(h) => update({ hotkeys: h })} />}
+            {section === 'saving' && <Saving s={settings} update={update} view={view} />}
+            {section === 'box' && <BoxSection s={settings} update={update} flush={flush} />}
+            {section === 'about' && <About />}
           </div>
         </div>
-        <footer className="flex items-center gap-3 border-t border-border bg-surface px-6 py-3">
-          <div className={clsx('min-w-0 flex-1 text-[12.5px] whitespace-pre-line', message?.kind === 'error' ? 'text-danger' : 'text-success')}>{message?.text}</div>
-          <Button variant="ghost" disabled={!dirty || saving} onClick={() => setDraft(view.settings)}>
-            Отменить
-          </Button>
-          <Button variant="primary" disabled={!dirty} loading={saving} onClick={save}>
-            Сохранить
-          </Button>
-        </footer>
       </main>
     </div>
   );
 }
 
-type SetFn = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void;
+// ---------------------------------------------------------------- building blocks
 
 function Title({ children, sub }: { children: ReactNode; sub?: ReactNode }) {
   return (
-    <div className="mb-5">
-      <h2 className="font-display text-[20px] font-semibold tracking-tight">{children}</h2>
-      {sub && <p className="mt-1 text-[13px] text-muted">{sub}</p>}
+    <div className="flex flex-col gap-1">
+      <h1 className="font-display text-[19px] font-normal">{children}</h1>
+      {sub && <p className="text-[13px] text-muted">{sub}</p>}
     </div>
   );
 }
 
-function Card({ children, title }: { children: ReactNode; title?: string }) {
+function Group({ title, children }: { title?: string; children: ReactNode }) {
   return (
-    <section className="mb-4">
-      {title && <div className="mb-2 px-1 text-[12px] font-semibold tracking-wide text-subtle uppercase">{title}</div>}
-      <div className="divide-y divide-border rounded-[14px] bg-surface ring-1 ring-inset ring-border">{children}</div>
+    <section className="flex flex-col gap-0.5">
+      {title && <div className="pb-1.5 text-[12px] text-muted">{title}</div>}
+      {children}
     </section>
   );
 }
 
-function Row({ label, hint, children, stack }: { label: ReactNode; hint?: ReactNode; children: ReactNode; stack?: boolean }) {
+function Row({ icon, label, hint, children }: { icon?: ReactNode; label: ReactNode; hint?: ReactNode; children?: ReactNode }) {
   return (
-    <div className={clsx('flex gap-4 px-4 py-3.5', stack ? 'flex-col' : 'items-center')}>
-      <div className="min-w-0 flex-1">
-        <div className="text-[13.5px]">{label}</div>
-        {hint && <div className="mt-0.5 text-[12px] leading-snug text-subtle">{hint}</div>}
+    <div className="flex items-center gap-4 py-2">
+      {icon && <span className="shrink-0 text-muted">{icon}</span>}
+      <div className="min-w-0 flex-1 text-[14px]">
+        {label}
+        {hint && <div className="mt-0.5 text-[12px] leading-snug text-muted">{hint}</div>}
       </div>
-      <div className={stack ? '' : 'shrink-0'}>{children}</div>
+      {children}
     </div>
   );
 }
 
-function General({ draft, set }: { draft: AppSettings; set: SetFn }) {
+function Note({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex gap-2.5 rounded-xl bg-surface-2 px-3.5 py-3 text-[12px] leading-relaxed text-muted">
+      <Info size={18} className="shrink-0" />
+      <div>{children}</div>
+    </div>
+  );
+}
+
+/** Text input that saves while typing (after a pause) but never jumps under the cursor. */
+function TextField({
+  value,
+  onChange,
+  className,
+  ...rest
+}: { value: string; onChange: (v: string) => void } & Omit<InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange'>) {
+  const [text, setText] = useState(value);
+  const [focused, setFocused] = useState(false);
+  return (
+    <Input
+      value={focused ? text : value}
+      onFocus={() => {
+        setText(value);
+        setFocused(true);
+      }}
+      onBlur={() => setFocused(false)}
+      onChange={(e) => {
+        setText(e.target.value);
+        onChange(e.target.value);
+      }}
+      onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+      className={clsx('w-[250px] shrink-0', className)}
+      {...rest}
+    />
+  );
+}
+
+const TYPING = 500;
+
+// ---------------------------------------------------------------- Снимок
+
+function General({ s, update }: { s: AppSettings; update: Update }) {
   return (
     <>
-      <Title sub="Поведение при снимке и запуск программы">Основные</Title>
-      <Card title="Снимок">
-        <Row label="Показывать курсор" hint="Рисовать указатель мыши на снимке">
-          <Switch checked={draft.showCursor} onChange={(v) => set('showCursor', v)} />
+      <Title sub="Поведение при съёмке и запуск программы">Снимок</Title>
+      <Group title="Захват">
+        <Row label="Показывать курсор" hint="Указатель мыши попадёт на снимок">
+          <Switch checked={s.showCursor} onChange={(v) => update({ showCursor: v })} label="Показывать курсор" />
         </Row>
         <Row label="Лупа при выделении" hint="Увеличение, координаты и цвет пикселя под курсором">
-          <Switch checked={draft.showMagnifier} onChange={(v) => set('showMagnifier', v)} />
+          <Switch checked={s.showMagnifier} onChange={(v) => update({ showMagnifier: v })} label="Лупа при выделении" />
         </Row>
-        <Row label="После выделения" hint="Панель действий позволяет выбрать: редактор, копирование, сохранение или ссылка">
-          <Select value={draft.afterCapture} onChange={(e) => set('afterCapture', e.target.value as AppSettings['afterCapture'])} className="w-[230px]">
+        <Row label="«Весь экран» снимает">
+          <Segmented
+            value={s.fullscreenMode}
+            onChange={(v) => update({ fullscreenMode: v })}
+            options={[
+              { value: 'currentMonitor', label: 'Монитор с курсором' },
+              { value: 'allMonitors', label: 'Все мониторы' },
+            ]}
+          />
+        </Row>
+      </Group>
+      <Group title="После выделения">
+        <Row label="Что делать дальше" hint="Панель позволяет выбрать: редактор, копирование, файл или ссылка">
+          <Select value={s.afterCapture} onChange={(e) => update({ afterCapture: e.target.value as AppSettings['afterCapture'] })} className="w-[250px] shrink-0">
             <option value="ask">Показать панель действий</option>
             <option value="openEditor">Открыть редактор</option>
             <option value="copy">Скопировать в буфер</option>
@@ -157,71 +300,60 @@ function General({ draft, set }: { draft: AppSettings; set: SetFn }) {
             <option value="upload">Загрузить и скопировать ссылку</option>
           </Select>
         </Row>
-        <Row label="«Весь экран» снимает">
+      </Group>
+      <Group title="Система">
+        <Row label="Запускать вместе с Windows">
+          <Switch checked={s.autostart} onChange={(v) => update({ autostart: v })} label="Запускать вместе с Windows" />
+        </Row>
+        <Row label="Тема">
           <Segmented
-            value={draft.fullscreenMode}
-            onChange={(v) => set('fullscreenMode', v)}
+            value={s.theme}
+            onChange={(v) => update({ theme: v })}
             options={[
-              { value: 'currentMonitor', label: 'Монитор с курсором' },
-              { value: 'allMonitors', label: 'Все мониторы' },
+              { value: 'system', label: 'Системная' },
+              { value: 'light', label: 'Светлая' },
+              { value: 'dark', label: 'Тёмная' },
             ]}
           />
         </Row>
-      </Card>
-      <Card title="История">
-        <Row label="Хранить последних снимков" hint="Временное хранилище: снимки можно снова открыть из трея">
-          <div className="flex items-center gap-3">
-            <input
-              type="range"
-              min={1}
-              max={50}
-              value={draft.historyLimit}
-              onChange={(e) => set('historyLimit', Number(e.target.value))}
-              className="w-[160px] accent-[#6b6bff]"
-            />
-            <span className="w-7 text-right text-[13.5px] tabular-nums">{draft.historyLimit}</span>
-          </div>
-        </Row>
-      </Card>
-      <Card title="Система">
-        <Row label="Запускать вместе с Windows">
-          <Switch checked={draft.autostart} onChange={(v) => set('autostart', v)} />
-        </Row>
-      </Card>
+      </Group>
     </>
   );
 }
 
+// ---------------------------------------------------------------- Горячие клавиши
+
+const DEFAULT_HOTKEYS: Hotkeys = { region: 'PrintScreen', window: 'Alt+PrintScreen', fullscreen: 'Control+PrintScreen', lastRegion: 'Shift+PrintScreen' };
+
 function HotkeysSection({ value, onChange }: { value: Hotkeys; onChange: (h: Hotkeys) => void }) {
-  const rows: { key: keyof Hotkeys; label: string; hint: string }[] = [
-    { key: 'region', label: 'Снимок области', hint: 'Выделение мышью, клик — окно или элемент' },
-    { key: 'window', label: 'Снимок активного окна', hint: 'Окно в фокусе сразу выделено, его можно подправить' },
-    { key: 'fullscreen', label: 'Весь экран', hint: 'Монитор под курсором или все мониторы' },
-    { key: 'lastRegion', label: 'Повторить последнюю область', hint: 'Та же область, что и в прошлый раз' },
+  const rows: { key: keyof Hotkeys; label: string; hint: string; icon: ReactNode }[] = [
+    { key: 'region', label: 'Снимок области', hint: 'Выделение мышью, клик — окно или элемент', icon: <Scan size={20} /> },
+    { key: 'window', label: 'Снимок активного окна', hint: 'Окно в фокусе сразу выделено, можно подправить', icon: <AppWindow size={20} /> },
+    { key: 'fullscreen', label: 'Весь экран', hint: 'Монитор под курсором или все мониторы', icon: <Monitor size={20} /> },
+    { key: 'lastRegion', label: 'Повторить последнюю область', hint: 'Та же область, что и в прошлый раз', icon: <RotateCcw size={20} /> },
   ];
+  const isDefault = (Object.keys(DEFAULT_HOTKEYS) as (keyof Hotkeys)[]).every((k) => value[k] === DEFAULT_HOTKEYS[k]);
   return (
     <>
-      <Title sub="Нажмите на поле и затем нужное сочетание. Backspace — очистить.">Горячие клавиши</Title>
-      <Card>
+      <Title sub="Нажмите на поле, затем нужное сочетание. Backspace — очистить.">Горячие клавиши</Title>
+      <Group title="Съёмка">
         {rows.map((r) => (
-          <Row key={r.key} label={r.label} hint={r.hint}>
+          <Row key={r.key} icon={r.icon} label={r.label} hint={r.hint}>
             <HotkeyInput value={value[r.key]} onChange={(v) => onChange({ ...value, [r.key]: v })} />
           </Row>
         ))}
-      </Card>
-      <p className="px-1 text-[12px] leading-relaxed text-subtle">
-        В Windows 11 клавишу PrtSc по умолчанию занимает «Ножницы». Отключите: Параметры → Специальные возможности → Клавиатура → «Использовать кнопку PrtSc для
-        открытия функции захвата экрана».
-      </p>
-      <div className="mt-3">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => onChange({ region: 'PrintScreen', window: 'Alt+PrintScreen', fullscreen: 'Control+PrintScreen', lastRegion: 'Shift+PrintScreen' })}
-        >
-          Вернуть по умолчанию
-        </Button>
-      </div>
+      </Group>
+      <Group>
+        <Row label="Вернуть сочетания по умолчанию">
+          <Button variant="outline" disabled={isDefault} onClick={() => onChange(DEFAULT_HOTKEYS)}>
+            Сбросить
+          </Button>
+        </Row>
+      </Group>
+      <Note>
+        В Windows 11 клавишу PrtSc по умолчанию занимают «Ножницы». Отключите: Параметры → Специальные возможности → Клавиатура → «Использовать кнопку PrtSc для открытия
+        функции захвата экрана».
+      </Note>
     </>
   );
 }
@@ -247,34 +379,58 @@ function HotkeyInput({ value, onChange }: { value: string; onChange: (v: string)
     }
   };
   return (
-    <button
-      onFocus={() => {
-        setRecording(true);
-        // Global hotkeys would swallow PrintScreen while recording.
-        api.hotkeysSuspend(true).catch(() => {});
-      }}
-      onBlur={stop}
-      onKeyDown={handle}
-      // PrintScreen produces only keyup in browsers.
-      onKeyUp={(e) => {
-        if (e.key === 'PrintScreen' || e.code === 'PrintScreen') handle(e);
-      }}
-      className={clsx(
-        'flex h-9 min-w-[190px] items-center justify-center gap-1 rounded-[10px] px-3 text-[13px] ring-1 ring-inset transition-shadow',
-        recording ? 'bg-accent-soft ring-2 ring-accent' : 'bg-surface-2 ring-border hover:ring-border-strong',
-      )}
-    >
-      {recording ? <span className="text-[#c3c3ff]">Нажмите сочетание…</span> : value ? <Kbd keys={value} /> : <span className="text-subtle">Не назначено</span>}
-    </button>
+    <div className="flex shrink-0 items-center gap-1.5">
+      <button
+        onFocus={() => {
+          setRecording(true);
+          // Global hotkeys would swallow PrintScreen while recording.
+          api.hotkeysSuspend(true).catch(() => {});
+        }}
+        onBlur={stop}
+        onKeyDown={handle}
+        // PrintScreen produces only keyup in browsers.
+        onKeyUp={(e) => {
+          if (e.key === 'PrintScreen' || e.code === 'PrintScreen') handle(e);
+        }}
+        className={clsx(
+          'flex h-9 w-[190px] items-center justify-center rounded-[10px] bg-surface-2 px-3 font-mono text-[12px] ring-1 ring-inset transition-shadow outline-none',
+          recording ? 'text-muted ring-text' : 'ring-transparent hover:ring-border-strong',
+        )}
+      >
+        {recording ? 'Нажмите сочетание…' : value ? hotkeyLabel(value) : <span className="font-sans text-muted">Не назначено</span>}
+      </button>
+      <IconButton tip="Очистить" tipPos="left" size={28} disabled={!value} onClick={() => onChange('')}>
+        <X size={18} />
+      </IconButton>
+    </div>
   );
 }
 
-function Saving({ draft, set, view }: { draft: AppSettings; set: SetFn; view: SettingsView }) {
-  const preview = useMemo(() => {
+// ---------------------------------------------------------------- Сохранение
+
+function Saving({ s, update, view }: { s: AppSettings; update: Update; view: SettingsView }) {
+  const folder = s.saveFolder || view.defaultSaveFolder;
+  const [limit, setLimit] = useState(s.historyLimit);
+  const [quality, setQuality] = useState(s.jpegQuality);
+  const [confirmClear, setConfirmClear] = useState(false);
+  useEffect(() => setLimit(s.historyLimit), [s.historyLimit]);
+  useEffect(() => setQuality(s.jpegQuality), [s.jpegQuality]);
+  useEffect(() => {
+    if (!confirmClear) return;
+    const t = window.setTimeout(() => setConfirmClear(false), 4000);
+    return () => window.clearTimeout(t);
+  }, [confirmClear]);
+
+  const example = useMemo(() => {
     const d = new Date();
     const p = (n: number, l = 2) => String(n).padStart(l, '0');
+    const date = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+    const time = `${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
     return (
-      (draft.fileNamePattern || 'Screenshot')
+      (s.fileNamePattern.trim() || 'Screenshot')
+        .replaceAll('{date}', date)
+        .replaceAll('{time}', time)
+        .replaceAll('{n}', '1')
         .replaceAll('{yyyy}', String(d.getFullYear()))
         .replaceAll('{yy}', p(d.getFullYear() % 100))
         .replaceAll('{MM}', p(d.getMonth() + 1))
@@ -285,65 +441,109 @@ function Saving({ draft, set, view }: { draft: AppSettings; set: SetFn; view: Se
         .replaceAll('{fff}', p(d.getMilliseconds(), 3))
         .replaceAll('{w}', '1280')
         .replaceAll('{h}', '720')
-        .replaceAll('{rand}', 'k3x9qa') + (draft.imageFormat === 'png' ? '.png' : '.jpg')
+        .replaceAll('{rand}', 'k3x9qa') + (s.imageFormat === 'png' ? '.png' : '.jpg')
     );
-  }, [draft.fileNamePattern, draft.imageFormat]);
+  }, [s.fileNamePattern, s.imageFormat]);
 
   return (
     <>
-      <Title sub="Куда и как сохраняются файлы по кнопке «Сохранить»">Сохранение</Title>
-      <Card>
-        <Row label="Папка" hint={draft.saveFolder ? undefined : `По умолчанию: ${view.defaultSaveFolder}`} stack>
-          <div className="flex gap-2">
-            <Input value={draft.saveFolder} placeholder={view.defaultSaveFolder} onChange={(e) => set('saveFolder', e.target.value)} />
-            <Button icon={<FolderOpen size={16} />} onClick={() => api.openFolder('save')}>
-              Открыть
+      <Title sub="Куда и как сохраняются файлы и сколько снимков хранится в истории">Сохранение</Title>
+      <Group title="Файлы">
+        <Row
+          label="Папка снимков"
+          hint={
+            s.saveFolder ? (
+              <button className="underline-offset-2 hover:text-text hover:underline" onClick={() => update({ saveFolder: '' })}>
+                Вернуть папку по умолчанию
+              </button>
+            ) : undefined
+          }
+        >
+          <div className="flex shrink-0 gap-1.5">
+            <button
+              className="flex h-9 w-[200px] items-center rounded-[10px] bg-surface-2 px-3 text-left font-mono text-[12px] transition-colors hover:bg-surface-3"
+              data-tip={`${folder}\nОткрыть папку`}
+              data-tip-pos="top"
+              onClick={() => api.openFolder('save')}
+            >
+              <span className="truncate" dir="rtl">
+                {folder}
+              </span>
+            </button>
+            <Button
+              variant="outline"
+              className="h-9"
+              onClick={async () => {
+                const picked = await api.pickFolder(folder);
+                if (picked) update({ saveFolder: picked === view.defaultSaveFolder ? '' : picked });
+              }}
+            >
+              Обзор
             </Button>
           </div>
         </Row>
-        <Row label="Имя файла" hint={<>Пример: <span className="text-muted">{preview}</span></>} stack>
-          <Input value={draft.fileNamePattern} onChange={(e) => set('fileNamePattern', e.target.value)} />
-          <div className="mt-2 flex flex-wrap gap-1.5 text-[11.5px] text-subtle">
-            {['{yyyy}', '{MM}', '{dd}', '{HH}', '{mm}', '{ss}', '{w}', '{h}', '{rand}'].map((t) => (
-              <button key={t} className="kbd hover:text-text" onClick={() => set('fileNamePattern', draft.fileNamePattern + t)}>
-                {t}
-              </button>
-            ))}
-          </div>
+        <Row
+          label="Имя файла"
+          hint={
+            <>
+              {'{date}'}, {'{time}'}, {'{n}'} — номер по порядку
+              <div className="truncate text-subtle">→ {example}</div>
+            </>
+          }
+        >
+          <TextField className="font-mono" value={s.fileNamePattern} placeholder="Screenshot {date} {time}" onChange={(v) => update({ fileNamePattern: v }, TYPING)} />
         </Row>
         <Row label="Формат" hint="Используется и для загрузки в Box">
           <Segmented
-            value={draft.imageFormat}
-            onChange={(v) => set('imageFormat', v)}
+            value={s.imageFormat}
+            onChange={(v) => update({ imageFormat: v })}
             options={[
               { value: 'png', label: 'PNG' },
-              { value: 'jpeg', label: 'JPEG' },
+              { value: 'jpeg', label: 'JPG' },
             ]}
           />
         </Row>
-        {draft.imageFormat === 'jpeg' && (
-          <Row label="Качество JPEG">
-            <div className="flex items-center gap-3">
-              <input type="range" min={40} max={100} value={draft.jpegQuality} onChange={(e) => set('jpegQuality', Number(e.target.value))} className="w-[160px] accent-[#6b6bff]" />
-              <span className="w-8 text-right tabular-nums">{draft.jpegQuality}</span>
-            </div>
+        {s.imageFormat === 'jpeg' && (
+          <Row label="Качество JPG">
+            <Range label="Качество JPG" value={quality} min={40} max={100} onChange={setQuality} onCommit={(v) => update({ jpegQuality: v })} />
           </Row>
         )}
-      </Card>
-      <p className="px-1 text-[12px] text-subtle">Временные снимки (история): {view.historyFolder}</p>
+      </Group>
+      <Group title="История">
+        <Row label="Хранить последних снимков" hint="Временное хранилище: снимки можно снова открыть из трея">
+          <Range label="Хранить последних снимков" value={limit} min={1} max={50} onChange={setLimit} onCommit={(v) => update({ historyLimit: v })} />
+        </Row>
+        <Row label="Очистить историю" hint="Файлы в папке снимков не удаляются">
+          <Button
+            variant="danger"
+            onClick={() => {
+              if (!confirmClear) return setConfirmClear(true);
+              setConfirmClear(false);
+              api.historyClear();
+            }}
+          >
+            {confirmClear ? 'Точно очистить?' : 'Очистить'}
+          </Button>
+        </Row>
+      </Group>
     </>
   );
 }
 
-function BoxSection({ draft, set }: { draft: AppSettings; set: SetFn }) {
+// ---------------------------------------------------------------- Загрузка и ссылки
+
+const SAMPLE_BOX_LINK = 'https://app.box.com/s/3rud4dfakga5r953wt77anhyzo27tm7r';
+
+function BoxSection({ s, update, flush }: { s: AppSettings; update: Update; flush: () => Promise<void> }) {
   const [status, setStatus] = useState<BoxStatus | null>(null);
   const [secret, setSecret] = useState('');
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const [advanced, setAdvanced] = useState(false);
-  const box = draft.box;
-  const setBox = (patch: Partial<AppSettings['box']>) => set('box', { ...box, ...patch });
+  const [preview, setPreview] = useState('');
+  const box = s.box;
+  const links = s.links;
 
   const refresh = () => api.boxStatus().then(setStatus).catch(() => {});
   useEffect(() => {
@@ -355,6 +555,9 @@ function BoxSection({ draft, set }: { draft: AppSettings; set: SetFn }) {
     if (status && (box.authMode !== 'oAuth' || (!status.builtinApp && !status.customApp))) setAdvanced(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status?.builtinApp, status?.customApp]);
+  useEffect(() => {
+    api.linkPreview(links.template).then(setPreview).catch(() => setPreview(''));
+  }, [links.template]);
 
   const run = async (name: string, fn: () => Promise<void>) => {
     setBusy(name);
@@ -369,10 +572,9 @@ function BoxSection({ draft, set }: { draft: AppSettings; set: SetFn }) {
     }
   };
 
-  // Persist the Box part of the settings before talking to Box.
+  // Settings are saved as they change; secrets only when used.
   const persist = async () => {
-    const current = await api.settingsGet();
-    await api.settingsSet({ ...current.settings, box });
+    await flush();
     if (secret) {
       await api.boxSetSecret('clientSecret', secret);
       setSecret('');
@@ -398,217 +600,260 @@ function BoxSection({ draft, set }: { draft: AppSettings; set: SetFn }) {
   const oauth = box.authMode === 'oAuth';
   const noApp = oauth && status && !status.builtinApp && !status.customApp;
   const account = status?.account;
+  const strip = (u: string) => u.replace(/^https?:\/\//, '');
 
   return (
     <>
-      <Title sub="Снимки загружаются в ваш Box, ссылка advant.one сразу копируется">Box.com</Title>
+      <Title sub="Снимки загружаются в ваш Box, ссылка advant.one сразу копируется">Загрузка и ссылки</Title>
 
-      {/* Account */}
-      <section className="mb-4 rounded-[16px] bg-surface p-5 ring-1 ring-inset ring-border">
-        {oauth && status?.signedIn ? (
-          <div className="flex items-center gap-4">
-            <div className="brand-gradient flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-[18px] font-semibold text-white">
-              {(account?.name || account?.login || 'B').slice(0, 1).toUpperCase()}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <span className="truncate text-[15px] font-semibold">{account?.name || 'Аккаунт Box'}</span>
-                <span className="rounded-full bg-success/15 px-2 py-0.5 text-[11px] font-medium text-success">подключено</span>
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-3 rounded-[14px] bg-surface-2 p-3.5">
+          {oauth && status?.signedIn ? (
+            <>
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-text text-[14px] font-medium text-surface">
+                {(account?.name || account?.login || 'B').slice(0, 1).toUpperCase()}
               </div>
-              <div className="truncate text-[12.5px] text-muted">{account?.login}</div>
-            </div>
-            <Button icon={<LogOut size={16} />} onClick={() => run('logout', () => api.boxLogout())}>
-              Выйти
-            </Button>
-          </div>
-        ) : oauth ? (
-          <div className="flex flex-col items-center gap-3 py-2 text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-accent-soft text-[#b4b4ff]">
-              <Cloud size={28} />
-            </div>
-            <div>
-              <div className="text-[15px] font-semibold">Войдите в Box, чтобы получать ссылки</div>
-              <div className="mt-1 text-[12.5px] leading-relaxed text-muted">
-                Откроется сайт Box — войдите и нажмите «Предоставить доступ». Ключи и ID вводить не нужно.
+              <div className="min-w-0 flex-1 text-[14px] font-medium">
+                <div className="truncate">{account?.name || 'Аккаунт Box'}</div>
+                <div className="truncate text-[12px] font-normal text-muted">{[account?.login, 'Box подключён'].filter(Boolean).join(' · ')}</div>
               </div>
-            </div>
-            {busy === 'login' ? (
-              <div className="flex items-center gap-3">
-                <span className="flex items-center gap-2 text-[13px] text-muted">
-                  <Spinner size={16} /> Ждём вход в браузере…
-                </span>
-                <Button size="sm" variant="ghost" onClick={() => api.boxLogout()}>
+              <Button variant="outline" size="sm" className="h-8" loading={busy === 'logout'} onClick={() => run('logout', () => api.boxLogout())}>
+                Выйти
+              </Button>
+            </>
+          ) : oauth ? (
+            <>
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-surface-3 text-muted">
+                <Cloud size={18} />
+              </div>
+              <div className="min-w-0 flex-1 text-[14px] font-medium">
+                Box не подключён
+                <div className="text-[12px] font-normal text-muted">
+                  {busy === 'login' ? 'Войдите на сайте Box и нажмите «Предоставить доступ»' : 'Войдите, чтобы получать ссылки — ключи вводить не нужно'}
+                </div>
+              </div>
+              {busy === 'login' ? (
+                <Button variant="outline" size="sm" className="h-8" icon={<Spinner size={13} />} onClick={() => api.boxLogout()}>
                   Отмена
                 </Button>
+              ) : (
+                <Button variant="primary" size="sm" className="h-8" disabled={!!noApp} onClick={login}>
+                  Войти через Box
+                </Button>
+              )}
+            </>
+          ) : (
+            <>
+              <ShieldCheck size={20} className={clsx('mx-2', status?.ready ? 'text-success' : 'text-muted')} />
+              <div className="min-w-0 flex-1 text-[14px] font-medium">
+                {box.authMode === 'clientCredentials' ? 'Сервисный аккаунт' : 'Developer token'}
+                <div className="text-[12px] font-normal text-muted">{status?.ready ? 'Данные для входа указаны' : 'Заполните поля в «Дополнительно»'}</div>
               </div>
-            ) : (
-              <Button variant="primary" size="lg" icon={<LogIn size={18} />} disabled={!!noApp} onClick={login}>
-                Войти через Box
+              <Button variant="outline" size="sm" className="h-8" loading={busy === 'test'} onClick={test}>
+                Проверить
               </Button>
-            )}
-            {noApp && (
-              <p className="text-[12px] text-warning">
-                Эта сборка без встроенного приложения Box — укажите своё в «Дополнительно» ниже.
-              </p>
-            )}
-          </div>
-        ) : (
-          <div className="flex items-center gap-3 text-[13px]">
-            <ShieldCheck size={18} className={status?.ready ? 'text-success' : 'text-subtle'} />
-            <span className="flex-1">{box.authMode === 'clientCredentials' ? 'Сервисный аккаунт' : 'Developer token'}</span>
-            <Button size="sm" icon={<ShieldCheck size={15} />} loading={busy === 'test'} onClick={test}>
-              Проверить
-            </Button>
-          </div>
-        )}
-        {msg && <p className={clsx('mt-3 text-center text-[12.5px] whitespace-pre-line', msg.kind === 'error' ? 'text-danger' : 'text-success')}>{msg.text}</p>}
-      </section>
+            </>
+          )}
+        </div>
+        {noApp && <p className="px-1 text-[12px] text-warning">Эта сборка без встроенного приложения Box — укажите своё в «Дополнительно» ниже.</p>}
+        {msg && <p className={clsx('px-1 text-[12px] whitespace-pre-line', msg.kind === 'error' ? 'text-danger' : 'text-success')}>{msg.text}</p>}
+      </div>
 
-      <Card title="Куда загружать">
+      <Group title="Куда загружать">
         <Row label="Папка в Box" hint={box.folderId ? `Используется папка с ID ${box.folderId} (см. «Дополнительно»)` : 'Создаётся автоматически в «Все файлы»'}>
-          <Input className="w-[230px]" value={box.folderName} disabled={!!box.folderId} onChange={(e) => setBox({ folderName: e.target.value })} />
+          <TextField value={box.folderName} disabled={!!box.folderId} onChange={(v) => update({ box: { folderName: v } }, TYPING)} />
         </Row>
-        <Row label="Доступ по ссылке" hint="«Все, у кого есть ссылка» — откроется на телефоне без входа в Box">
-          <Select value={box.sharedLinkAccess} onChange={(e) => setBox({ sharedLinkAccess: e.target.value as AppSettings['box']['sharedLinkAccess'] })} className="w-[230px]">
+        <Row label="Доступ по ссылке" hint="Откроется на телефоне без входа в Box">
+          <Select
+            value={box.sharedLinkAccess}
+            onChange={(e) => update({ box: { sharedLinkAccess: e.target.value as AppSettings['box']['sharedLinkAccess'] } })}
+            className="w-[250px] shrink-0"
+          >
             <option value="open">Все, у кого есть ссылка</option>
             <option value="company">Только сотрудники компании</option>
             <option value="collaborators">Только участники папки</option>
           </Select>
         </Row>
-      </Card>
+      </Group>
 
-      <section className="mb-4">
-        <button
-          onClick={() => setAdvanced((a) => !a)}
-          className="mb-2 flex items-center gap-1.5 px-1 text-[12px] font-semibold tracking-wide text-subtle uppercase hover:text-muted"
-        >
+      <Group title="Ссылки">
+        <Row label="Заменять ссылку Box на свой домен">
+          <Switch checked={links.rewrite} onChange={(v) => update({ links: { rewrite: v } })} label="Заменять ссылку Box на свой домен" />
+        </Row>
+        <Row label="Шаблон ссылки" hint="{id} — код Box, {ext} — расширение, {name} — имя файла">
+          <TextField className="font-mono" value={links.template} disabled={!links.rewrite} onChange={(v) => update({ links: { template: v } }, TYPING)} />
+        </Row>
+      </Group>
+
+      <Group title="После загрузки">
+        <Row label="Копировать ссылку в буфер обмена">
+          <Switch checked={links.copyAfterUpload} onChange={(v) => update({ links: { copyAfterUpload: v } })} label="Копировать ссылку в буфер обмена" />
+        </Row>
+        <Row label="Открывать ссылку в браузере">
+          <Switch checked={links.openAfterUpload} onChange={(v) => update({ links: { openAfterUpload: v } })} label="Открывать ссылку в браузере" />
+        </Row>
+      </Group>
+
+      <div className="flex flex-col gap-0.5 overflow-hidden rounded-xl bg-surface-2 px-3.5 py-3 font-mono text-[12px] leading-[1.7]">
+        <div className="truncate">
+          <span className="text-muted">было{'  '}</span>
+          {strip(SAMPLE_BOX_LINK)}
+        </div>
+        <div className="truncate">
+          <span className="text-muted">стало </span>
+          {strip(links.rewrite && preview ? preview : SAMPLE_BOX_LINK)}
+        </div>
+      </div>
+
+      <section className="flex flex-col gap-0.5">
+        <button onClick={() => setAdvanced((a) => !a)} className="flex items-center gap-1 self-start pb-1.5 text-[12px] text-muted transition-colors hover:text-text">
           <ChevronRight size={14} className={clsx('transition-transform', advanced && 'rotate-90')} />
           Дополнительно
         </button>
         {advanced && (
-          <div className="divide-y divide-border rounded-[14px] bg-surface ring-1 ring-inset ring-border">
-            <div className="p-3">
+          <>
+            <Row label="Способ входа">
               <Segmented
                 value={box.authMode}
-                onChange={(v) => setBox({ authMode: v })}
+                onChange={(v) => update({ box: { authMode: v } })}
                 options={[
                   { value: 'oAuth', label: 'Вход через Box' },
                   { value: 'clientCredentials', label: 'Сервисный аккаунт' },
-                  { value: 'developerToken', label: 'Developer token' },
+                  { value: 'developerToken', label: 'Токен' },
                 ]}
               />
-            </div>
+            </Row>
             {box.authMode !== 'developerToken' && (
               <>
                 <Row
-                  label={oauth ? 'Своё приложение Box (необязательно)' : 'Client ID'}
-                  hint={
-                    oauth
-                      ? 'Только если не подходит встроенное. Тип: User Authentication (OAuth 2.0)'
-                      : 'Приложение «Server Authentication (Client Credentials Grant)», одобренное администратором'
-                  }
-                  stack
+                  label={oauth ? 'Своё приложение Box' : 'Client ID'}
+                  hint={oauth ? 'Необязательно: только если не подходит встроенное. User Authentication (OAuth 2.0)' : 'Server Authentication (Client Credentials Grant), одобренное администратором'}
                 >
-                  <div className="grid grid-cols-2 gap-2">
-                    <Input value={box.clientId} onChange={(e) => setBox({ clientId: e.target.value.trim() })} placeholder="Client ID" />
-                    <Input
-                      type="password"
-                      value={secret}
-                      onChange={(e) => setSecret(e.target.value)}
-                      placeholder={status?.hasClientSecret ? 'Client Secret (сохранён)' : 'Client Secret'}
-                    />
-                  </div>
+                  <TextField className="font-mono" value={box.clientId} placeholder="Client ID" onChange={(v) => update({ box: { clientId: v.trim() } }, TYPING)} />
+                </Row>
+                <Row label="Client Secret" hint={status?.hasClientSecret ? 'Сохранён (зашифрован в Windows)' : 'Хранится зашифрованным в Windows'}>
+                  <Input
+                    type="password"
+                    className="w-[250px] shrink-0 font-mono"
+                    value={secret}
+                    onChange={(e) => setSecret(e.target.value)}
+                    onBlur={() => secret && persist().then(refresh).catch(() => {})}
+                    placeholder={status?.hasClientSecret ? '••••••••' : 'Client Secret'}
+                  />
                 </Row>
               </>
             )}
             {box.authMode === 'clientCredentials' && (
-              <div className="grid grid-cols-2 divide-x divide-border">
-                <Row label="Enterprise ID" stack>
-                  <Input value={box.enterpriseId} onChange={(e) => setBox({ enterpriseId: e.target.value.trim() })} />
+              <>
+                <Row label="Enterprise ID">
+                  <TextField className="font-mono" value={box.enterpriseId} onChange={(v) => update({ box: { enterpriseId: v.trim() } }, TYPING)} />
                 </Row>
-                <Row label="User ID (необязательно)" stack>
-                  <Input value={box.userId} onChange={(e) => setBox({ userId: e.target.value.trim() })} />
+                <Row label="User ID" hint="Необязательно: действовать от имени пользователя">
+                  <TextField className="font-mono" value={box.userId} onChange={(v) => update({ box: { userId: v.trim() } }, TYPING)} />
                 </Row>
-              </div>
+              </>
             )}
             {box.authMode === 'developerToken' && (
-              <Row label="Developer token" hint="Временный токен из консоли разработчика Box (60 минут) — для проверки" stack>
-                <Input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder={status?.hasDeveloperToken ? '•••••••• (сохранён)' : ''} />
-              </Row>
-            )}
-            <Row label="ID папки" hint="Вместо имени папки: число из адреса app.box.com/folder/123456 (0 — корень)">
-              <Input className="w-[160px]" value={box.folderId} placeholder="авто" onChange={(e) => setBox({ folderId: e.target.value.trim() })} />
-            </Row>
-            {oauth && (
-              <Row
-                label="Redirect URI (необязательно)"
-                hint="Пусто — подбирается при входе автоматически. Если Box пишет redirect_uri_mismatch — впишите адрес из настроек приложения Box (Configuration → OAuth 2.0 Redirect URI)"
-                stack
-              >
+              <Row label="Developer token" hint="Временный токен из консоли разработчика Box (60 минут) — для проверки">
                 <Input
-                  className="font-mono"
-                  value={box.redirectUri}
-                  placeholder={status?.redirectUri ? `авто (сейчас ${status.redirectUri})` : 'авто'}
-                  onChange={(e) => setBox({ redirectUri: e.target.value.trim() })}
+                  type="password"
+                  className="w-[250px] shrink-0 font-mono"
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  onBlur={() => token && persist().then(refresh).catch(() => {})}
+                  placeholder={status?.hasDeveloperToken ? '•••••••• (сохранён)' : ''}
                 />
               </Row>
             )}
-            <div className="flex justify-end p-3">
-              <Button size="sm" icon={<ShieldCheck size={15} />} loading={busy === 'test'} onClick={test}>
-                Сохранить и проверить
+            <Row label="ID папки" hint="Вместо имени: число из адреса app.box.com/folder/123456 (0 — корень)">
+              <TextField className="font-mono" value={box.folderId} placeholder="авто" onChange={(v) => update({ box: { folderId: v.trim() } }, TYPING)} />
+            </Row>
+            {oauth && (
+              <Row
+                label="Redirect URI"
+                hint="Необязательно: пусто — подбирается при входе. Если Box пишет redirect_uri_mismatch — адрес из настроек приложения Box (Configuration → OAuth 2.0 Redirect URI)"
+              >
+                <TextField
+                  className="font-mono"
+                  value={box.redirectUri}
+                  placeholder={status?.redirectUri ? `авто (${status.redirectUri})` : 'авто'}
+                  onChange={(v) => update({ box: { redirectUri: v.trim() } }, TYPING)}
+                />
+              </Row>
+            )}
+            <Row label="Проверить подключение">
+              <Button variant="outline" icon={<ShieldCheck size={15} />} loading={busy === 'test'} onClick={test}>
+                Проверить
               </Button>
-            </div>
-          </div>
+            </Row>
+          </>
         )}
       </section>
     </>
   );
 }
 
-function Links({ draft, set }: { draft: AppSettings; set: SetFn }) {
-  const [preview, setPreview] = useState('');
-  const links = draft.links;
-  const setLinks = (patch: Partial<AppSettings['links']>) => set('links', { ...links, ...patch });
+// ---------------------------------------------------------------- О программе
+
+function About() {
+  const [info, setInfo] = useState<AppInfo | null>(null);
+  const [copied, setCopied] = useState(false);
   useEffect(() => {
-    api.linkPreview(links.template).then(setPreview).catch(() => setPreview(''));
-  }, [links.template]);
+    api.appInfo().then(setInfo).catch(() => {});
+  }, []);
+  const versionLine = info ? `AShot ${info.version} (${info.commit}, ${info.buildDate}) · Tauri ${info.tauriVersion} · ${info.os}` : '';
+  const rows: [string, string][] = [
+    ['Версия', info?.version ?? '…'],
+    ['Сборка', info ? `${info.commit} · ${info.buildDate}` : '…'],
+    ['Платформа', info ? `${info.os} · Tauri ${info.tauriVersion}` : '…'],
+  ];
+
   return (
-    <>
-      <Title sub="Ссылка Box заменяется на ваш домен-прокси">Ссылки</Title>
-      <Card>
-        <Row label="Заменять ссылку Box на свой домен">
-          <Switch checked={links.rewrite} onChange={(v) => setLinks({ rewrite: v })} />
-        </Row>
-        <Row label="Шаблон ссылки" hint={<>Подстановки: <span className="font-mono">{'{id}'}</span> — код ссылки Box, <span className="font-mono">{'{ext}'}</span> — расширение файла, <span className="font-mono">{'{name}'}</span> — имя файла</>} stack>
-          <Input value={links.template} onChange={(e) => setLinks({ template: e.target.value })} className="font-mono" disabled={!links.rewrite} />
-        </Row>
-        <div className={clsx('px-4 py-3.5', !links.rewrite && 'opacity-50')}>
-          <div className="mb-2 text-[12px] text-subtle">Пример</div>
-          <div className="space-y-1.5 font-mono text-[12px]">
-            <div className="flex items-center gap-2 text-subtle">
-              <span className="w-12 shrink-0 font-sans">Было</span>
-              <span className="truncate line-through decoration-white/20">https://app.box.com/s/3rud4dfakga5r953wt77anhyzo27tm7r</span>
-            </div>
-            <div className="flex items-center gap-2 text-[#c3c3ff]">
-              <span className="w-12 shrink-0 font-sans text-subtle">Стало</span>
-              <span className="truncate">{links.rewrite ? preview : 'https://app.box.com/s/3rud4dfakga5r953wt77anhyzo27tm7r'}</span>
-            </div>
+    <div className="flex flex-col items-center gap-5 py-2">
+      <Logo size={72} radius={284} />
+      <div className="flex flex-col items-center gap-1.5 text-center">
+        <h1 className="font-display text-[22px] font-normal">AShot</h1>
+        <div className="text-[14px] text-muted">Скриншоты с редактором и ссылками advant.one</div>
+      </div>
+      <div className="w-full max-w-[440px] rounded-[14px] bg-surface-2 px-4 py-1.5">
+        {rows.map(([k, v]) => (
+          <div key={k} className="flex justify-between gap-4 py-2.5 text-[14px]">
+            <span className="text-muted">{k}</span>
+            <span className="truncate font-mono text-[13px]">{v}</span>
           </div>
-        </div>
-      </Card>
-      <Card title="После загрузки">
-        <Row label="Копировать ссылку в буфер обмена">
-          <Switch checked={links.copyAfterUpload} onChange={(v) => setLinks({ copyAfterUpload: v })} />
-        </Row>
-        <Row label="Открывать ссылку в браузере">
-          <Switch checked={links.openAfterUpload} onChange={(v) => setLinks({ openAfterUpload: v })} />
-        </Row>
-      </Card>
-      <p className="flex items-start gap-2 px-1 text-[12px] leading-relaxed text-subtle">
-        <MousePointerClick size={14} className="mt-0.5 shrink-0" />
-        Чтобы ссылка открывалась на телефоне сразу как картинка, домен-прокси должен отдавать файл по коду ссылки. Пример прокси на Cloudflare Workers — в папке
-        proxy/ репозитория.
-      </p>
-    </>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <Button
+          variant="primary"
+          size="lg"
+          icon={copied ? <Check size={16} /> : <Copy size={16} />}
+          disabled={!info}
+          onClick={async () => {
+            await api.copyText(versionLine);
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1500);
+          }}
+        >
+          {copied ? 'Скопировано' : 'Скопировать версию'}
+        </Button>
+        <Button variant="secondary" size="lg" icon={<ExternalLink size={16} />} onClick={() => api.openUrl('https://advant.one')}>
+          advant.one
+        </Button>
+      </div>
+      <div className="flex gap-5 text-[13px]">
+        <button className="flex items-center gap-1.5 transition-colors hover:text-muted" onClick={() => api.openFolder('logs')}>
+          <FileText size={16} className="text-muted" />
+          Журнал
+        </button>
+        <button className="flex items-center gap-1.5 transition-colors hover:text-muted" onClick={() => api.openFolder('history')}>
+          <FolderOpen size={16} className="text-muted" />
+          Временные снимки
+        </button>
+      </div>
+      <div className="max-w-[440px] text-center text-[12px] leading-normal text-muted">
+        Используются: Tauri, React, Konva, иконки Lucide (ISC), snow-ui-selector из Snow Shot (Apache-2.0), шрифты Roboto и Roboto Mono (OFL).
+      </div>
+    </div>
   );
 }

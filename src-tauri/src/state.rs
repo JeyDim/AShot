@@ -101,13 +101,21 @@ impl AppState {
         let data_dir = path.app_local_data_dir().map_err(|e| e.to_string())?;
         let log_dir = path.app_log_dir().unwrap_or_else(|_| data_dir.join("logs"));
         let pictures = path.picture_dir().or_else(|_| path.home_dir()).unwrap_or_else(|_| data_dir.clone());
+        // Before the rename to AShot screenshots went to `Pictures\AdvantShoter`: keep using
+        // that folder for existing users so their files stay in one place.
+        let legacy_save_dir = pictures.join("AdvantShoter");
+        let default_save_dir = if legacy_save_dir.is_dir() && !pictures.join("AShot").exists() {
+            legacy_save_dir
+        } else {
+            pictures.join("AShot")
+        };
         std::fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
         std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
         let paths = Paths {
             settings_file: config_dir.join("settings.json"),
             secrets_file: config_dir.join("secrets.dat"),
             history_dir: data_dir.join("history"),
-            default_save_dir: pictures.join("AdvantShoter"),
+            default_save_dir,
             config_dir,
             data_dir,
             log_dir,

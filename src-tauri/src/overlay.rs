@@ -46,7 +46,7 @@ pub fn label(index: usize) -> String {
 
 fn build(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
     let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html#/overlay".into()))
-        .title("AdvantShoter — выделение")
+        .title("AShot — выделение")
         .decorations(false)
         .resizable(false)
         .shadow(false)

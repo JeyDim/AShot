@@ -1,4 +1,4 @@
-//! AdvantShoter — tray screenshot tool: region / window / full-screen capture with
+//! AShot — tray screenshot tool: region / window / full-screen capture with
 //! window and UI-element highlighting, annotation editor, temporary history of recent
 //! screenshots and publishing to Box.com with links on the custom proxy domain.
 
@@ -51,6 +51,23 @@ fn handle_args(app: &AppHandle, args: &[String], from_second_instance: bool) {
     }
 }
 
+/// Versions before the rename to AShot registered autostart as "AdvantShoter"; that entry
+/// points to the old executable, so it is removed (the setting re-creates it as "AShot").
+#[cfg(windows)]
+fn remove_legacy_autostart() {
+    use windows::core::w;
+    use windows::Win32::System::Registry::{RegDeleteKeyValueW, HKEY_CURRENT_USER};
+    for key in [
+        w!(r"Software\Microsoft\Windows\CurrentVersion\Run"),
+        w!(r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"),
+    ] {
+        let _ = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key, w!("AdvantShoter")) };
+    }
+}
+
+#[cfg(not(windows))]
+fn remove_legacy_autostart() {}
+
 pub fn run() {
     tauri::Builder::default()
         // Must be the first plugin.
@@ -70,7 +87,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
             commands::settings_get,
-            commands::settings_set,
             commands::settings_patch,
             commands::hotkeys_suspend,
             commands::capture,
@@ -93,7 +109,6 @@ pub fn run() {
             commands::history_upload,
             commands::editor_commit,
             commands::open_settings,
-            commands::open_about,
             commands::panel_hide,
             commands::toast_current,
             commands::toast_hide,
@@ -102,6 +117,7 @@ pub fn run() {
             commands::open_url,
             commands::reveal_path,
             commands::open_folder,
+            commands::pick_folder,
             commands::box_status,
             commands::box_set_secret,
             commands::box_test,
@@ -125,6 +141,7 @@ pub fn run() {
             let settings = state.settings();
 
             // Keep the OS autostart entry in sync with the setting.
+            remove_legacy_autostart();
             let launcher = handle.autolaunch();
             if settings.autostart != launcher.is_enabled().unwrap_or(false) {
                 let _ = if settings.autostart { launcher.enable() } else { launcher.disable() };
@@ -140,7 +157,7 @@ pub fn run() {
                 let first = if hk.is_empty() { String::new() } else { format!("{hk} — снимок области. ") };
                 ui::toast(
                     &handle,
-                    Toast::info("AdvantShoter работает в трее")
+                    Toast::info("AShot работает в трее")
                         .message(format!("{first}Клик по иконке в трее — меню и последние снимки."))
                         .timeout(9000),
                 );
@@ -152,7 +169,7 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while building AdvantShoter")
+        .expect("error while building AShot")
         .run(|_app, event| {
             // Tray application: closing the last window must not quit.
             if let RunEvent::ExitRequested { code: None, api, .. } = event {
