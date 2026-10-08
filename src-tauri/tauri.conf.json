@@ -22,8 +22,8 @@
     "publisher": "Advant",
     "copyright": "© Advant",
     "category": "Utility",
-    "shortDescription": "Скриншоты с редактором и ссылками advant.one",
-    "longDescription": "AShot — снимки экрана из трея: выделение области, окна или элемента, рисование поверх снимка, история последних снимков и публикация в Box.com со ссылками на advant.one.",
+    "shortDescription": "Скриншоты с редактором и ссылками Box",
+    "longDescription": "AShot — снимки экрана из трея: выделение области, окна или элемента, рисование поверх снимка, история последних снимков и публикация в Box.com с короткими ссылками.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

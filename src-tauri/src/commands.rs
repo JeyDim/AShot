@@ -67,6 +67,8 @@ pub struct SettingsView {
     settings: AppSettings,
     default_save_folder: String,
     history_folder: String,
+    /// Link template used while `links.template` is empty.
+    default_link_template: String,
 }
 
 #[tauri::command]
@@ -76,6 +78,7 @@ pub fn settings_get(app: AppHandle) -> SettingsView {
         settings: state.settings(),
         default_save_folder: state.paths.default_save_dir.display().to_string(),
         history_folder: state.paths.history_dir.display().to_string(),
+        default_link_template: crate::state::default_link_template(),
     }
 }
 
@@ -263,7 +266,7 @@ pub async fn overlay_hit_test(app: AppHandle, x: i32, y: i32) -> Vec<Rect> {
 pub struct HistoryView {
     #[serde(flatten)]
     item: HistoryItem,
-    /// `advant.one/xxxx` for display.
+    /// `proxy.example/xxxx` for display.
     short_link: Option<String>,
     /// The image changed after the upload – the link shows an older version.
     link_outdated: bool,
@@ -580,5 +583,6 @@ pub fn box_logout(app: AppHandle) -> CmdResult<()> {
 /// Preview of the link rewriting for the settings page.
 #[tauri::command]
 pub fn link_preview(template: String) -> String {
+    let template = if template.trim().is_empty() { crate::state::default_link_template() } else { template };
     links::rewrite("https://app.box.com/s/3rud4dfakga5r953wt77anhyzo27tm7r", &template, Some("Screenshot.png"))
 }

@@ -20,9 +20,9 @@ const settings: AppSettings = {
   fileNamePattern: 'Screenshot {date} {time}',
   imageFormat: 'png',
   jpegQuality: 90,
-  hotkeys: { region: 'PrintScreen', window: 'Alt+PrintScreen', fullscreen: 'Control+PrintScreen', lastRegion: 'Shift+PrintScreen' },
+  hotkeys: { region: 'Control+PrintScreen', window: '', fullscreen: '', lastRegion: '' },
   box: { authMode: 'oAuth', clientId: 'k2x8v1n0q9example', enterpriseId: '', userId: '', folderId: '', folderName: 'AShot', sharedLinkAccess: 'open', redirectUri: '' },
-  links: { rewrite: true, template: 'https://advant.one/{id}', copyAfterUpload: true, openAfterUpload: false },
+  links: { rewrite: true, template: '', copyAfterUpload: true, openAfterUpload: false },
   editor: { color: '#FF3B30', size: 1 },
   lastRegion: { x: 200, y: 120, width: 1280, height: 720 },
   welcomed: true,
@@ -124,7 +124,7 @@ export async function installMocks() {
             logDir: 'C:\\Users\\ivan\\AppData\\Local\\one.advant.shoter\\logs',
           };
         case 'settings_get':
-          return { settings, defaultSaveFolder: 'C:\\Users\\ivan\\Pictures\\AShot', historyFolder: 'C:\\Users\\ivan\\AppData\\Local\\one.advant.shoter\\history' };
+          return { settings, defaultSaveFolder: 'C:\\Users\\ivan\\Pictures\\AShot', historyFolder: 'C:\\Users\\ivan\\AppData\\Local\\one.advant.shoter\\history', defaultLinkTemplate: 'https://app.box.com/embed/s/{id}' };
         case 'settings_patch':
           deepAssign(settings as unknown as Record<string, unknown>, a.patch as Record<string, unknown>);
           emit('settings:changed', settings);
@@ -152,7 +152,7 @@ export async function installMocks() {
                 redirectUri: 'https://www.box.com/home/',
               };
         case 'link_preview':
-          return String(a.template).replace('{id}', '3rud4dfakga5r953wt77anhyzo27tm7r');
+          return String(a.template || 'https://app.box.com/embed/s/{id}').replace('{id}', '3rud4dfakga5r953wt77anhyzo27tm7r');
         case 'toast_current':
           return null;
         case 'overlay_pending':

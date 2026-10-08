@@ -252,7 +252,7 @@ pub async fn upload_item(app: &AppHandle, id: &str) -> Result<String, String> {
     };
     let box_url = uploaded.shared_link.url.clone();
     let share = if settings.links.rewrite {
-        links::rewrite(&box_url, &settings.links.template, Some(&uploaded.file_name))
+        links::rewrite(&box_url, &crate::state::link_template(&settings.links), Some(&uploaded.file_name))
     } else {
         box_url.clone()
     };

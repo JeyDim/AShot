@@ -1,12 +1,25 @@
-//! Rewriting Box.com shared links to the custom proxy domain.
-//!
-//! `https://app.box.com/s/3rud4dfakga5r953wt77anhyzo27tm7r`
-//! becomes `https://advant.one/3rud4dfakga5r953wt77anhyzo27tm7r`
-//! with the default template `https://advant.one/{id}`.
+//! Rewriting Box.com shared links: to a custom proxy domain
+//! (`https://app.box.com/s/3rud4dfakga5r953wt77anhyzo27tm7r` →
+//! `https://proxy.example/3rud4dfakga5r953wt77anhyzo27tm7r` with the template
+//! `https://proxy.example/{id}`) or, without a proxy, to the Box embed preview.
 
 use url::Url;
 
-pub const DEFAULT_TEMPLATE: &str = "https://advant.one/{id}";
+/// Box's own preview page: shows the image without a Box login (for "open" links),
+/// also on phones. Used when the build has no proxy domain.
+pub const BOX_EMBED_TEMPLATE: &str = "https://app.box.com/embed/s/{id}";
+
+/// Template that earlier versions stored as the default (the proxy domain was built in).
+pub const LEGACY_DEFAULT_TEMPLATE: &str = "https://advant.one/{id}";
+
+/// Default link template: the proxy domain (or template) given to the build,
+/// otherwise the Box embed link.
+pub fn default_template(proxy: Option<&str>) -> String {
+    match proxy.map(normalize_template).filter(|t| !t.is_empty()) {
+        Some(t) => t,
+        None => BOX_EMBED_TEMPLATE.into(),
+    }
+}
 
 /// Extracts the shared-link identifier from a Box shared link
 /// (`https://app.box.com/s/<id>`, `https://<company>.app.box.com/s/<id>`,
@@ -31,14 +44,14 @@ pub fn extract_shared_id(link: &str) -> Option<String> {
     }
 }
 
-/// Normalises a user-entered template:
-/// * `advant.one` → `https://advant.one/{id}`
-/// * `https://advant.one/` → `https://advant.one/{id}`
-/// * `https://i.advant.one/{id}.png` stays as is.
+/// Normalises a user-entered template (empty stays empty = "the default"):
+/// * `proxy.example` → `https://proxy.example/{id}`
+/// * `https://proxy.example/` → `https://proxy.example/{id}`
+/// * `https://i.proxy.example/{id}.png` stays as is.
 pub fn normalize_template(template: &str) -> String {
     let mut t = template.trim().to_string();
     if t.is_empty() {
-        return DEFAULT_TEMPLATE.to_string();
+        return t;
     }
     if !t.contains("://") {
         t = format!("https://{t}");
@@ -61,7 +74,7 @@ pub fn rewrite(box_link: &str, template: &str, file_name: Option<&str>) -> Strin
     let Some(id) = extract_shared_id(box_link) else {
         return box_link.to_string();
     };
-    let template = normalize_template(template);
+    let template = default_template(Some(template));
     let ext = file_name
         .and_then(|n| n.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()))
         .unwrap_or_default();
@@ -72,7 +85,7 @@ pub fn rewrite(box_link: &str, template: &str, file_name: Option<&str>) -> Strin
         .replace("{name}", &name)
 }
 
-/// Short human-friendly form used in the UI: `advant.one/3rud4dfa…`.
+/// Short human-friendly form used in the UI: `proxy.example/3rud4dfa…`.
 pub fn display(link: &str) -> String {
     let without_scheme = link.split_once("://").map(|(_, rest)| rest).unwrap_or(link);
     without_scheme.trim_end_matches('/').to_string()
@@ -97,9 +110,19 @@ mod tests {
     fn rewrites_example_from_spec() {
         let old = "https://app.box.com/s/3rud4dfakga5r953wt77anhyzo27tm7r";
         assert_eq!(
-            rewrite(old, DEFAULT_TEMPLATE, None),
+            rewrite(old, "https://advant.one/{id}", None),
             "https://advant.one/3rud4dfakga5r953wt77anhyzo27tm7r"
         );
+    }
+
+    #[test]
+    fn default_is_proxy_or_box_embed() {
+        assert_eq!(default_template(None), BOX_EMBED_TEMPLATE);
+        assert_eq!(default_template(Some(" ")), BOX_EMBED_TEMPLATE);
+        assert_eq!(default_template(Some("advant.one")), "https://advant.one/{id}");
+        assert_eq!(default_template(Some("https://i.example.com/{id}.{ext}")), "https://i.example.com/{id}.{ext}");
+        let old = "https://app.box.com/s/w1xbk8rxw0to943akdsm1xoa5napunwl";
+        assert_eq!(rewrite(old, "", None), "https://app.box.com/embed/s/w1xbk8rxw0to943akdsm1xoa5napunwl");
     }
 
     #[test]
@@ -122,7 +145,7 @@ mod tests {
     fn template_normalisation() {
         assert_eq!(normalize_template("advant.one"), "https://advant.one/{id}");
         assert_eq!(normalize_template("https://advant.one/"), "https://advant.one/{id}");
-        assert_eq!(normalize_template(" "), DEFAULT_TEMPLATE);
+        assert_eq!(normalize_template(" "), "");
         assert_eq!(normalize_template("https://i.advant.one/{id}.{ext}"), "https://i.advant.one/{id}.{ext}");
     }
 
@@ -141,7 +164,7 @@ mod tests {
 
     #[test]
     fn unknown_links_are_left_untouched() {
-        assert_eq!(rewrite("https://example.com/x", DEFAULT_TEMPLATE, None), "https://example.com/x");
+        assert_eq!(rewrite("https://example.com/x", BOX_EMBED_TEMPLATE, None), "https://example.com/x");
     }
 
     #[test]

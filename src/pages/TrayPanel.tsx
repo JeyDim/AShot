@@ -114,7 +114,7 @@ export default function TrayPanel() {
 
         {!showAll && (
           <>
-            <Hero item={latest} busy={latest ? busy[latest.id] : undefined} run={run} onMenu={openMenu} hotkey={hk?.region ?? 'PrintScreen'} />
+            <Hero item={latest} busy={latest ? busy[latest.id] : undefined} run={run} onMenu={openMenu} hotkey={hk?.region ?? ''} />
 
             {/* Capture modes */}
             <div className="grid grid-cols-4 gap-2 p-4">
@@ -235,7 +235,13 @@ function Hero({
           <div className="mt-1 text-[12px] leading-relaxed text-muted">Последний снимок появится здесь — с правкой, ссылкой и копированием в один клик.</div>
         </div>
         <div className="flex items-center gap-2 text-[12px] text-muted">
-          Нажмите <Kbd keys={hotkey} />
+          {hotkey ? (
+            <>
+              Нажмите <Kbd keys={hotkey} />
+            </>
+          ) : (
+            'Нажмите «Область» ниже'
+          )}
         </div>
       </div>
     );

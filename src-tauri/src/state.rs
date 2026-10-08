@@ -242,6 +242,17 @@ pub struct OAuthApp {
     pub redirect_uri: Option<String>,
 }
 
+/// Link template used when the settings leave it empty: the proxy domain compiled into
+/// this build (`SHOTER_PROXY_DOMAIN`), otherwise the Box embed link.
+pub fn default_link_template() -> String {
+    shoter_core::links::default_template(option_env!("SHOTER_PROXY_DOMAIN"))
+}
+
+/// Template for rewriting Box links with the current settings.
+pub fn link_template(links: &shoter_core::settings::LinkSettings) -> String {
+    if links.template.trim().is_empty() { default_link_template() } else { links.template.clone() }
+}
+
 /// The Box app compiled into this build, if any.
 pub fn builtin_box_app() -> Option<(String, String)> {
     match (option_env!("SHOTER_BOX_CLIENT_ID"), option_env!("SHOTER_BOX_CLIENT_SECRET")) {

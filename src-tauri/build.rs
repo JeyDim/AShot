@@ -23,5 +23,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SHOTER_BOX_CLIENT_ID");
     println!("cargo:rerun-if-env-changed=SHOTER_BOX_CLIENT_SECRET");
     println!("cargo:rerun-if-env-changed=SHOTER_BOX_REDIRECT_URI");
+    // Proxy domain for links (CI secret PROXY_DOMAIN); empty = Box embed links.
+    println!("cargo:rerun-if-env-changed=SHOTER_PROXY_DOMAIN");
     tauri_build::build()
 }

@@ -529,7 +529,7 @@ mod tests {
         assert_eq!(res.file_id, "777");
         assert_eq!(res.shared_link.url, "https://app.box.com/s/3rud4dfakga5r953wt77anhyzo27tm7r");
         assert_eq!(
-            crate::links::rewrite(&res.shared_link.url, crate::links::DEFAULT_TEMPLATE, Some(&res.file_name)),
+            crate::links::rewrite(&res.shared_link.url, "https://advant.one/{id}", Some(&res.file_name)),
             "https://advant.one/3rud4dfakga5r953wt77anhyzo27tm7r"
         );
     }

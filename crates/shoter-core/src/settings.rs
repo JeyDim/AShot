@@ -66,13 +66,14 @@ pub struct Hotkeys {
     pub last_region: String,
 }
 
+/// Only the region capture has a hotkey by default; the rest are opt-in.
 impl Default for Hotkeys {
     fn default() -> Self {
         Self {
-            region: "PrintScreen".into(),
-            window: "Alt+PrintScreen".into(),
-            fullscreen: "Control+PrintScreen".into(),
-            last_region: "Shift+PrintScreen".into(),
+            region: "Control+PrintScreen".into(),
+            window: String::new(),
+            fullscreen: String::new(),
+            last_region: String::new(),
         }
     }
 }
@@ -129,8 +130,9 @@ impl Default for BoxSettings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct LinkSettings {
-    /// Replace `https://app.box.com/s/<id>` with the custom proxy domain.
+    /// Replace `https://app.box.com/s/<id>` using the template.
     pub rewrite: bool,
+    /// Empty = the build's default: the proxy domain or the Box embed link.
     pub template: String,
     pub copy_after_upload: bool,
     pub open_after_upload: bool,
@@ -140,7 +142,7 @@ impl Default for LinkSettings {
     fn default() -> Self {
         Self {
             rewrite: true,
-            template: crate::links::DEFAULT_TEMPLATE.into(),
+            template: String::new(),
             copy_after_upload: true,
             open_after_upload: false,
         }
@@ -240,7 +242,13 @@ impl AppSettings {
     pub fn load(path: &Path) -> Self {
         match std::fs::read(path) {
             Ok(bytes) => match serde_json::from_slice::<AppSettings>(&bytes) {
-                Ok(s) => s.sanitized(),
+                Ok(mut s) => {
+                    // The old built-in default becomes "the build's default".
+                    if s.links.template == crate::links::LEGACY_DEFAULT_TEMPLATE {
+                        s.links.template.clear();
+                    }
+                    s.sanitized()
+                }
                 Err(err) => {
                     log::warn!("settings file is corrupt ({err}), using defaults");
                     let _ = std::fs::copy(path, path.with_extension("json.bak"));
@@ -308,8 +316,10 @@ mod tests {
         let s = AppSettings::default();
         assert!(!s.show_cursor, "cursor must be hidden by default");
         assert_eq!(s.history_limit, 10);
-        assert_eq!(s.links.template, "https://advant.one/{id}");
+        assert!(s.links.template.is_empty(), "link template comes from the build");
         assert!(s.links.rewrite);
+        assert_eq!(s.hotkeys.region, "Control+PrintScreen");
+        assert!(s.hotkeys.window.is_empty() && s.hotkeys.fullscreen.is_empty() && s.hotkeys.last_region.is_empty());
         assert_eq!(s.box_.shared_link_access, "open");
         // No folder id needed: the "AShot" folder is created automatically.
         assert!(s.box_.folder_id.is_empty());
@@ -361,5 +371,15 @@ mod tests {
         assert_eq!(s.history_limit, 1);
         assert_eq!(s.box_.shared_link_access, "open");
         assert_eq!(s.links.template, "https://advant.one/{id}");
+    }
+
+    #[test]
+    fn legacy_link_template_becomes_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, br#"{"links":{"rewrite":true,"template":"https://advant.one/{id}"}}"#).unwrap();
+        assert_eq!(AppSettings::load(&path).links.template, "");
+        std::fs::write(&path, br#"{"links":{"template":"https://i.example.com/{id}"}}"#).unwrap();
+        assert_eq!(AppSettings::load(&path).links.template, "https://i.example.com/{id}");
     }
 }

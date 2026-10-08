@@ -75,6 +75,8 @@ export interface SettingsView {
   settings: AppSettings;
   defaultSaveFolder: string;
   historyFolder: string;
+  /** Link template used while settings.links.template is empty. */
+  defaultLinkTemplate: string;
 }
 
 export interface HistoryItem {

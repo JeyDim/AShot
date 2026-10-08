@@ -185,7 +185,7 @@ export default function Settings({ initial }: { initial?: string }) {
             {section === 'general' && <General s={settings} update={update} />}
             {section === 'hotkeys' && <HotkeysSection value={settings.hotkeys} onChange={(h) => update({ hotkeys: h })} />}
             {section === 'saving' && <Saving s={settings} update={update} view={view} />}
-            {section === 'box' && <BoxSection s={settings} update={update} flush={flush} />}
+            {section === 'box' && <BoxSection s={settings} update={update} flush={flush} defaultTemplate={view.defaultLinkTemplate} />}
             {section === 'about' && <About />}
           </div>
         </div>
@@ -323,7 +323,8 @@ function General({ s, update }: { s: AppSettings; update: Update }) {
 
 // ---------------------------------------------------------------- Горячие клавиши
 
-const DEFAULT_HOTKEYS: Hotkeys = { region: 'PrintScreen', window: 'Alt+PrintScreen', fullscreen: 'Control+PrintScreen', lastRegion: 'Shift+PrintScreen' };
+// Only the region capture has a hotkey by default; the rest are opt-in.
+const DEFAULT_HOTKEYS: Hotkeys = { region: 'Control+PrintScreen', window: '', fullscreen: '', lastRegion: '' };
 
 function HotkeysSection({ value, onChange }: { value: Hotkeys; onChange: (h: Hotkeys) => void }) {
   const rows: { key: keyof Hotkeys; label: string; hint: string; icon: ReactNode }[] = [
@@ -351,7 +352,7 @@ function HotkeysSection({ value, onChange }: { value: Hotkeys; onChange: (h: Hot
         </Row>
       </Group>
       <Note>
-        В Windows 11 клавишу PrtSc по умолчанию занимают «Ножницы». Отключите: Параметры → Специальные возможности → Клавиатура → «Использовать кнопку PrtSc для открытия
+        Если назначаете просто PrtSc: в Windows 11 её по умолчанию занимают «Ножницы». Отключите: Параметры → Специальные возможности → Клавиатура → «Использовать кнопку PrtSc для открытия
         функции захвата экрана».
       </Note>
     </>
@@ -534,7 +535,7 @@ function Saving({ s, update, view }: { s: AppSettings; update: Update; view: Set
 
 const SAMPLE_BOX_LINK = 'https://app.box.com/s/3rud4dfakga5r953wt77anhyzo27tm7r';
 
-function BoxSection({ s, update, flush }: { s: AppSettings; update: Update; flush: () => Promise<void> }) {
+function BoxSection({ s, update, flush, defaultTemplate }: { s: AppSettings; update: Update; flush: () => Promise<void>; defaultTemplate: string }) {
   const [status, setStatus] = useState<BoxStatus | null>(null);
   const [secret, setSecret] = useState('');
   const [token, setToken] = useState('');
@@ -604,7 +605,7 @@ function BoxSection({ s, update, flush }: { s: AppSettings; update: Update; flus
 
   return (
     <>
-      <Title sub="Снимки загружаются в ваш Box, ссылка advant.one сразу копируется">Загрузка и ссылки</Title>
+      <Title sub="Снимки загружаются в ваш Box, ссылка сразу копируется">Загрузка и ссылки</Title>
 
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-3 rounded-[14px] bg-surface-2 p-3.5">
@@ -677,11 +678,17 @@ function BoxSection({ s, update, flush }: { s: AppSettings; update: Update; flus
       </Group>
 
       <Group title="Ссылки">
-        <Row label="Заменять ссылку Box на свой домен">
-          <Switch checked={links.rewrite} onChange={(v) => update({ links: { rewrite: v } })} label="Заменять ссылку Box на свой домен" />
+        <Row label="Заменять ссылку Box по шаблону" hint="Выключено — обычная ссылка app.box.com/s/…">
+          <Switch checked={links.rewrite} onChange={(v) => update({ links: { rewrite: v } })} label="Заменять ссылку Box по шаблону" />
         </Row>
-        <Row label="Шаблон ссылки" hint="{id} — код Box, {ext} — расширение, {name} — имя файла">
-          <TextField className="font-mono" value={links.template} disabled={!links.rewrite} onChange={(v) => update({ links: { template: v } }, TYPING)} />
+        <Row label="Шаблон ссылки" hint="Пусто — по умолчанию сборки. {id} — код Box, {ext} — расширение, {name} — имя файла">
+          <TextField
+            className="font-mono"
+            value={links.template}
+            placeholder={defaultTemplate}
+            disabled={!links.rewrite}
+            onChange={(v) => update({ links: { template: v } }, TYPING)}
+          />
         </Row>
       </Group>
 
