@@ -2,6 +2,7 @@
 import clsx from 'clsx';
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react';
 import { forwardRef } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { hotkeyParts } from '../lib/format';
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
@@ -193,15 +194,15 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
 
 export function Select({ className, children, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
   return (
-    <select
-      className={clsx(
-        'h-9 w-full appearance-none rounded-(--radius-control) bg-surface-2 bg-[url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2716%27 height=%2716%27 fill=%27none%27 stroke=%27%23a1a9b8%27 stroke-width=%272%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27%3E%3Cpath d=%27m4 6 4 4 4-4%27/%3E%3C/svg%3E")] bg-[length:16px] bg-[right_10px_center] bg-no-repeat pr-9 pl-3 text-[13.5px] text-text ring-1 ring-inset ring-border outline-none focus:ring-2 focus:ring-accent/70',
-        className,
-      )}
-      {...rest}
-    >
-      {children}
-    </select>
+    <div className={clsx('relative', className)}>
+      <select
+        className="h-9 w-full appearance-none rounded-(--radius-control) bg-surface-2 pr-9 pl-3 text-[13.5px] text-text ring-1 ring-inset ring-border outline-none focus:ring-2 focus:ring-accent/70"
+        {...rest}
+      >
+        {children}
+      </select>
+      <ChevronDown size={16} className="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-muted" />
+    </div>
   );
 }
 
