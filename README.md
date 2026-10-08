@@ -105,14 +105,16 @@
    | --- | --- |
    | `BOX_CLIENT_ID` | Client ID приложения Box |
    | `BOX_CLIENT_SECRET` | Client Secret |
-   | `BOX_REDIRECT_URI` | Redirect URI, указанный у приложения Box |
+   | `BOX_REDIRECT_URI` | необязательно: Redirect URI, указанный у приложения Box |
 
-   Redirect URI можно взять любой из прописанных у приложения:
-   `http://localhost:<порт>/...` — вход откроется в браузере; любой другой адрес (например,
-   как у Greenshot `https://…/authorize/box`) — вход откроется в окне AdvantShoter, адрес
-   перехватывается и сам может не существовать. Поэтому приложение Box от Greenshot можно
-   использовать без изменений в консоли Box. Если `BOX_REDIRECT_URI` не задан —
-   `http://localhost:47615/callback`.
+   Вход всегда открывается в окне AdvantShoter: возврат из Box перехватывается по коду
+   проверки (`state`), так что адрес возврата сам может не существовать — приложение Box от
+   Greenshot подходит без изменений в консоли Box. Redirect URI можно не задавать: программа
+   сначала попробует войти без него (Box подставит адрес из настроек приложения), а если Box
+   ответит `redirect_uri_mismatch`, переберёт типовые (`https://www.box.com/home/`,
+   `https://app.box.com`, `http://localhost:47615/callback`). Сработавший адрес запоминается.
+   Если ни один не подошёл — впишите адрес из *Configuration → OAuth 2.0 Redirect URI*
+   в секрет `BOX_REDIRECT_URI` или в «Настройки → Box.com → Дополнительно».
 4. Перезапустите сборку (Actions → Build → Re-run) — в новой версии кнопка входа заработает.
 
 Если в Box включено «новые приложения отключены по умолчанию», администратор Box должен
@@ -123,7 +125,7 @@
 
 ### Другие способы (Настройки → Box.com → Дополнительно)
 
-- **Своё приложение Box** — Client ID / Secret / Redirect URI вручную (если сборка без встроенного).
+- **Своё приложение Box** — Client ID / Secret (и при необходимости Redirect URI) вручную, если сборка без встроенного.
 - **Сервисный аккаунт (Client Credentials Grant)** — без входа пользователей: приложение типа
   *Server Authentication (Client Credentials Grant)*, одобренное администратором; нужны Client ID,
   Client Secret и Enterprise ID (или User ID).

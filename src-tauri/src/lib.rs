@@ -136,11 +136,12 @@ pub fn run() {
                     Toast::error("Горячие клавиши не назначены", problems.join("\n")).timeout(15000),
                 );
             } else if !settings.welcomed {
-                let hk = settings.hotkeys.region.replace("PrintScreen", "PrtSc");
+                let hk = shoter_core::settings::hotkey_label(&settings.hotkeys.region);
+                let first = if hk.is_empty() { String::new() } else { format!("{hk} — снимок области. ") };
                 ui::toast(
                     &handle,
                     Toast::info("AdvantShoter работает в трее")
-                        .message(format!("{hk} — снимок области. Клик по иконке в трее — меню и последние снимки."))
+                        .message(format!("{first}Клик по иконке в трее — меню и последние снимки."))
                         .timeout(9000),
                 );
                 state.update_settings(|s| s.welcomed = true);

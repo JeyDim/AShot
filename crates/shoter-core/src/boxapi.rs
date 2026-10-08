@@ -183,14 +183,19 @@ pub fn http_client() -> Client {
         .expect("failed to build HTTP client")
 }
 
-/// URL the user opens in the browser to grant access (OAuth 2.0 authorization code flow).
-pub fn authorize_url(endpoints: &Endpoints, client_id: &str, redirect_uri: &str, state: &str) -> String {
+/// URL the user opens to grant access (OAuth 2.0 authorization code flow).
+/// Without `redirect_uri` Box sends the user to the redirect URI configured for the app
+/// (works when the app has exactly one).
+pub fn authorize_url(endpoints: &Endpoints, client_id: &str, redirect_uri: Option<&str>, state: &str) -> String {
     let mut url = url::Url::parse(&endpoints.authorize).expect("valid authorize endpoint");
-    url.query_pairs_mut()
-        .append_pair("response_type", "code")
-        .append_pair("client_id", client_id)
-        .append_pair("redirect_uri", redirect_uri)
-        .append_pair("state", state);
+    {
+        let mut q = url.query_pairs_mut();
+        q.append_pair("response_type", "code").append_pair("client_id", client_id);
+        if let Some(r) = redirect_uri {
+            q.append_pair("redirect_uri", r);
+        }
+        q.append_pair("state", state);
+    }
     url.to_string()
 }
 
@@ -201,19 +206,19 @@ pub async fn exchange_code(
     client_id: &str,
     client_secret: &str,
     code: &str,
-    redirect_uri: &str,
+    redirect_uri: Option<&str>,
 ) -> Result<OAuthTokens> {
-    let resp = http
-        .post(&endpoints.token)
-        .form(&[
-            ("grant_type", "authorization_code"),
-            ("code", code),
-            ("client_id", client_id),
-            ("client_secret", client_secret),
-            ("redirect_uri", redirect_uri),
-        ])
-        .send()
-        .await?;
+    let mut form = vec![
+        ("grant_type", "authorization_code"),
+        ("code", code),
+        ("client_id", client_id),
+        ("client_secret", client_secret),
+    ];
+    // Same redirect URI as in the authorization request (OAuth 2.0 §4.1.3), if any.
+    if let Some(r) = redirect_uri {
+        form.push(("redirect_uri", r));
+    }
+    let resp = http.post(&endpoints.token).form(&form).send().await?;
     let token: TokenResponse = parse_token_response(resp).await?;
     Ok(OAuthTokens {
         expires_at: Utc::now().timestamp() + token.expires_in.unwrap_or(3600),
@@ -704,9 +709,14 @@ mod tests {
 
     #[test]
     fn builds_authorize_url() {
-        let url = authorize_url(&Endpoints::default(), "cid", "http://localhost:47615/callback", "st");
+        let url = authorize_url(&Endpoints::default(), "cid", Some("http://localhost:47615/callback"), "st");
         assert!(url.starts_with("https://account.box.com/api/oauth2/authorize?"));
         assert!(url.contains("client_id=cid"));
         assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A47615%2Fcallback"));
+
+        // No redirect URI: Box uses the one configured for the app.
+        let url = authorize_url(&Endpoints::default(), "cid", None, "st");
+        assert!(!url.contains("redirect_uri"));
+        assert!(url.ends_with("state=st"));
     }
 }

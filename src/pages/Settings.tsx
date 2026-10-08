@@ -541,11 +541,16 @@ function BoxSection({ draft, set }: { draft: AppSettings; set: SetFn }) {
             </Row>
             {oauth && (
               <Row
-                label="Redirect URI своего приложения"
-                hint="Как в настройках приложения Box. localhost — вход в браузере; любой другой адрес (как у Greenshot) — вход в окне AdvantShoter"
+                label="Redirect URI (необязательно)"
+                hint="Пусто — подбирается при входе автоматически. Если Box пишет redirect_uri_mismatch — впишите адрес из настроек приложения Box (Configuration → OAuth 2.0 Redirect URI)"
                 stack
               >
-                <Input className="font-mono" value={box.redirectUri} placeholder={`http://localhost:${box.redirectPort}/callback`} onChange={(e) => setBox({ redirectUri: e.target.value.trim() })} />
+                <Input
+                  className="font-mono"
+                  value={box.redirectUri}
+                  placeholder={status?.redirectUri ? `авто (сейчас ${status.redirectUri})` : 'авто'}
+                  onChange={(e) => setBox({ redirectUri: e.target.value.trim() })}
+                />
               </Row>
             )}
             <div className="flex justify-end p-3">

@@ -222,18 +222,24 @@ pub fn hide_toast(app: &AppHandle) -> bool {
 
 /// Shows a window without activating it, so the user's application keeps keyboard
 /// focus (e.g. Ctrl+V right after "copied to clipboard").
+///
+/// The windowing library hides the title bar of an undecorated window only when it
+/// recalculates the frame (it does so in its own `show()`), so the frame is recalculated
+/// here explicitly — otherwise the toast appears in a regular window with a title bar.
 #[cfg(windows)]
 fn show_without_focus(window: &WebviewWindow) {
     use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_SHOWNOACTIVATE,
+        SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        SW_SHOWNOACTIVATE,
     };
     let Ok(hwnd) = window.hwnd() else {
         let _ = window.show();
         return;
     };
     unsafe {
+        let flags = SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED;
+        let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, flags);
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-        let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE);
     }
 }
 
@@ -347,49 +353,106 @@ pub fn open_editor(app: &AppHandle, id: &str) {
 
 const BOX_LOGIN: &str = "box-login";
 
-/// Shows the Box authorization page in an app window and waits until Box redirects
-/// to `redirect_uri`; the navigation is intercepted, so that URL never has to exist.
-pub async fn box_login_window(app: &AppHandle, authorize_url: &str, redirect_uri: &str, state: &str) -> Result<String, String> {
-    use std::sync::{Arc, Mutex};
+/// Address the sign-in page navigates to when Box reports a wrong redirect URI on its own
+/// page; the navigation is intercepted (the `.invalid` domain never resolves anyway).
+const REDIRECT_REJECTED_HOST: &str = "redirect-rejected.advantshoter.invalid";
+
+/// Runs in every page of the sign-in window. Box shows "Error: redirect_uri_mismatch" on
+/// its own page instead of redirecting back, so the page text is checked for it.
+fn redirect_error_probe() -> String {
+    r#"(function () {
+  if (window.top !== window || !/(^|\.)box\.com$/i.test(location.hostname)) return;
+  var tries = 0;
+  function check() {
+    var text = (document.body && document.body.innerText) || '';
+    if (/redirect_uri/i.test(text) && /error|mismatch|invalid|missing|required/i.test(text)) {
+      location.replace('https://HOST/');
+    } else if (++tries < 30) {
+      setTimeout(check, 300);
+    }
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', check);
+  else check();
+})();"#
+        .replace("HOST", REDIRECT_REJECTED_HOST)
+}
+
+enum LoginEvent {
+    Done(Result<String, String>),
+    RedirectRejected(String),
+    Closed,
+}
+
+/// Shows the Box authorization page in an app window and waits for the redirect back
+/// (recognized by our `state`, whatever the redirect URI); the navigation is intercepted,
+/// so that URL never has to exist. `attempts` are authorization URLs with different
+/// redirect URIs: when Box rejects one, the window moves on to the next.
+/// Returns the authorization code and the index of the attempt that worked.
+pub async fn box_login_window(app: &AppHandle, attempts: &[String], state: &str) -> Result<(String, usize), String> {
+    use shoter_core::oauth::{redirect_result, OAuthError};
+
     close_box_login_window(app);
-    let url: tauri::Url = authorize_url.parse().map_err(|e| format!("некорректный адрес Box: {e}"))?;
-    let (tx, rx) = tokio::sync::oneshot::channel::<Result<String, String>>();
-    let tx = Arc::new(Mutex::new(Some(tx)));
+    let parse = |u: &str| u.parse::<tauri::Url>().map_err(|e| format!("некорректный адрес Box: {e}"));
+    let first = parse(attempts.first().ok_or("нет адреса входа Box")?)?;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<LoginEvent>();
 
     let nav_tx = tx.clone();
-    let redirect = redirect_uri.to_string();
     let expected = state.to_string();
-    let window = WebviewWindowBuilder::new(app, BOX_LOGIN, WebviewUrl::External(url))
+    let window = WebviewWindowBuilder::new(app, BOX_LOGIN, WebviewUrl::External(first))
         .title("Вход в Box — AdvantShoter")
         .inner_size(560.0, 760.0)
         .min_inner_size(420.0, 560.0)
         .center()
         .focused(true)
+        .initialization_script(redirect_error_probe())
         .on_navigation(move |u| {
-            if !shoter_core::oauth::is_redirect(u.as_str(), &redirect) {
-                return true;
+            if u.host_str() == Some(REDIRECT_REJECTED_HOST) {
+                let _ = nav_tx.send(LoginEvent::RedirectRejected("redirect_uri_mismatch".into()));
+                return false;
             }
-            let result = shoter_core::oauth::code_from_redirect(u.as_str(), &expected).map_err(|e| e.to_string());
-            if let Some(tx) = nav_tx.lock().unwrap().take() {
-                let _ = tx.send(result);
+            match redirect_result(u.as_str(), &expected) {
+                None => true,
+                Some(Err(OAuthError::RedirectRejected(error))) => {
+                    let _ = nav_tx.send(LoginEvent::RedirectRejected(error));
+                    false
+                }
+                Some(result) => {
+                    let _ = nav_tx.send(LoginEvent::Done(result.map_err(|e| e.to_string())));
+                    false
+                }
             }
-            false
         })
         .build()
         .map_err(|e| e.to_string())?;
-    let close_tx = tx.clone();
     window.on_window_event(move |event| {
         if let WindowEvent::Destroyed = event {
-            if let Some(tx) = close_tx.lock().unwrap().take() {
-                let _ = tx.send(Err("окно входа закрыто".into()));
-            }
+            let _ = tx.send(LoginEvent::Closed);
         }
     });
     let _ = window.set_focus();
-    let result = tokio::time::timeout(Duration::from_secs(600), rx)
-        .await
-        .map_err(|_| "время ожидания входа истекло".to_string())?
-        .unwrap_or_else(|_| Err("вход прерван".into()));
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(600);
+    let mut current = 0;
+    let result = loop {
+        match tokio::time::timeout_at(deadline, rx.recv()).await {
+            Err(_) => break Err("время ожидания входа истекло".to_string()),
+            Ok(None | Some(LoginEvent::Closed)) => break Err("окно входа закрыто".into()),
+            Ok(Some(LoginEvent::Done(result))) => break result.map(|code| (code, current)),
+            Ok(Some(LoginEvent::RedirectRejected(error))) => {
+                log::warn!("Box rejected redirect URI #{current} ({error})");
+                current += 1;
+                let Some(next) = attempts.get(current) else {
+                    break Err("Box не принял адрес возврата (redirect_uri_mismatch). Впишите Redirect URI из настроек \
+                               приложения Box (Configuration → OAuth 2.0 Redirect URI) в «Настройки → Box.com → \
+                               Дополнительно»"
+                        .into());
+                };
+                if let Err(e) = parse(next).and_then(|u| window.navigate(u).map_err(|e| e.to_string())) {
+                    break Err(e);
+                }
+            }
+        }
+    };
     close_box_login_window(app);
     result
 }

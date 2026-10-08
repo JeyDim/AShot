@@ -169,18 +169,17 @@ impl AppState {
     /// built into this build (`SHOTER_BOX_CLIENT_ID` / `_SECRET` / `_REDIRECT_URI`).
     pub fn oauth_app(&self) -> Option<OAuthApp> {
         let b = self.settings.read().unwrap().box_.clone();
-        let fallback_redirect = if b.redirect_uri.is_empty() { b.default_redirect_uri() } else { b.redirect_uri.clone() };
+        let configured = Some(b.redirect_uri.trim().to_string()).filter(|r| !r.is_empty());
         let custom_id = b.client_id.trim().to_string();
         if !custom_id.is_empty() {
             let secret = self.secrets.lock().unwrap().box_client_secret.clone();
-            return (!secret.is_empty()).then_some(OAuthApp { client_id: custom_id, client_secret: secret, redirect_uri: fallback_redirect });
+            return (!secret.is_empty()).then_some(OAuthApp { client_id: custom_id, client_secret: secret, redirect_uri: configured });
         }
         let (client_id, client_secret) = builtin_box_app()?;
-        let redirect_uri = option_env!("SHOTER_BOX_REDIRECT_URI")
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .unwrap_or(fallback_redirect);
+        // A redirect URI typed in the settings wins over the one compiled into the build.
+        let redirect_uri = configured.or_else(|| {
+            option_env!("SHOTER_BOX_REDIRECT_URI").map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+        });
         Some(OAuthApp { client_id, client_secret, redirect_uri })
     }
 
@@ -231,7 +230,8 @@ impl AppState {
 pub struct OAuthApp {
     pub client_id: String,
     pub client_secret: String,
-    pub redirect_uri: String,
+    /// Redirect URI registered for the app, if known (otherwise it is detected at sign-in).
+    pub redirect_uri: Option<String>,
 }
 
 /// The Box app compiled into this build, if any.

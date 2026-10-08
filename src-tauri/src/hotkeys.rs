@@ -1,5 +1,6 @@
 //! Global hotkeys (PrintScreen by default).
 
+use shoter_core::settings::hotkey_label;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
 
@@ -28,20 +29,21 @@ pub fn apply(app: &AppHandle) -> Vec<String> {
         if accel.is_empty() {
             continue;
         }
+        let label = hotkey_label(accel);
         match accel.parse::<Shortcut>() {
             Ok(shortcut) => {
                 if map.contains_key(&shortcut.id()) {
-                    errors.push(format!("{title}: сочетание {accel} уже назначено другому действию"));
+                    errors.push(format!("{title}: сочетание {label} уже назначено другому действию"));
                     continue;
                 }
                 match gs.register(shortcut) {
                     Ok(()) => {
                         map.insert(shortcut.id(), mode);
                     }
-                    Err(e) => errors.push(format!("{title}: {accel} занято другой программой ({e})")),
+                    Err(e) => errors.push(format!("{title}: {label} занято другой программой ({e})")),
                 }
             }
-            Err(e) => errors.push(format!("{title}: не удалось разобрать «{accel}» ({e})")),
+            Err(e) => errors.push(format!("{title}: не удалось разобрать «{label}» ({e})")),
         }
     }
     *state.hotkeys.lock().unwrap() = map;

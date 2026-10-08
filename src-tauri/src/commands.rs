@@ -473,8 +473,14 @@ pub fn box_status(app: AppHandle) -> BoxStatus {
     // oauth_app() locks the secrets itself – call it before taking the lock below.
     let oauth_app = state.oauth_app();
     let oauth_ready = oauth_app.is_some();
-    let redirect_uri = oauth_app.map(|a| a.redirect_uri).unwrap_or_else(|| settings.box_.default_redirect_uri());
     let secrets = state.secrets.lock().unwrap();
+    // Redirect URI Box accepted at the last sign-in, else the configured one ("" = detect).
+    let learned = secrets.box_redirect.as_ref().filter(|l| oauth_app.as_ref().is_some_and(|a| a.client_id == l.client_id));
+    let redirect_uri = match learned {
+        Some(l) => l.redirect_uri.clone(),
+        None => oauth_app.and_then(|a| a.redirect_uri),
+    }
+    .unwrap_or_default();
     let signed_in = secrets.box_oauth.as_ref().is_some_and(|t| !t.refresh_token.is_empty());
     let b = &settings.box_;
     let ready = match b.auth_mode {

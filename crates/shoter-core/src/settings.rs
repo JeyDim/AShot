@@ -97,10 +97,7 @@ pub struct BoxSettings {
     /// Shared link access level: "open" (anyone with the link – needed for phones
     /// without a Box login), "company" or "collaborators".
     pub shared_link_access: String,
-    /// Port of the default local OAuth redirect: `http://localhost:{port}/callback`.
-    pub redirect_port: u16,
-    /// Redirect URI of the own Box app (advanced). Empty = the default local redirect.
-    /// A non-local URI (as in Greenshot) makes the app show the Box sign-in in its own window.
+    /// Redirect URI registered for the Box app (advanced). Empty = detected at sign-in.
     pub redirect_uri: String,
 }
 
@@ -114,15 +111,8 @@ impl Default for BoxSettings {
             folder_id: String::new(),
             folder_name: DEFAULT_BOX_FOLDER.into(),
             shared_link_access: "open".into(),
-            redirect_port: 47615,
             redirect_uri: String::new(),
         }
-    }
-}
-
-impl BoxSettings {
-    pub fn default_redirect_uri(&self) -> String {
-        format!("http://localhost:{}/callback", self.redirect_port)
     }
 }
 
@@ -229,9 +219,6 @@ impl AppSettings {
         if !matches!(self.box_.shared_link_access.as_str(), "open" | "company" | "collaborators") {
             self.box_.shared_link_access = "open".into();
         }
-        if self.box_.redirect_port < 1024 {
-            self.box_.redirect_port = BoxSettings::default().redirect_port;
-        }
         self.links.template = crate::links::normalize_template(&self.links.template);
         self
     }
@@ -270,9 +257,39 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     })
 }
 
+/// Human-readable hotkey: "Control+Shift+KeyZ" → "Ctrl+Shift+Z" (same as the UI shows).
+pub fn hotkey_label(accelerator: &str) -> String {
+    accelerator
+        .split('+')
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .map(|key| match key {
+            "PrintScreen" => "PrtSc".to_string(),
+            "Control" | "CommandOrControl" | "CmdOrCtrl" | "Ctrl" => "Ctrl".to_string(),
+            "Super" | "Meta" => "Win".to_string(),
+            "Escape" => "Esc".to_string(),
+            "Delete" => "Del".to_string(),
+            k if k.len() == 4 && k.starts_with("Key") => k[3..].to_string(),
+            k if k.len() == 6 && k.starts_with("Digit") => k[5..].to_string(),
+            k => k.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hotkey_labels() {
+        assert_eq!(hotkey_label("Control+Shift+KeyZ"), "Ctrl+Shift+Z");
+        assert_eq!(hotkey_label("PrintScreen"), "PrtSc");
+        assert_eq!(hotkey_label("Alt+PrintScreen"), "Alt+PrtSc");
+        assert_eq!(hotkey_label("Super+Digit5"), "Win+5");
+        assert_eq!(hotkey_label("Control+F12"), "Ctrl+F12");
+        assert_eq!(hotkey_label(""), "");
+    }
 
     #[test]
     fn defaults_match_requirements() {

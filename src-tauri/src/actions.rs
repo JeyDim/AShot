@@ -1,7 +1,6 @@
 //! What happens with a screenshot: copy, save, upload to Box, open in the editor.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use chrono::Local;
 use image::RgbaImage;
@@ -16,6 +15,7 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::clipboard;
+use crate::secrets::LearnedRedirect;
 use crate::state::{Action, AppState};
 use crate::ui::{self, Toast};
 
@@ -287,8 +287,8 @@ async fn upload_once(app: &AppHandle, name: &str, data: Vec<u8>, mime: &str) -> 
     client.upload_and_share(&folder, name, data, mime, &settings.box_.shared_link_access).await
 }
 
-/// "Sign in with Box": opens the Box authorization page in the browser and waits for
-/// the redirect to the local port. Used by the button in the UI and automatically
+/// Signs in to Box: the Box page opens in an app window, the user grants access and the
+/// redirect back is intercepted there. Used by the button in the UI and automatically
 /// before the first upload. Starting a new sign-in cancels a pending one.
 pub async fn box_login(app: &AppHandle) -> Result<BoxUser, String> {
     let state = app.state::<AppState>();
@@ -298,39 +298,48 @@ pub async fn box_login(app: &AppHandle) -> Result<BoxUser, String> {
     let oauth_app = state.oauth_app().ok_or(
         "в этой сборке нет встроенного приложения Box — укажите Client ID и Client Secret в «Настройки → Box.com → Дополнительно»",
     )?;
+    // A wrong redirect URI fails with redirect_uri_mismatch, and the one registered for the
+    // Box app is not always known: try the one that worked last time, the configured one,
+    // none at all (Box then uses the app's own), then the usual ones.
+    let learned = state.secrets.lock().unwrap().box_redirect.clone().filter(|l| l.client_id == oauth_app.client_id);
+    let mut preferred = Vec::new();
+    if let Some(l) = &learned {
+        preferred.push(l.redirect_uri.as_deref());
+    }
+    if let Some(r) = &oauth_app.redirect_uri {
+        preferred.push(Some(r.as_str()));
+    }
+    let candidates = oauth::redirect_candidates(preferred);
     let endpoints = boxapi::Endpoints::default();
     let csrf = shoter_core::random_string(24);
-    let authorize = boxapi::authorize_url(&endpoints, &oauth_app.client_id, &oauth_app.redirect_uri, &csrf);
+    let attempts: Vec<String> = candidates
+        .iter()
+        .map(|r| boxapi::authorize_url(&endpoints, &oauth_app.client_id, r.as_deref(), &csrf))
+        .collect();
 
-    let code = if let Some(port) = oauth::loopback_port(&oauth_app.redirect_uri) {
-        // Local redirect: sign in in the system browser (existing Box / SSO session).
-        let path = url_path(&oauth_app.redirect_uri);
-        let listener = oauth::bind(port).await.map_err(|e| e.to_string())?;
-        app.opener().open_url(authorize, None::<&str>).map_err(|e| e.to_string())?;
-        ui::toast(
-            app,
-            Toast::progress("Вход в Box").message("В браузере открылся сайт Box: войдите и нажмите «Предоставить доступ»."),
-        );
-        tokio::select! {
-            r = oauth::wait_for_code(listener, &csrf, &path, Duration::from_secs(300)) => r.map_err(|e| e.to_string())?,
-            _ = state.box_login_cancel.notified() => return Err("вход отменён".into()),
-        }
-    } else {
-        // Any other redirect URI (e.g. the one of an existing Greenshot Box app):
-        // Box opens in our own window and the redirect is intercepted there.
-        tokio::select! {
-            r = ui::box_login_window(app, &authorize, &oauth_app.redirect_uri, &csrf) => r?,
-            _ = state.box_login_cancel.notified() => {
-                ui::close_box_login_window(app);
-                return Err("вход отменён".into());
-            }
+    let (code, used) = tokio::select! {
+        r = ui::box_login_window(app, &attempts, &csrf) => r?,
+        _ = state.box_login_cancel.notified() => {
+            ui::close_box_login_window(app);
+            return Err("вход отменён".into());
         }
     };
-    let (client_id, client_secret, redirect_uri) = (oauth_app.client_id, oauth_app.client_secret, oauth_app.redirect_uri);
-    let tokens = boxapi::exchange_code(&boxapi::http_client(), &endpoints, &client_id, &client_secret, &code, &redirect_uri)
-        .await
-        .map_err(|e| e.to_string())?;
-    state.update_secrets(|s| s.box_oauth = Some(tokens))?;
+    let redirect_uri = candidates[used].clone();
+    log::info!("Box sign-in: redirect URI {}", redirect_uri.as_deref().unwrap_or("(app default)"));
+    let tokens = boxapi::exchange_code(
+        &boxapi::http_client(),
+        &endpoints,
+        &oauth_app.client_id,
+        &oauth_app.client_secret,
+        &code,
+        redirect_uri.as_deref(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    state.update_secrets(|s| {
+        s.box_oauth = Some(tokens);
+        s.box_redirect = Some(LearnedRedirect { client_id: oauth_app.client_id.clone(), redirect_uri });
+    })?;
     state.reset_box_client();
     let user = state.box_client(app)?.current_user().await.map_err(|e| e.to_string())?;
     state.update_secrets(|s| s.box_account = Some(user.clone()))?;
@@ -350,12 +359,4 @@ pub fn box_logout(app: &AppHandle) -> Result<(), String> {
     state.reset_box_client();
     let _ = app.emit("box:changed", ());
     Ok(())
-}
-
-fn url_path(uri: &str) -> String {
-    uri.split_once("://")
-        .and_then(|(_, rest)| rest.find('/').map(|i| rest[i..].to_string()))
-        .map(|p| p.split(['?', '#']).next().unwrap_or("/").to_string())
-        .filter(|p| !p.is_empty())
-        .unwrap_or_else(|| "/".into())
 }

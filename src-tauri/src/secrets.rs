@@ -14,6 +14,16 @@ pub struct Secrets {
     pub box_oauth: Option<OAuthTokens>,
     /// Signed-in Box account (shown in the UI).
     pub box_account: Option<BoxUser>,
+    /// Redirect URI that Box accepted at the last sign-in (tried first next time).
+    pub box_redirect: Option<LearnedRedirect>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LearnedRedirect {
+    pub client_id: String,
+    /// `None`: the request without `redirect_uri` worked.
+    pub redirect_uri: Option<String>,
 }
 
 impl Secrets {

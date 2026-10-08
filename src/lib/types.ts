@@ -29,7 +29,6 @@ export interface BoxSettings {
   folderId: string;
   folderName: string;
   sharedLinkAccess: 'open' | 'company' | 'collaborators';
-  redirectPort: number;
   redirectUri: string;
 }
 
