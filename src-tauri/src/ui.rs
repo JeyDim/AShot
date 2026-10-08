@@ -1,4 +1,4 @@
-//! Window management: tray panel, toast notifications, editor, settings, about.
+//! Window management: tray panel, toast notifications, editor, settings.
 
 use std::time::{Duration, Instant};
 
@@ -8,19 +8,42 @@ use tauri::{
     WebviewWindowBuilder, WindowEvent,
 };
 
+use shoter_core::settings::Theme as ThemeSetting;
+
 use crate::capture;
+use crate::overlay;
 use crate::state::AppState;
 
 pub const PANEL: &str = "panel";
 pub const TOAST: &str = "toast";
 pub const SETTINGS: &str = "settings";
-pub const ABOUT: &str = "about";
 
-const PANEL_SIZE: (f64, f64) = (420.0, 640.0);
-const TOAST_SIZE: (f64, f64) = (400.0, 150.0);
+// Logical sizes: the card from the design (380 wide) plus a 10 px transparent margin.
+const PANEL_SIZE: (f64, f64) = (400.0, 660.0);
+const TOAST_SIZE: (f64, f64) = (400.0, 176.0);
 
 fn url(route: &str) -> WebviewUrl {
     WebviewUrl::App(format!("index.html#/{route}").into())
+}
+
+/// Native window theme for the theme setting; `None` follows Windows. The web UI picks
+/// its colors itself (see `src/lib/theme.ts`), this only affects title bars.
+pub fn window_theme(app: &AppHandle) -> Option<Theme> {
+    match app.state::<AppState>().settings().theme {
+        ThemeSetting::System => None,
+        ThemeSetting::Light => Some(Theme::Light),
+        ThemeSetting::Dark => Some(Theme::Dark),
+    }
+}
+
+/// Re-applies the theme setting to the open windows (overlays always stay dark).
+pub fn apply_theme(app: &AppHandle) {
+    let theme = window_theme(app);
+    for (label, window) in app.webview_windows() {
+        if !label.starts_with(overlay::PREFIX) {
+            let _ = window.set_theme(theme);
+        }
+    }
 }
 
 /// Monitor work area (physical) and scale for a point, falling back to the primary monitor.
@@ -46,7 +69,7 @@ pub fn create_panel(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         return Ok(w);
     }
     let window = WebviewWindowBuilder::new(app, PANEL, url("panel"))
-        .title("AdvantShoter")
+        .title("AShot")
         .inner_size(PANEL_SIZE.0, PANEL_SIZE.1)
         .decorations(false)
         .transparent(true)
@@ -56,7 +79,7 @@ pub fn create_panel(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .always_on_top(true)
         .visible(false)
         .focused(false)
-        .theme(Some(Theme::Dark))
+        .theme(window_theme(app))
         .build()?;
     let handle = app.clone();
     window.on_window_event(move |event| {
@@ -125,6 +148,8 @@ pub struct Toast {
     pub link: Option<String>,
     pub path: Option<String>,
     pub history_id: Option<String>,
+    /// Offer "Retry" for a failed upload of `history_id`.
+    pub retry_upload: bool,
     /// 0 = stays until replaced/closed.
     pub timeout_ms: u64,
 }
@@ -158,6 +183,10 @@ impl Toast {
         self.history_id = Some(id.into());
         self
     }
+    pub fn retry_upload(mut self) -> Self {
+        self.retry_upload = true;
+        self
+    }
     pub fn timeout(mut self, ms: u64) -> Self {
         self.timeout_ms = ms;
         self
@@ -169,7 +198,7 @@ pub fn create_toast(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         return Ok(w);
     }
     WebviewWindowBuilder::new(app, TOAST, url("toast"))
-        .title("AdvantShoter")
+        .title("AShot")
         .inner_size(TOAST_SIZE.0, TOAST_SIZE.1)
         .decorations(false)
         .transparent(true)
@@ -180,7 +209,7 @@ pub fn create_toast(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .focusable(false)
         .focused(false)
         .visible(false)
-        .theme(Some(Theme::Dark))
+        .theme(window_theme(app))
         .build()
 }
 
@@ -285,28 +314,17 @@ pub fn open_settings(app: &AppHandle, section: Option<&str>) {
     }
     let route = section.map(|s| format!("settings/{s}")).unwrap_or_else(|| "settings".into());
     let _ = WebviewWindowBuilder::new(app, SETTINGS, url(&route))
-        .title("Настройки — AdvantShoter")
-        .inner_size(860.0, 640.0)
+        .title("Настройки — AShot")
+        .inner_size(840.0, 640.0)
         .min_inner_size(720.0, 520.0)
         .center()
-        .theme(Some(Theme::Dark))
+        .theme(window_theme(app))
         .build();
 }
 
+/// "About" is the last section of the settings window.
 pub fn open_about(app: &AppHandle) {
-    hide_panel(app);
-    if focus_existing(app, ABOUT) {
-        return;
-    }
-    let _ = WebviewWindowBuilder::new(app, ABOUT, url("about"))
-        .title("О программе — AdvantShoter")
-        .inner_size(460.0, 520.0)
-        .resizable(false)
-        .maximizable(false)
-        .minimizable(false)
-        .center()
-        .theme(Some(Theme::Dark))
-        .build();
+    open_settings(app, Some("about"));
 }
 
 pub fn editor_label(id: &str) -> String {
@@ -331,11 +349,11 @@ pub fn open_editor(app: &AppHandle, id: &str) {
     let x = wx as f64 / scale + (ww as f64 / scale - w) / 2.0;
     let y = wy as f64 / scale + (wh as f64 / scale - h) / 2.0;
     let built = WebviewWindowBuilder::new(app, &label, url(&format!("editor/{id}")))
-        .title("Редактор — AdvantShoter")
+        .title("Редактор — AShot")
         .inner_size(w, h)
         .min_inner_size(760.0, 480.0)
         .position(x, y)
-        .theme(Some(Theme::Dark))
+        .theme(window_theme(app))
         .focused(true)
         .build();
     if let Ok(window) = built {
@@ -360,7 +378,7 @@ pub async fn box_login_window(app: &AppHandle, authorize_url: &str, redirect_uri
     let redirect = redirect_uri.to_string();
     let expected = state.to_string();
     let window = WebviewWindowBuilder::new(app, BOX_LOGIN, WebviewUrl::External(url))
-        .title("Вход в Box — AdvantShoter")
+        .title("Вход в Box — AShot")
         .inner_size(560.0, 760.0)
         .min_inner_size(420.0, 560.0)
         .center()

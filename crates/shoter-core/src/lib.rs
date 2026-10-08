@@ -1,4 +1,4 @@
-//! Platform-independent core of AdvantShoter.
+//! Platform-independent core of AShot.
 //!
 //! Everything here is plain Rust without any windowing/OS dependencies so it can be
 //! unit-tested on any platform. The Tauri application (`src-tauri`) wires it together

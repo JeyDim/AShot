@@ -1,38 +1,42 @@
-// Tray panel: big capture buttons in one row, quick toggles and the recent screenshots.
+// Tray panel: the latest screenshot with its link, capture modes and earlier screenshots.
 import clsx from 'clsx';
 import {
   AppWindow,
   Check,
+  CloudUpload,
   Copy,
   Download,
+  ExternalLink,
   FolderOpen,
+  History,
   ImageOff,
-  Info,
   Link2,
   Monitor,
   MoreHorizontal,
   Pencil,
-  Power,
   RotateCcw,
+  Save,
+  Scan,
   Settings as SettingsIcon,
-  SquareDashed,
   Trash2,
-  UploadCloud,
 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { IconButton, Kbd, Logo, Spinner, Switch } from '../components/ui';
-import { relativeTime, sizeLabel } from '../lib/format';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { Button, IconButton, Kbd, Logo, Spinner } from '../components/ui';
+import { hotkeyParts, relativeTime, sizeLabel } from '../lib/format';
 import { useKeyDown, useTauriEvent } from '../lib/hooks';
 import { api, errorText, shotUrl } from '../lib/ipc';
 import type { AppSettings, BoxStatus, CaptureMode, HistoryItem } from '../lib/types';
 
+type Run = (id: string, label: string, fn: () => Promise<unknown>) => Promise<void>;
+type MenuState = { item: HistoryItem; x: number; y: number };
+
 export default function TrayPanel() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [items, setItems] = useState<HistoryItem[]>([]);
-  const [version, setVersion] = useState('');
   const [box, setBox] = useState<BoxStatus | null>(null);
-  const [signingIn, setSigningIn] = useState(false);
   const [busy, setBusy] = useState<Record<string, string>>({});
+  const [menu, setMenu] = useState<MenuState | null>(null);
+  const [showAll, setShowAll] = useState(false);
   const [, setTick] = useState(0);
   const [animKey, setAnimKey] = useState(0);
 
@@ -49,7 +53,6 @@ export default function TrayPanel() {
 
   useEffect(() => {
     refresh();
-    api.appInfo().then((i) => setVersion(i.version)).catch(() => {});
     const t = window.setInterval(() => setTick((x) => x + 1), 30_000);
     return () => window.clearInterval(t);
   }, [refresh]);
@@ -59,15 +62,17 @@ export default function TrayPanel() {
   useTauriEvent<AppSettings>('settings:changed', (e) => setSettings(e.payload));
   useTauriEvent('panel:shown', () => {
     refresh();
+    setMenu(null);
+    setShowAll(false);
     setAnimKey((k) => k + 1);
   });
   useKeyDown((e) => {
-    if (e.key === 'Escape') api.panelHide();
+    if (e.key !== 'Escape') return;
+    if (menu) setMenu(null);
+    else api.panelHide();
   });
 
-  const capture = (mode: CaptureMode) => api.capture(mode);
-
-  const run = async (id: string, label: string, fn: () => Promise<unknown>) => {
+  const run: Run = async (id, label, fn) => {
     setBusy((b) => ({ ...b, [id]: label }));
     try {
       await fn();
@@ -81,135 +86,237 @@ export default function TrayPanel() {
     }
   };
 
-  const toggleCursor = async (value: boolean) => {
-    setSettings((s) => (s ? { ...s, showCursor: value } : s));
-    try {
-      setSettings(await api.settingsPatch({ showCursor: value }));
-    } catch (e) {
-      console.error(e);
-    }
+  const openMenu = (item: HistoryItem, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({ item, x: e.clientX, y: e.clientY });
   };
 
   const hk = settings?.hotkeys;
-  const limit = settings?.historyLimit ?? 10;
+  const [latest, ...earlier] = items;
+  const grid = showAll ? items : earlier;
 
   return (
-    <div className="h-full p-2.5">
-      <div key={animKey} className="card-pop animate-pop-in flex h-full flex-col overflow-hidden">
+    <div className="h-full p-2.5" onMouseDown={() => setMenu(null)}>
+      <div key={animKey} className="card-pop animate-pop-in relative flex h-full flex-col overflow-hidden">
         {/* Header */}
-        <div className="flex items-center gap-2.5 px-4 pt-3.5 pb-2" data-tauri-drag-region>
-          <Logo size={26} />
-          <div className="flex min-w-0 flex-1 items-baseline gap-2" data-tauri-drag-region>
-            <span className="font-display text-[15px] font-semibold tracking-tight">AdvantShoter</span>
-            {version && <span className="text-[11px] text-subtle">v{version}</span>}
-          </div>
-          <IconButton tip="О программе" onClick={() => api.openAbout()} size={32}>
-            <Info size={17} />
-          </IconButton>
-          <IconButton tip="Настройки" tipPos="left" onClick={() => api.openSettings()} size={32}>
-            <SettingsIcon size={17} />
+        <div className="flex items-center gap-2.5 px-4 pt-4 pb-3" data-tauri-drag-region>
+          <Logo size={28} radius={292} />
+          <span className="font-display text-[15px] font-semibold" data-tauri-drag-region>
+            AShot
+          </span>
+          <div className="flex-1" data-tauri-drag-region />
+          <BoxPill box={box} refresh={refresh} />
+          <IconButton tip="Настройки" tipPos="left" size={30} onClick={() => api.openSettings()}>
+            <SettingsIcon size={19} />
           </IconButton>
         </div>
 
-        {/* Capture buttons — big icons in one row */}
-        <div className="grid grid-cols-4 gap-2 px-3 pt-1 pb-3">
-          <CaptureTile icon={<SquareDashed size={26} strokeWidth={1.8} />} label="Область" keys={hk?.region} onClick={() => capture('region')} primary />
-          <CaptureTile icon={<AppWindow size={26} strokeWidth={1.8} />} label="Окно" keys={hk?.window} onClick={() => capture('windowPick')} />
-          <CaptureTile icon={<Monitor size={26} strokeWidth={1.8} />} label="Весь экран" keys={hk?.fullscreen} onClick={() => capture('fullscreen')} />
-          <CaptureTile
-            icon={<RotateCcw size={24} strokeWidth={1.8} />}
-            label="Повторить"
-            keys={hk?.lastRegion}
-            onClick={() => capture('lastRegion')}
-            disabled={!settings?.lastRegion}
-            tip={settings?.lastRegion ? 'Снять ту же область ещё раз' : 'Сначала сделайте снимок области'}
-          />
-        </div>
+        {!showAll && (
+          <>
+            <Hero item={latest} busy={latest ? busy[latest.id] : undefined} run={run} onMenu={openMenu} hotkey={hk?.region ?? 'PrintScreen'} />
 
-        {/* Quick toggles */}
-        <div className="mx-3 mb-3 flex items-center gap-3 rounded-[12px] bg-surface-2 px-3.5 py-2.5 ring-1 ring-inset ring-border">
-          <div className="min-w-0 flex-1">
-            <div className="text-[13.5px]">Показывать курсор</div>
-            <div className="text-[11.5px] text-subtle">Указатель мыши попадёт на снимок</div>
-          </div>
-          <Switch checked={settings?.showCursor ?? false} onChange={toggleCursor} label="Показывать курсор" />
-        </div>
+            {/* Capture modes */}
+            <div className="grid grid-cols-4 gap-2 p-4">
+              <ModeTile icon={<Scan size={22} />} label="Область" keys={hk?.region} onClick={() => api.capture('region')} main />
+              <ModeTile icon={<AppWindow size={22} />} label="Окно" keys={hk?.window} onClick={() => capture('windowPick')} />
+              <ModeTile icon={<Monitor size={22} />} label="Экран" keys={hk?.fullscreen} onClick={() => capture('fullscreen')} />
+              <ModeTile
+                icon={<RotateCcw size={21} />}
+                label="Повтор"
+                keys={hk?.lastRegion}
+                onClick={() => capture('lastRegion')}
+                disabled={!settings?.lastRegion}
+                tip={settings?.lastRegion ? 'Снять ту же область ещё раз' : 'Сначала сделайте снимок области'}
+              />
+            </div>
+          </>
+        )}
 
-        {/* Recent */}
-        <div className="flex items-center px-4 pb-1.5">
-          <div className="flex-1 text-[12px] font-semibold tracking-wide text-subtle uppercase">
-            Последние снимки
-            <span className="ml-2 font-normal tracking-normal normal-case">
-              {items.length} / {limit}
-            </span>
-          </div>
-          {items.length > 0 && (
-            <button className="text-[12px] text-subtle transition-colors hover:text-danger" onClick={() => api.historyClear()}>
-              Очистить
+        {/* Earlier screenshots */}
+        <div className={clsx('flex items-center justify-between px-4 text-[13px]', showAll && 'pt-1')}>
+          <span className="font-medium">{showAll ? `Все снимки · ${items.length}` : 'Ранее'}</span>
+          {(showAll || earlier.length > 4) && (
+            <button className="text-muted transition-colors hover:text-text" onClick={() => setShowAll((v) => !v)}>
+              {showAll ? 'Свернуть' : 'Все снимки'}
             </button>
           )}
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-          {items.length === 0 ? (
-            <EmptyState keys={hk?.region ?? 'PrintScreen'} />
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-2.5 pb-4">
+          {grid.length === 0 ? (
+            <div className="pt-6 text-center text-[12px] leading-relaxed text-muted">
+              Здесь будут предыдущие снимки —
+              <br />
+              до {settings?.historyLimit ?? 10} последних
+            </div>
           ) : (
-            <ul className="flex flex-col gap-0.5">
-              {items.map((it) => (
-                <HistoryRow key={it.id} item={it} busy={busy[it.id]} run={run} />
+            <div className="grid grid-cols-2 content-start gap-2">
+              {grid.map((it) => (
+                <ShotTile key={it.id} item={it} busy={busy[it.id]} run={run} onMenu={openMenu} />
               ))}
-            </ul>
+            </div>
           )}
         </div>
 
-        {/* Footer */}
-        <div className="flex items-center gap-1 border-t border-border px-2.5 py-2">
-          <FooterButton icon={<FolderOpen size={15} />} onClick={() => api.openFolder('save')}>
-            Папка снимков
-          </FooterButton>
-          {box?.ready ? (
-            <FooterButton
-              icon={<span className="h-2 w-2 rounded-full bg-success" />}
-              tip={box.account ? `${box.account.name}\n${box.account.login}` : 'Box подключён'}
-              onClick={() => api.openSettings('box')}
-            >
-              <span className="max-w-[150px] truncate">{box.account?.name || 'Box подключён'}</span>
-            </FooterButton>
-          ) : (
-            <FooterButton
-              icon={signingIn ? <Spinner size={13} /> : <span className="h-2 w-2 rounded-full bg-warning" />}
-              tip="Откроется сайт Box — войдите и нажмите «Предоставить доступ»"
-              onClick={async () => {
-                if (box && box.mode !== 'oAuth') return api.openSettings('box');
-                setSigningIn(true);
-                try {
-                  await api.boxLogin();
-                } catch {
-                  /* the error is shown in a toast */
-                } finally {
-                  setSigningIn(false);
-                  refresh();
-                }
-              }}
-            >
-              {signingIn ? 'Вход в Box…' : 'Войти в Box'}
-            </FooterButton>
-          )}
-          <div className="flex-1" />
-          <IconButton tip="Выйти из AdvantShoter" tipPos="top-left" size={30} tone="danger" onClick={() => api.quit()}>
-            <Power size={15} />
-          </IconButton>
-        </div>
+        {menu && <ContextMenu {...menu} run={run} close={() => setMenu(null)} />}
       </div>
     </div>
   );
 }
 
-function CaptureTile({
+function capture(mode: CaptureMode) {
+  api.capture(mode);
+}
+
+function BoxPill({ box, refresh }: { box: BoxStatus | null; refresh: () => void }) {
+  const [signingIn, setSigningIn] = useState(false);
+  if (!box) return null;
+  if (box.ready) {
+    return (
+      <button
+        className="flex h-7 items-center gap-1.5 rounded-full bg-surface-2 px-2.5 text-[12px] transition-colors hover:bg-surface-3"
+        data-tip={box.account ? `${box.account.name}\n${box.account.login}` : 'Box подключён'}
+        data-tip-pos="left"
+        onClick={() => api.openSettings('box')}
+      >
+        <span className="h-[7px] w-[7px] rounded-full bg-success" />
+        Box
+      </button>
+    );
+  }
+  return (
+    <button
+      className="flex h-7 items-center gap-1.5 rounded-full bg-surface-2 px-2.5 text-[12px] transition-colors hover:bg-surface-3"
+      data-tip="Откроется сайт Box — войдите и нажмите «Предоставить доступ»"
+      data-tip-pos="left"
+      onClick={async () => {
+        if (box.mode !== 'oAuth') return api.openSettings('box');
+        setSigningIn(true);
+        try {
+          await api.boxLogin();
+        } catch {
+          /* the error is shown in a toast */
+        } finally {
+          setSigningIn(false);
+          refresh();
+        }
+      }}
+    >
+      {signingIn ? <Spinner size={11} /> : <span className="h-[7px] w-[7px] rounded-full bg-warning" />}
+      {signingIn ? 'Вход…' : 'Войти в Box'}
+    </button>
+  );
+}
+
+const thumbPattern = 'repeating-linear-gradient(135deg, var(--color-surface-3) 0 8px, var(--color-surface-2) 8px 16px)';
+
+function Hero({
+  item,
+  busy,
+  run,
+  onMenu,
+  hotkey,
+}: {
+  item?: HistoryItem;
+  busy?: string;
+  run: Run;
+  onMenu: (item: HistoryItem, e: React.MouseEvent) => void;
+  hotkey: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => setCopied(false), [item?.id]);
+
+  if (!item) {
+    return (
+      <div className="mx-4 flex h-[226px] flex-col items-center justify-center gap-3 rounded-2xl bg-surface-2 px-8 text-center">
+        <ImageOff size={26} className="text-muted" />
+        <div>
+          <div className="text-[14px] font-medium">Пока нет снимков</div>
+          <div className="mt-1 text-[12px] leading-relaxed text-muted">Последний снимок появится здесь — с правкой, ссылкой и копированием в один клик.</div>
+        </div>
+        <div className="flex items-center gap-2 text-[12px] text-muted">
+          Нажмите <Kbd keys={hotkey} />
+        </div>
+      </div>
+    );
+  }
+
+  const copyLink = async () => {
+    await run(item.id, 'link', () => api.historyCopyLink(item.id));
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+  };
+  const uploading = busy === 'upload';
+
+  return (
+    <div className="mx-4 flex flex-col overflow-hidden rounded-2xl bg-surface-2" onContextMenu={(e) => onMenu(item, e)}>
+      <div className="relative h-[170px]" style={{ background: thumbPattern }}>
+        <button className="absolute inset-0 block h-full w-full" onClick={() => api.historyOpen(item.id)} aria-label="Открыть в редакторе">
+          <img src={shotUrl(`history/${item.id}/current.png?r=${item.revision}`)} alt="" draggable={false} className="h-full w-full object-cover object-top" />
+        </button>
+        <div className="pointer-events-none absolute top-2.5 left-2.5 rounded-full bg-surface px-2 py-1 text-[12px]">
+          {relativeTime(item.createdAt)} · {sizeLabel(item.width, item.height)}
+        </div>
+        <div className="absolute top-2.5 right-2.5 flex gap-1.5">
+          <IconButton tone="solid" size={32} tip="Редактировать" onClick={() => api.historyOpen(item.id)}>
+            <Pencil size={16} />
+          </IconButton>
+          <IconButton tone="solid" size={32} tip="Копировать изображение" onClick={() => run(item.id, 'copy', () => api.historyCopy(item.id))}>
+            {busy === 'copy' ? <Spinner size={15} /> : <Copy size={16} />}
+          </IconButton>
+          <IconButton tone="solid" size={32} tip="Сохранить в папку снимков" tipPos="left" onClick={() => run(item.id, 'save', () => api.historySave(item.id))}>
+            {busy === 'save' ? <Spinner size={15} /> : <Download size={16} />}
+          </IconButton>
+        </div>
+      </div>
+      <div className="flex items-center gap-2 p-2.5">
+        {uploading ? (
+          <div className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-[10px] bg-surface px-3 text-[12px] text-muted">
+            <Spinner size={14} /> Загрузка в Box…
+          </div>
+        ) : item.shortLink ? (
+          <button
+            onClick={copyLink}
+            data-tip={item.linkOutdated ? 'Ссылка на версию до редактирования' : undefined}
+            data-tip-pos="top"
+            className="flex h-9 min-w-0 flex-1 items-center gap-1.5 rounded-[10px] bg-surface px-3 font-mono text-[12px]"
+          >
+            {item.linkOutdated ? <span className="mx-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-warning" /> : <Check size={16} className="shrink-0 text-success" />}
+            <span className="truncate">{item.shortLink}</span>
+          </button>
+        ) : (
+          <div className="flex h-9 min-w-0 flex-1 items-center rounded-[10px] bg-surface px-3 text-[12px] text-muted">
+            <span className="truncate">{item.savedPath ? 'Сохранён в файл, ссылки ещё нет' : 'Ссылки ещё нет'}</span>
+          </div>
+        )}
+        {item.shortLink ? (
+          <Button variant="primary" className="h-9" icon={copied ? <Check size={16} /> : <Copy size={16} />} onClick={copyLink}>
+            {copied ? 'Скопировано' : 'Копировать'}
+          </Button>
+        ) : (
+          <Button
+            variant="primary"
+            className="h-9"
+            icon={<Link2 size={16} />}
+            disabled={uploading}
+            tip="Загрузить в Box и скопировать ссылку"
+            tipPos="top-left"
+            onClick={() => run(item.id, 'upload', () => api.historyUpload(item.id))}
+          >
+            Получить ссылку
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ModeTile({
   icon,
   label,
   keys,
   onClick,
-  primary,
+  main,
   disabled,
   tip,
 }: {
@@ -217,7 +324,7 @@ function CaptureTile({
   label: string;
   keys?: string;
   onClick: () => void;
-  primary?: boolean;
+  main?: boolean;
   disabled?: boolean;
   tip?: string;
 }) {
@@ -227,208 +334,141 @@ function CaptureTile({
       disabled={disabled}
       data-tip={tip}
       className={clsx(
-        'group flex flex-col items-center gap-1.5 rounded-[14px] px-1 pt-3 pb-2.5 transition-all duration-150 disabled:opacity-40',
-        'bg-surface-2 ring-1 ring-inset ring-border hover:-translate-y-px hover:bg-surface-3 hover:ring-accent/45 active:translate-y-0',
+        'flex h-[68px] flex-col items-center justify-center gap-1 rounded-[14px] px-1.5 transition-[background,filter,opacity] duration-100 disabled:opacity-40',
+        main ? 'bg-lime text-on-lime hover:brightness-105 active:brightness-95' : 'bg-surface-2 text-text hover:bg-surface-3',
       )}
     >
-      <span
-        className={clsx(
-          'flex h-12 w-12 items-center justify-center rounded-[13px] transition-transform duration-150 group-hover:scale-105',
-          primary ? 'brand-gradient text-white shadow-[0_8px_20px_-8px_rgb(107_107_255/0.9)]' : 'bg-accent-soft text-[#b4b4ff]',
-        )}
-      >
-        {icon}
-      </span>
-      <span className="text-[12.5px] leading-tight font-medium">{label}</span>
-      <span className="h-[18px]">{keys ? <Kbd keys={keys} /> : <span className="text-[11px] text-subtle">—</span>}</span>
-    </button>
-  );
-}
-
-function FooterButton({ icon, children, onClick, tip }: { icon: ReactNode; children: ReactNode; onClick: () => void; tip?: string }) {
-  return (
-    <button
-      onClick={onClick}
-      data-tip={tip}
-      data-tip-pos="top"
-      className="inline-flex h-[30px] items-center gap-2 rounded-[8px] px-2.5 text-[12.5px] text-muted transition-colors hover:bg-white/6 hover:text-text"
-    >
       {icon}
-      {children}
+      <span className="text-[12px] leading-tight font-medium">{label}</span>
+      <span className="font-mono text-[10px] leading-tight opacity-65">{keys ? hotkeyParts(keys).join('+') : '—'}</span>
     </button>
   );
 }
 
-function EmptyState({ keys }: { keys: string }) {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 px-8 py-10 text-center">
-      <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-surface-2 text-subtle ring-1 ring-inset ring-border">
-        <ImageOff size={24} />
-      </div>
-      <div>
-        <div className="text-[14px] font-medium">Пока нет снимков</div>
-        <div className="mt-1 text-[12.5px] leading-relaxed text-subtle">
-          Здесь будут последние снимки — их можно снова скопировать, отредактировать или получить ссылку.
-        </div>
-      </div>
-      <div className="flex items-center gap-2 text-[12px] text-muted">
-        Нажмите <Kbd keys={keys} />
-      </div>
-    </div>
-  );
-}
-
-function HistoryRow({
-  item,
-  busy,
-  run,
-}: {
-  item: HistoryItem;
-  busy?: string;
-  run: (id: string, label: string, fn: () => Promise<unknown>) => Promise<void>;
-}) {
-  const [menu, setMenu] = useState(false);
+function ShotTile({ item, busy, run, onMenu }: { item: HistoryItem; busy?: string; run: Run; onMenu: (item: HistoryItem, e: React.MouseEvent) => void }) {
   const [copied, setCopied] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!menu) return;
-    const close = (e: MouseEvent) => {
-      if (!menuRef.current?.contains(e.target as Node)) setMenu(false);
-    };
-    window.addEventListener('mousedown', close);
-    return () => window.removeEventListener('mousedown', close);
-  }, [menu]);
-
-  const copyLink = async () => {
+  const copyLink = async (e: React.MouseEvent) => {
+    e.stopPropagation();
     await run(item.id, 'link', () => api.historyCopyLink(item.id));
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1500);
   };
 
-  return (
-    <li
-      className="group relative flex items-center gap-3 rounded-[12px] p-1.5 pr-2 transition-colors hover:bg-white/4"
-      onContextMenu={(e) => {
-        e.preventDefault();
-        setMenu(true);
-      }}
-    >
-      <button
-        className="relative h-[54px] w-[86px] shrink-0 overflow-hidden rounded-[9px] bg-surface-3 ring-1 ring-white/8 transition-shadow hover:ring-2 hover:ring-accent/70"
-        onClick={() => api.historyOpen(item.id)}
-        data-tip="Открыть в редакторе"
-        data-tip-pos="right"
-      >
-        <img
-          src={shotUrl(`history/${item.id}/thumb.png?r=${item.revision}`)}
-          alt=""
-          draggable={false}
-          className="h-full w-full object-cover object-top"
-        />
-        {item.edited && (
-          <span className="absolute right-1 bottom-1 flex h-4 w-4 items-center justify-center rounded-full bg-black/60 text-white">
-            <Pencil size={9} />
-          </span>
-        )}
-      </button>
-
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-2">
-          <span className="truncate text-[13px] font-medium">{relativeTime(item.createdAt)}</span>
-          <span className="shrink-0 text-[11.5px] text-subtle">{sizeLabel(item.width, item.height)}</span>
-        </div>
-        <div className="mt-1 h-[22px]">
-          {busy === 'upload' ? (
-            <span className="inline-flex items-center gap-1.5 text-[12px] text-muted">
-              <Spinner size={13} /> Загрузка…
-            </span>
-          ) : item.shortLink ? (
-            <button
-              onClick={copyLink}
-              data-tip={item.linkOutdated ? 'Ссылка на версию до редактирования.\nНажмите, чтобы скопировать' : 'Скопировать ссылку'}
-              className={clsx(
-                'inline-flex max-w-full items-center gap-1.5 rounded-[7px] px-2 py-[3px] font-mono text-[11.5px] transition-colors',
-                copied ? 'bg-success/15 text-success' : 'bg-accent-soft text-[#c3c3ff] hover:bg-accent/25',
-              )}
-            >
-              {copied ? <Check size={12} /> : <Link2 size={12} className="shrink-0" />}
-              <span className="truncate">{copied ? 'Скопировано' : item.shortLink}</span>
-              {item.linkOutdated && !copied && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" />}
-            </button>
-          ) : (
-            <span className="text-[12px] text-subtle">{item.savedPath ? 'Сохранён в файл' : 'Только в истории'}</span>
-          )}
-        </div>
-      </div>
-
-      <div className="flex shrink-0 items-center gap-0.5 opacity-60 transition-opacity group-hover:opacity-100">
-        <IconButton tip="Копировать изображение" size={30} onClick={() => run(item.id, 'copy', () => api.historyCopy(item.id))}>
-          {busy === 'copy' ? <Spinner size={14} /> : <Copy size={15} />}
-        </IconButton>
-        <IconButton
-          tip={item.shareUrl && !item.linkOutdated ? 'Загрузить заново' : 'Загрузить в Box и скопировать ссылку'}
-          tipPos="left"
-          size={30}
-          tone="accent"
-          onClick={() => run(item.id, 'upload', () => api.historyUpload(item.id))}
-        >
-          <UploadCloud size={15} />
-        </IconButton>
-        <IconButton tip="Ещё" tipPos="left" size={30} onClick={() => setMenu((m) => !m)}>
-          <MoreHorizontal size={15} />
-        </IconButton>
-      </div>
-
-      {menu && (
-        <div
-          ref={menuRef}
-          className="animate-pop-in absolute top-[calc(100%-6px)] right-2 z-30 w-[210px] rounded-[12px] bg-elevated p-1 shadow-(--shadow-pop)"
-        >
-          <MenuItem icon={<Pencil size={15} />} onClick={() => api.historyOpen(item.id)}>
-            Открыть в редакторе
-          </MenuItem>
-          <MenuItem icon={<Download size={15} />} onClick={() => run(item.id, 'save', () => api.historySave(item.id))}>
-            Сохранить в папку
-          </MenuItem>
-          <MenuItem icon={<Download size={15} />} onClick={() => run(item.id, 'save', () => api.historySaveAs(item.id))}>
-            Сохранить как…
-          </MenuItem>
-          {item.savedPath && (
-            <MenuItem icon={<FolderOpen size={15} />} onClick={() => api.revealPath(item.savedPath!)}>
-              Показать файл
-            </MenuItem>
-          )}
-          {item.shareUrl && (
-            <MenuItem icon={<Link2 size={15} />} onClick={() => api.openUrl(item.shareUrl!)}>
-              Открыть ссылку
-            </MenuItem>
-          )}
-          <div className="my-1 h-px bg-border" />
-          <MenuItem icon={<Trash2 size={15} />} danger onClick={() => api.historyDelete(item.id)}>
-            Удалить из истории
-          </MenuItem>
-        </div>
-      )}
-    </li>
-  );
-
-  function MenuItem({ icon, children, onClick, danger }: { icon: ReactNode; children: ReactNode; onClick: () => void; danger?: boolean }) {
-    return (
-      <button
-        onClick={() => {
-          setMenu(false);
-          onClick();
-        }}
-        className={clsx(
-          'flex h-8 w-full items-center gap-2.5 rounded-[8px] px-2.5 text-left text-[13px] transition-colors',
-          danger ? 'text-danger hover:bg-danger/12' : 'text-text hover:bg-white/7',
-        )}
-      >
-        <span className={danger ? '' : 'text-muted'}>{icon}</span>
-        {children}
-      </button>
+  let badge: ReactNode;
+  if (busy === 'upload') {
+    badge = (
+      <Badge icon={<Spinner size={11} className="text-muted" />} tip={undefined}>
+        Загрузка
+      </Badge>
     );
+  } else if (item.shortLink) {
+    badge = (
+      <Badge
+        icon={copied ? <Check size={13} className="text-success" /> : <Link2 size={13} className={item.linkOutdated ? 'text-warning' : 'text-success'} />}
+        tip={item.linkOutdated ? 'Ссылка на версию до редактирования.\nНажмите, чтобы скопировать' : `${item.shortLink}\nНажмите, чтобы скопировать`}
+        onClick={copyLink}
+      >
+        {copied ? 'Скопировано' : 'Ссылка'}
+      </Badge>
+    );
+  } else if (item.savedPath) {
+    badge = <Badge icon={<Save size={13} className="text-muted" />}>Файл</Badge>;
+  } else {
+    badge = <Badge icon={<History size={13} className="text-muted" />}>История</Badge>;
   }
+
+  return (
+    <div className="group flex min-w-0 flex-col gap-1.5" onContextMenu={(e) => onMenu(item, e)}>
+      <div className="relative h-[76px] overflow-hidden rounded-xl" style={{ background: thumbPattern }}>
+        <button
+          className="absolute inset-0 block h-full w-full rounded-xl ring-inset ring-text/30 transition-shadow hover:ring-2"
+          onClick={() => api.historyOpen(item.id)}
+          aria-label="Открыть в редакторе"
+        >
+          <img src={shotUrl(`history/${item.id}/thumb.png?r=${item.revision}`)} alt="" draggable={false} className="h-full w-full rounded-xl object-cover object-top" />
+        </button>
+        <div className="absolute bottom-1.5 left-1.5">{badge}</div>
+        <IconButton
+          tone="solid"
+          size={24}
+          tip="Действия"
+          tipPos="left"
+          className="absolute top-1.5 right-1.5 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+          onClick={(e) => onMenu(item, e)}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <MoreHorizontal size={14} />
+        </IconButton>
+      </div>
+      <div className="flex items-baseline justify-between gap-2 text-[12px] text-muted">
+        <span className="truncate">{relativeTime(item.createdAt)}</span>
+        {item.edited && <Pencil size={11} className="shrink-0 self-center" aria-label="Отредактирован" />}
+      </div>
+    </div>
+  );
 }
 
+function Badge({ icon, children, tip, onClick }: { icon: ReactNode; children: ReactNode; tip?: string; onClick?: (e: React.MouseEvent) => void }) {
+  const cls = 'flex items-center gap-1 rounded-full bg-surface px-[7px] py-[3px] text-[11px] leading-none text-text';
+  return onClick ? (
+    <button className={clsx(cls, 'transition-colors hover:bg-surface-2')} data-tip={tip} data-tip-pos="right" onClick={onClick}>
+      {icon}
+      {children}
+    </button>
+  ) : (
+    <span className={cls}>
+      {icon}
+      {children}
+    </span>
+  );
+}
+
+function ContextMenu({ item, x, y, run, close }: MenuState & { run: Run; close: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: x, top: y });
+  // Keep the menu inside the panel.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPos({ left: Math.max(8, Math.min(x, window.innerWidth - r.width - 12)), top: Math.max(8, Math.min(y, window.innerHeight - r.height - 12)) });
+  }, [x, y]);
+
+  const entry = (icon: ReactNode, label: string, fn: () => unknown, danger?: boolean) => (
+    <button
+      onClick={() => {
+        close();
+        fn();
+      }}
+      className={clsx(
+        'flex h-8 w-full items-center gap-2.5 rounded-[8px] px-2.5 text-left text-[13px] transition-colors',
+        danger ? 'text-danger hover:bg-danger/10' : 'text-text hover:bg-text/6',
+      )}
+    >
+      <span className={danger ? '' : 'text-muted'}>{icon}</span>
+      {label}
+    </button>
+  );
+
+  return (
+    <div
+      ref={ref}
+      className="animate-fade-in fixed z-40 w-[220px] rounded-[12px] bg-elevated p-1 shadow-(--shadow-pop) ring-1 ring-border"
+      style={pos}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      {entry(<Pencil size={15} />, 'Открыть в редакторе', () => api.historyOpen(item.id))}
+      {entry(<Copy size={15} />, 'Копировать изображение', () => run(item.id, 'copy', () => api.historyCopy(item.id)))}
+      {item.shortLink
+        ? entry(<Link2 size={15} />, 'Копировать ссылку', () => run(item.id, 'link', () => api.historyCopyLink(item.id)))
+        : entry(<CloudUpload size={15} />, 'Получить ссылку', () => run(item.id, 'upload', () => api.historyUpload(item.id)))}
+      {item.shortLink && entry(<CloudUpload size={15} />, 'Загрузить заново', () => run(item.id, 'upload', () => api.historyUpload(item.id)))}
+      {entry(<Download size={15} />, 'Сохранить в папку', () => run(item.id, 'save', () => api.historySave(item.id)))}
+      {entry(<Save size={15} />, 'Сохранить как…', () => run(item.id, 'save', () => api.historySaveAs(item.id)))}
+      {item.savedPath && entry(<FolderOpen size={15} />, 'Показать файл', () => api.revealPath(item.savedPath!))}
+      {item.shareUrl && entry(<ExternalLink size={15} />, 'Открыть ссылку', () => api.openUrl(item.shareUrl!))}
+      <div className="mx-1 my-1 h-px bg-border" />
+      {entry(<Trash2 size={15} />, 'Удалить из истории', () => api.historyDelete(item.id), true)}
+    </div>
+  );
+}

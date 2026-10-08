@@ -2,6 +2,7 @@
 
 export type AfterCapture = 'ask' | 'openEditor' | 'copy' | 'save' | 'upload';
 export type FullscreenMode = 'currentMonitor' | 'allMonitors';
+export type ThemeSetting = 'system' | 'light' | 'dark';
 export type ImageFormat = 'png' | 'jpeg';
 export type BoxAuthMode = 'oAuth' | 'clientCredentials' | 'developerToken';
 export type CaptureMode = 'region' | 'window' | 'windowPick' | 'fullscreen' | 'lastRegion';
@@ -50,6 +51,7 @@ export interface AppSettings {
   showMagnifier: boolean;
   afterCapture: AfterCapture;
   fullscreenMode: FullscreenMode;
+  theme: ThemeSetting;
   autostart: boolean;
   historyLimit: number;
   saveFolder: string;
@@ -62,6 +64,12 @@ export interface AppSettings {
   editor: EditorPrefs;
   lastRegion: Rect | null;
   welcomed: boolean;
+}
+
+export interface PatchResult {
+  settings: AppSettings;
+  /** Hotkeys that could not be registered, autostart errors… */
+  problems: string[];
 }
 
 export interface SettingsView {
@@ -123,6 +131,8 @@ export interface ToastPayload {
   link: string | null;
   path: string | null;
   historyId: string | null;
+  /** Offer "Retry" for a failed upload of `historyId`. */
+  retryUpload: boolean;
   timeoutMs: number;
 }
 

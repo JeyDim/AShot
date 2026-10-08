@@ -57,15 +57,15 @@ pub fn code_from_redirect(url: &str, expected_state: &str) -> Result<String, OAu
     param("code").ok_or_else(|| OAuthError::Denied("Box не вернул код авторизации".into()))
 }
 
-const SUCCESS_PAGE: &str = r#"<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>AdvantShoter</title>
-<style>body{font:16px system-ui,Segoe UI,sans-serif;background:#0f1115;color:#e8eaf0;display:grid;place-items:center;height:100vh;margin:0}
-.card{background:#181b22;border:1px solid #2a2f3a;border-radius:16px;padding:32px 40px;text-align:center}
-h1{font-size:20px;margin:0 0 8px}p{color:#9aa3b2;margin:0}</style></head>
-<body><div class="card"><h1>✅ Box подключён</h1><p>Можно закрыть эту вкладку и вернуться в AdvantShoter.</p></div></body></html>"#;
+const SUCCESS_PAGE: &str = r#"<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>AShot</title>
+<style>body{font:16px system-ui,Segoe UI,sans-serif;background:#121214;color:#f2f2f3;display:grid;place-items:center;height:100vh;margin:0}
+.card{background:#1e1e20;border:1px solid #2a2a2d;border-radius:16px;padding:32px 40px;text-align:center}
+h1{font-size:20px;font-weight:500;margin:0 0 8px}p{color:#9a9a9f;margin:0}</style></head>
+<body><div class="card"><h1>✅ Box подключён</h1><p>Можно закрыть эту вкладку и вернуться в AShot.</p></div></body></html>"#;
 
-const ERROR_PAGE: &str = r#"<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>AdvantShoter</title></head>
-<body style="font:16px system-ui;background:#0f1115;color:#e8eaf0;display:grid;place-items:center;height:100vh;margin:0">
-<div>Вход не выполнен. Вернитесь в AdvantShoter и попробуйте ещё раз.</div></body></html>"#;
+const ERROR_PAGE: &str = r#"<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>AShot</title></head>
+<body style="font:16px system-ui;background:#121214;color:#f2f2f3;display:grid;place-items:center;height:100vh;margin:0">
+<div>Вход не выполнен. Вернитесь в AShot и попробуйте ещё раз.</div></body></html>"#;
 
 /// Binds the loopback listener. Call before opening the browser so the port is ready.
 pub async fn bind(port: u16) -> Result<TcpListener, OAuthError> {

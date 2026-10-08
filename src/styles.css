@@ -1,41 +1,91 @@
 @import "tailwindcss";
+@import "@fontsource-variable/roboto/wght.css";
+@import "@fontsource-variable/roboto-mono/wght.css";
+
+/* Display font (titles, the AShot wordmark): variable, wdth 50–150, wght 100–900. */
+@font-face {
+  font-family: "Rare";
+  src: url("./assets/fonts/alfa-rare-vf.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-stretch: 50% 150%;
+  font-display: block;
+}
 
 /*
  * Design tokens. The whole look of the app is defined here – to apply a new design,
  * change these variables (colors, radii, fonts) instead of touching components.
+ * Light values are the defaults; `<html data-theme="dark">` switches to the dark set
+ * (see src/lib/theme.ts).
  */
-@theme {
-  --font-sans: "Segoe UI Variable Text", "Segoe UI", "Inter", system-ui, sans-serif;
-  --font-display: "Segoe UI Variable Display", "Segoe UI", "Inter", system-ui, sans-serif;
-  --font-mono: "Cascadia Mono", "Consolas", ui-monospace, monospace;
+@theme static {
+  --font-sans: "Roboto Variable", "Roboto", "Segoe UI", system-ui, sans-serif;
+  --font-display: "Rare", "Roboto Variable", "Segoe UI", sans-serif;
+  --font-mono: "Roboto Mono Variable", "Cascadia Mono", "Consolas", ui-monospace, monospace;
 
-  --color-bg: #0d0f13;
-  --color-surface: #15181e;
-  --color-surface-2: #1b1f27;
-  --color-surface-3: #232833;
-  --color-elevated: #1e222b;
-  --color-border: #262b35;
-  --color-border-strong: #343b49;
-  --color-text: #eceef3;
-  --color-muted: #a1a9b8;
-  --color-subtle: #6c7486;
+  --color-bg: #ededed; /* window background (settings sidebar, editor) */
+  --color-surface: #ffffff; /* cards, panels */
+  --color-surface-2: #f2f2f3; /* fields, tiles, chips */
+  --color-surface-3: #e6e6e8; /* hovered / pressed fields */
+  --color-elevated: #ffffff; /* menus, popovers */
+  --color-border: #ededed;
+  --color-border-strong: #d4d4d8;
+  --color-text: #1e1e20;
+  --color-muted: #6e6e73;
+  --color-subtle: #8e8e93;
+  --color-canvas: #e4e4e7; /* editor background around the image */
 
-  --color-accent: #6b6bff;
-  --color-accent-strong: #5b5bf5;
-  --color-accent-2: #a24bff;
-  --color-accent-soft: rgb(107 107 255 / 0.14);
-  --color-success: #34d399;
-  --color-warning: #fbbf24;
-  --color-danger: #f87171;
+  --color-primary: #1e1e20; /* primary buttons, active items, switches */
+  --color-on-primary: #ffffff;
+  --color-lime: #b5f000; /* the one accent: main capture button, selection frame */
+  --color-on-lime: #1e1e20;
+  --color-toggle-off: #d4d4d8;
+  --color-knob: #ffffff;
+
+  --color-success: #1f9d55;
+  --color-warning: #c27803;
+  --color-danger: #d92d20;
 
   --radius-card: 16px;
   --radius-control: 10px;
 
-  --shadow-pop: 0 24px 60px -12px rgb(0 0 0 / 0.65), 0 0 0 1px rgb(255 255 255 / 0.06);
-  --shadow-soft: 0 8px 24px -8px rgb(0 0 0 / 0.5);
+  --shadow-pop: 0 1px 2px rgb(0 0 0 / 0.06), 0 6px 18px rgb(0 0 0 / 0.14);
+  --shadow-soft: 0 4px 14px -4px rgb(0 0 0 / 0.18);
 }
 
 @layer base {
+  :root {
+    color-scheme: light;
+    --card-ring: rgb(0 0 0 / 0.06);
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --card-ring: rgb(255 255 255 / 0.06);
+
+    --color-bg: #121214;
+    --color-surface: #1e1e20;
+    --color-surface-2: #2a2a2d;
+    --color-surface-3: #333336;
+    --color-elevated: #2a2a2d;
+    --color-border: #2a2a2d;
+    --color-border-strong: #3a3a3e;
+    --color-text: #f2f2f3;
+    --color-muted: #9a9a9f;
+    --color-subtle: #77777c;
+    --color-canvas: #0e0e10;
+
+    --color-primary: #f2f2f3;
+    --color-on-primary: #1e1e20;
+    --color-toggle-off: #3a3a3e;
+    --color-knob: #f2f2f3;
+
+    --color-success: #4ade80;
+    --color-warning: #fbbf24;
+    --color-danger: #ff6b5e;
+
+    --shadow-pop: 0 1px 2px rgb(0 0 0 / 0.4), 0 6px 18px rgb(0 0 0 / 0.45);
+    --shadow-soft: 0 4px 14px -4px rgb(0 0 0 / 0.5);
+  }
+
   html,
   body,
   #root {
@@ -61,10 +111,11 @@
     user-select: text;
   }
   ::selection {
-    background: rgb(107 107 255 / 0.35);
+    background: color-mix(in srgb, var(--color-lime) 55%, transparent);
+    color: var(--color-on-lime);
   }
   :focus-visible {
-    outline: 2px solid var(--color-accent);
+    outline: 2px solid var(--color-primary);
     outline-offset: 2px;
   }
   ::-webkit-scrollbar {
@@ -72,13 +123,13 @@
     height: 10px;
   }
   ::-webkit-scrollbar-thumb {
-    background: var(--color-surface-3);
+    background: var(--color-border-strong);
     border-radius: 999px;
     border: 3px solid transparent;
     background-clip: padding-box;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background-color: var(--color-border-strong);
+    background-color: var(--color-subtle);
   }
   ::-webkit-scrollbar-track {
     background: transparent;
@@ -87,32 +138,48 @@
 
 @layer components {
   .card-pop {
-    background: color-mix(in srgb, var(--color-surface) 96%, transparent);
+    background: var(--color-surface);
     border-radius: var(--radius-card);
-    box-shadow: var(--shadow-pop);
-  }
-  .brand-gradient {
-    background-image: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-2) 100%);
-  }
-  .text-gradient {
-    background-image: linear-gradient(135deg, #8f8fff 0%, #c08bff 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
+    box-shadow: var(--shadow-pop), 0 0 0 1px var(--card-ring);
   }
   .kbd {
     display: inline-flex;
     align-items: center;
     gap: 2px;
-    font-family: var(--font-sans);
+    font-family: var(--font-mono);
     font-size: 11px;
     line-height: 1;
     padding: 3px 6px;
     border-radius: 6px;
     color: var(--color-muted);
-    background: var(--color-surface-3);
-    box-shadow: inset 0 -1px 0 rgb(0 0 0 / 0.35);
+    background: var(--color-surface-2);
     white-space: nowrap;
+  }
+
+  /* Range input in the design: thin track, primary fill (--fill), round thumb. */
+  .range {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 16px;
+    background: transparent;
+    cursor: pointer;
+  }
+  .range::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 999px;
+    background: linear-gradient(to right, var(--color-primary) var(--fill, 0%), var(--color-toggle-off) var(--fill, 0%));
+  }
+  .range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px;
+    height: 16px;
+    margin-top: -6px;
+    border-radius: 50%;
+    background: var(--color-primary);
+    border: none;
+  }
+  .range:focus-visible {
+    outline-offset: 4px;
   }
 
   /* Lightweight tooltip: <button data-tip="Text"> */
@@ -127,8 +194,9 @@
     transform: translate(-50%, -4px);
     padding: 6px 9px;
     border-radius: 8px;
-    background: #0a0b0e;
-    color: var(--color-text);
+    background: #1e1e20;
+    color: #f2f2f3;
+    font-family: var(--font-sans);
     font-size: 12px;
     font-weight: 400;
     line-height: 1.3;
@@ -201,6 +269,14 @@
     transform: rotate(360deg);
   }
 }
+@keyframes indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
 .animate-pop-in {
   animation: pop-in 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
 }
@@ -209,4 +285,7 @@
 }
 .animate-spin-slow {
   animation: spin 0.9s linear infinite;
+}
+.animate-indeterminate {
+  animation: indeterminate 1.3s ease-in-out infinite;
 }

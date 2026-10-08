@@ -32,6 +32,16 @@ pub enum FullscreenMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+pub enum Theme {
+    /// Follow the Windows light/dark setting.
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub enum ImageFormat {
     #[default]
     Png,
@@ -169,10 +179,11 @@ pub struct AppSettings {
     pub show_magnifier: bool,
     pub after_capture: AfterCapture,
     pub fullscreen_mode: FullscreenMode,
+    pub theme: Theme,
     pub autostart: bool,
     /// How many recent screenshots are kept in the temporary history.
     pub history_limit: u32,
-    /// Folder for "Save" (empty = `Pictures\AdvantShoter`).
+    /// Folder for "Save" (empty = `Pictures\AShot`).
     pub save_folder: String,
     pub file_name_pattern: String,
     pub image_format: ImageFormat,
@@ -194,6 +205,7 @@ impl Default for AppSettings {
             show_magnifier: true,
             after_capture: AfterCapture::Ask,
             fullscreen_mode: FullscreenMode::CurrentMonitor,
+            theme: Theme::System,
             autostart: false,
             history_limit: 10,
             save_folder: String::new(),
@@ -211,7 +223,7 @@ impl Default for AppSettings {
 }
 
 pub const MAX_HISTORY_LIMIT: u32 = 100;
-pub const DEFAULT_BOX_FOLDER: &str = "AdvantShoter";
+pub const DEFAULT_BOX_FOLDER: &str = "AShot";
 
 impl AppSettings {
     /// Clamps values coming from the UI or a hand-edited file.
@@ -282,10 +294,11 @@ mod tests {
         assert_eq!(s.links.template, "https://advant.one/{id}");
         assert!(s.links.rewrite);
         assert_eq!(s.box_.shared_link_access, "open");
-        // No folder id needed: the "AdvantShoter" folder is created automatically.
+        // No folder id needed: the "AShot" folder is created automatically.
         assert!(s.box_.folder_id.is_empty());
-        assert_eq!(s.box_.folder_name, "AdvantShoter");
+        assert_eq!(s.box_.folder_name, "AShot");
         assert!(s.box_.client_id.is_empty(), "built-in Box app by default");
+        assert_eq!(s.theme, Theme::System);
     }
 
     #[test]
@@ -304,6 +317,10 @@ mod tests {
         assert!(loaded.show_cursor);
         assert_eq!(loaded.box_.folder_id, "42");
         assert_eq!(loaded.history_limit, 10);
+        assert_eq!(loaded.theme, Theme::System);
+
+        std::fs::write(&path, br#"{"theme":"dark"}"#).unwrap();
+        assert_eq!(AppSettings::load(&path).theme, Theme::Dark);
     }
 
     #[test]
@@ -323,7 +340,7 @@ mod tests {
         s.links.template = "advant.one".into();
         s.box_.folder_name = "  ".into();
         let s = s.sanitized();
-        assert_eq!(s.box_.folder_name, "AdvantShoter");
+        assert_eq!(s.box_.folder_name, "AShot");
         assert_eq!(s.history_limit, 1);
         assert_eq!(s.box_.shared_link_access, "open");
         assert_eq!(s.links.template, "https://advant.one/{id}");

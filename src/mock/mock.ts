@@ -5,19 +5,23 @@ import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 import type { AppSettings, HistoryItem, OverlayPrepare, ToastPayload } from '../lib/types';
 import { fakeDesktop, fakeThumb } from './fakeImages';
 
+const query = new URLSearchParams(location.search);
+
 const settings: AppSettings = {
   showCursor: false,
   showMagnifier: true,
   afterCapture: 'ask',
   fullscreenMode: 'currentMonitor',
+  // `&theme=light|dark` for screenshots of both themes.
+  theme: (query.get('theme') as AppSettings['theme']) ?? 'system',
   autostart: true,
   historyLimit: 10,
   saveFolder: '',
-  fileNamePattern: 'Screenshot {yyyy}-{MM}-{dd} {HH}-{mm}-{ss}',
+  fileNamePattern: 'Screenshot {date} {time}',
   imageFormat: 'png',
   jpegQuality: 90,
   hotkeys: { region: 'PrintScreen', window: 'Alt+PrintScreen', fullscreen: 'Control+PrintScreen', lastRegion: 'Shift+PrintScreen' },
-  box: { authMode: 'oAuth', clientId: 'k2x8v1n0q9example', enterpriseId: '', userId: '', folderId: '', folderName: 'AdvantShoter', sharedLinkAccess: 'open', redirectPort: 47615, redirectUri: '' },
+  box: { authMode: 'oAuth', clientId: 'k2x8v1n0q9example', enterpriseId: '', userId: '', folderId: '', folderName: 'AShot', sharedLinkAccess: 'open', redirectPort: 47615, redirectUri: '' },
   links: { rewrite: true, template: 'https://advant.one/{id}', copyAfterUpload: true, openAfterUpload: false },
   editor: { color: '#FF3B30', size: 1 },
   lastRegion: { x: 200, y: 120, width: 1280, height: 720 },
@@ -29,7 +33,7 @@ const ago = (m: number) => new Date(now - m * 60_000).toISOString();
 const ids = ['a1', 'a2', 'a3', 'a4', 'a5', 'a6'];
 const history: HistoryItem[] = [
   item('a1', ago(0.2), 1280, 720, 'https://advant.one/3rud4dfakga5r953wt77anhyzo27tm7r', { edited: true }),
-  item('a2', ago(12), 864, 512, null, { savedPath: 'C:\\Users\\ivan\\Pictures\\AdvantShoter\\Screenshot 2026-10-08 14-21-07.png' }),
+  item('a2', ago(12), 864, 512, null, { savedPath: 'C:\\Users\\ivan\\Pictures\\AShot\\Screenshot 2026-10-08 14-21-07.png' }),
   item('a3', ago(95), 1920, 1080, 'https://advant.one/8kq2mz0x7v1lp4tj9w3r6c5d', { linkOutdated: true, edited: true }),
   item('a4', ago(60 * 20), 420, 300, null),
   item('a5', ago(60 * 26), 1440, 900, 'https://advant.one/p0w7e3n9x2y5k8m1q4r6s3t0'),
@@ -109,7 +113,7 @@ export async function installMocks() {
       switch (cmd) {
         case 'app_info':
           return {
-            name: 'AdvantShoter',
+            name: 'AShot',
             version: '0.1.0',
             buildDate: '2026-10-08',
             commit: 'a1b2c3d',
@@ -120,20 +124,23 @@ export async function installMocks() {
             logDir: 'C:\\Users\\ivan\\AppData\\Local\\one.advant.shoter\\logs',
           };
         case 'settings_get':
-          return { settings, defaultSaveFolder: 'C:\\Users\\ivan\\Pictures\\AdvantShoter', historyFolder: 'C:\\Users\\ivan\\AppData\\Local\\one.advant.shoter\\history' };
+          return { settings, defaultSaveFolder: 'C:\\Users\\ivan\\Pictures\\AShot', historyFolder: 'C:\\Users\\ivan\\AppData\\Local\\one.advant.shoter\\history' };
         case 'settings_patch':
-          Object.assign(settings, a.patch as object);
-          return settings;
+          deepAssign(settings as unknown as Record<string, unknown>, a.patch as Record<string, unknown>);
+          emit('settings:changed', settings);
+          return { settings, problems: [] };
+        case 'pick_folder':
+          return 'D:\\Screenshots';
         case 'settings_set':
           return [];
         case 'history_list':
-          return new URLSearchParams(location.search).has('empty') ? [] : history;
+          return query.has('empty') ? [] : history;
         case 'history_get':
           return history.find((h) => h.id === a.id) ?? history[0];
         case 'history_annotations':
           return JSON.stringify(sampleDoc);
         case 'box_status':
-          return new URLSearchParams(location.search).has('signedout')
+          return query.has('signedout')
             ? { mode: 'oAuth', ready: false, signedIn: false, account: null, builtinApp: true, customApp: false, hasClientSecret: false, hasDeveloperToken: false, redirectUri: 'http://localhost:47615/callback' }
             : {
                 mode: 'oAuth',
@@ -174,13 +181,23 @@ export async function installMocks() {
   );
 
   if (page === 'toast') {
-    const kind = (new URLSearchParams(location.search).get('kind') ?? 'success') as ToastPayload['kind'];
+    const kind = query.get('kind') ?? 'success';
+    const base = { message: null, link: null, path: null, historyId: 'a1', retryUpload: false, timeoutMs: 0 };
     const payloads: Record<string, ToastPayload> = {
-      success: { kind: 'success', title: 'Ссылка скопирована', message: null, link: 'https://advant.one/3rud4dfakga5r953wt77anhyzo27tm7r', path: null, historyId: 'a1', timeoutMs: 0 },
-      error: { kind: 'error', title: 'Не удалось загрузить в Box', message: 'Box API вернул ошибку 403: Access denied', link: null, path: null, historyId: 'a1', timeoutMs: 0 },
-      info: { kind: 'info', title: 'AdvantShoter работает в трее', message: 'PrtSc — снимок области. Клик по иконке в трее — меню и последние снимки.', link: null, path: null, historyId: null, timeoutMs: 0 },
-      saved: { kind: 'success', title: 'Сохранено', message: 'Screenshot 2026-10-08 14-21-07.png', link: null, path: 'C:\\x.png', historyId: 'a1', timeoutMs: 0 },
+      success: { ...base, kind: 'success', title: 'Ссылка скопирована', link: 'https://advant.one/3rud4dfakga5r953wt77anhyzo27tm7r' },
+      progress: { ...base, kind: 'progress', title: 'Загрузка в Box…', message: 'Ссылка скопируется автоматически' },
+      error: { ...base, kind: 'error', title: 'Не удалось загрузить в Box', message: 'Нет соединения с Box. Снимок сохранён в истории.', retryUpload: true },
+      info: { ...base, kind: 'info', title: 'AShot работает в трее', message: 'PrtSc — снимок области. Клик по иконке в трее — меню и последние снимки.', historyId: null },
+      saved: { ...base, kind: 'success', title: 'Сохранено', message: 'Screenshot 2026-10-08 14-21-07.png', path: 'C:\\x.png' },
     };
     setTimeout(() => emit('toast:show', payloads[kind] ?? payloads.success), 1000);
+  }
+}
+
+function deepAssign(target: Record<string, unknown>, patch: Record<string, unknown>) {
+  for (const [k, v] of Object.entries(patch)) {
+    const cur = target[k];
+    if (v && typeof v === 'object' && !Array.isArray(v) && cur && typeof cur === 'object') deepAssign(cur as Record<string, unknown>, v as Record<string, unknown>);
+    else target[k] = v;
   }
 }

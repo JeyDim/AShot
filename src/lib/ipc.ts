@@ -10,17 +10,22 @@ import type {
   CaptureMode,
   HistoryItem,
   OverlayPrepare,
+  PatchResult,
   Rect,
   SettingsView,
   ToastPayload,
 } from './types';
+
+/** Sections of the settings window (`links` is an alias of `box`). */
+export type SettingsSection = 'general' | 'hotkeys' | 'saving' | 'box' | 'links' | 'about';
 
 export const api = {
   appInfo: () => invoke<AppInfo>('app_info'),
 
   settingsGet: () => invoke<SettingsView>('settings_get'),
   settingsSet: (settings: AppSettings) => invoke<string[]>('settings_set', { settings }),
-  settingsPatch: (patch: Partial<AppSettings> | Record<string, unknown>) => invoke<AppSettings>('settings_patch', { patch }),
+  /** Changes only the given keys; side effects (hotkeys, autostart, theme…) apply at once. */
+  settingsPatch: (patch: Partial<AppSettings> | Record<string, unknown>) => invoke<PatchResult>('settings_patch', { patch }),
   hotkeysSuspend: (suspended: boolean) => invoke<string[]>('hotkeys_suspend', { suspended }),
 
   capture: (mode: CaptureMode) => invoke<void>('capture', { mode }),
@@ -63,8 +68,7 @@ export const api = {
     return invoke<ActionResult>('editor_commit', body, { headers: { 'x-id': id, 'x-action': action } });
   },
 
-  openSettings: (section?: 'general' | 'hotkeys' | 'saving' | 'box' | 'links') => invoke<void>('open_settings', { section: section ?? null }),
-  openAbout: () => invoke<void>('open_about'),
+  openSettings: (section?: SettingsSection) => invoke<void>('open_settings', { section: section ?? null }),
   panelHide: () => invoke<void>('panel_hide'),
   toastCurrent: () => invoke<ToastPayload | null>('toast_current'),
   toastHide: () => invoke<void>('toast_hide'),
@@ -73,6 +77,8 @@ export const api = {
   openUrl: (url: string) => invoke<void>('open_url', { url }),
   revealPath: (path: string) => invoke<void>('reveal_path', { path }),
   openFolder: (which: 'save' | 'history' | 'logs' | 'config') => invoke<void>('open_folder', { which }),
+  /** Folder picker; `null` when cancelled. */
+  pickFolder: (current: string) => invoke<string | null>('pick_folder', { current }),
 
   boxStatus: () => invoke<BoxStatus>('box_status'),
   boxSetSecret: (kind: 'clientSecret' | 'developerToken', value: string) => invoke<void>('box_set_secret', { kind, value }),

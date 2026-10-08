@@ -176,7 +176,7 @@ struct FileWithLink {
 
 pub fn http_client() -> Client {
     Client::builder()
-        .user_agent(concat!("AdvantShoter/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("AShot/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(120))
         .build()
@@ -669,15 +669,15 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/2.0/folders"))
-            .and(body_string_contains("\"name\":\"AdvantShoter\""))
-            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({ "id": "555", "name": "AdvantShoter" })))
+            .and(body_string_contains("\"name\":\"AShot\""))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({ "id": "555", "name": "AShot" })))
             .expect(1)
             .mount(&server)
             .await;
         let client = BoxClient::new(http_client(), endpoints(&server), Credentials::DeveloperToken("T".into()), None);
-        assert_eq!(client.ensure_folder("0", "AdvantShoter").await.unwrap(), "555");
+        assert_eq!(client.ensure_folder("0", "AShot").await.unwrap(), "555");
         // cached – no second request
-        assert_eq!(client.ensure_folder("0", "AdvantShoter").await.unwrap(), "555");
+        assert_eq!(client.ensure_folder("0", "AShot").await.unwrap(), "555");
     }
 
     #[tokio::test]
@@ -687,12 +687,12 @@ mod tests {
             .and(path("/2.0/folders"))
             .respond_with(ResponseTemplate::new(409).set_body_json(serde_json::json!({
                 "code": "item_name_in_use",
-                "context_info": { "conflicts": [{ "type": "folder", "id": "777", "name": "AdvantShoter" }] }
+                "context_info": { "conflicts": [{ "type": "folder", "id": "777", "name": "AShot" }] }
             })))
             .mount(&server)
             .await;
         let client = BoxClient::new(http_client(), endpoints(&server), Credentials::DeveloperToken("T".into()), None);
-        assert_eq!(client.ensure_folder("0", "AdvantShoter").await.unwrap(), "777");
+        assert_eq!(client.ensure_folder("0", "AShot").await.unwrap(), "777");
     }
 
     #[test]

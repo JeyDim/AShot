@@ -7,15 +7,16 @@ const out = process.env.OUT_DIR || 'docs/screenshots';
 const executablePath = process.env.CHROMIUM_PATH || undefined;
 const browser = await chromium.launch(executablePath ? { executablePath } : {});
 
-const wallpaper = 'linear-gradient(135deg,#1e3a8a 0%,#6d28d9 55%,#db2777 100%)';
+// Desk behind transparent windows (tray panel, toasts) – as in the design mock-ups.
+const desk = { light: '#CFCFD3', dark: '#0A0A0B' };
 
-async function shot(name, route, { w, h, dpr = 1, query = '', setup, wall = false, wait = 600 } = {}) {
+async function shot(name, route, { w, h, dpr = 1, query = '', setup, wall = false, wait = 600, theme = 'light' } = {}) {
   const page = await browser.newPage({ viewport: { width: w, height: h }, deviceScaleFactor: dpr });
   page.on('pageerror', (e) => console.error(`[${name}]`, e.message));
   page.on('console', (m) => m.type() === 'error' && console.error(`[${name}] console:`, m.text()));
-  await page.goto(`${base}?mock${query}#/${route}`);
+  await page.goto(`${base}?mock&theme=${theme}${query}#/${route}`);
   await page.waitForTimeout(wait);
-  if (wall) await page.evaluate((bg) => (document.body.style.background = bg), wallpaper);
+  if (wall) await page.evaluate((bg) => (document.body.style.background = bg), desk[theme]);
   if (setup) await setup(page);
   await page.waitForTimeout(250);
   await page.screenshot({ path: `${out}/${name}.png` });
@@ -23,8 +24,22 @@ async function shot(name, route, { w, h, dpr = 1, query = '', setup, wall = fals
   console.log('✓', name);
 }
 
-await shot('tray-panel', 'panel', { w: 440, h: 660, wall: true, dpr: 2 });
-await shot('tray-panel-empty', 'panel', { w: 440, h: 660, wall: true, query: '&empty' });
+const nav = (label) => (p) => p.getByRole('button', { name: label }).click();
+
+await shot('tray-panel', 'panel', { w: 400, h: 660, wall: true, dpr: 2 });
+await shot('tray-panel-dark', 'panel', { w: 400, h: 660, wall: true, dpr: 2, theme: 'dark' });
+await shot('tray-panel-empty', 'panel', { w: 400, h: 660, wall: true, query: '&empty&signedout' });
+await shot('settings-general', 'settings', { w: 840, h: 640 });
+await shot('settings-general-dark', 'settings', { w: 840, h: 640, theme: 'dark' });
+await shot('settings-hotkeys', 'settings', { w: 840, h: 640, setup: nav('Горячие клавиши') });
+await shot('settings-saving', 'settings', { w: 840, h: 640, setup: nav('Сохранение') });
+await shot('settings-box', 'settings/box', { w: 840, h: 760 });
+await shot('settings-box-signin', 'settings/box', { w: 840, h: 640, query: '&signedout', theme: 'dark' });
+await shot('settings-about', 'settings/about', { w: 840, h: 640 });
+await shot('toast-link', 'toast', { w: 400, h: 176, wall: true, wait: 1800 });
+await shot('toast-progress', 'toast', { w: 400, h: 176, wall: true, wait: 1800, query: '&kind=progress', theme: 'dark' });
+await shot('toast-error', 'toast', { w: 400, h: 176, wall: true, wait: 1800, query: '&kind=error' });
+await shot('toast-info', 'toast', { w: 400, h: 176, wall: true, wait: 1800, query: '&kind=info', theme: 'dark' });
 await shot('overlay-hover', 'overlay', {
   w: 1440, h: 810, wait: 900,
   setup: async (p) => { await p.mouse.move(700, 330); await p.waitForTimeout(100); await p.mouse.move(705, 334); },
@@ -56,14 +71,6 @@ await shot('overlay-annotate', 'overlay', {
   },
 });
 await shot('editor', 'editor/a1', { w: 1500, h: 900, wait: 1500 });
-await shot('settings-general', 'settings', { w: 900, h: 680 });
-await shot('settings-box', 'settings/box', { w: 900, h: 680 });
-await shot('settings-box-signin', 'settings/box', { w: 900, h: 680, query: '&signedout' });
-await shot('tray-panel-signin', 'panel', { w: 440, h: 660, wall: true, query: '&signedout&empty' });
-await shot('settings-links', 'settings', { w: 900, h: 680, setup: (p) => p.getByRole('button', { name: 'Ссылки' }).click() });
-await shot('settings-hotkeys', 'settings', { w: 900, h: 680, setup: (p) => p.getByRole('button', { name: 'Горячие клавиши' }).click() });
-await shot('about', 'about', { w: 460, h: 520 });
-await shot('toast-link', 'toast', { w: 420, h: 170, wall: true, wait: 1800 });
-await shot('toast-info', 'toast', { w: 420, h: 170, wall: true, wait: 1800, query: '&kind=info' });
+await shot('editor-dark', 'editor/a1', { w: 1500, h: 900, wait: 1500, theme: 'dark' });
 await shot('editor-compact', 'editor/a1', { w: 1024, h: 700, wait: 1500 });
 await browser.close();

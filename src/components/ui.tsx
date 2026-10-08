@@ -1,11 +1,11 @@
 // Small design-system primitives. Visual style comes from the tokens in styles.css.
 import clsx from 'clsx';
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react';
+import type { ButtonHTMLAttributes, CSSProperties, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react';
 import { forwardRef } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { hotkeyParts } from '../lib/format';
 
-type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
+type Variant = 'primary' | 'secondary' | 'outline' | 'ghost' | 'danger' | 'accent';
 type Size = 'sm' | 'md' | 'lg';
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -18,16 +18,18 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variants: Record<Variant, string> = {
-  primary: 'brand-gradient text-white shadow-[0_6px_20px_-6px_rgb(107_107_255/0.7)] hover:brightness-110 active:brightness-95',
-  secondary: 'bg-surface-3 text-text hover:bg-border-strong/70 active:bg-surface-2 ring-1 ring-inset ring-white/5',
-  ghost: 'text-muted hover:text-text hover:bg-white/6 active:bg-white/10',
-  danger: 'bg-danger/12 text-danger hover:bg-danger/20',
+  primary: 'bg-primary text-on-primary font-medium hover:opacity-90 active:opacity-80',
+  secondary: 'bg-surface-2 text-text font-medium hover:bg-surface-3',
+  outline: 'text-text ring-1 ring-inset ring-border-strong hover:bg-text/5 active:bg-text/10',
+  ghost: 'text-muted hover:text-text hover:bg-text/6 active:bg-text/10',
+  danger: 'text-danger ring-1 ring-inset ring-border-strong hover:bg-danger/8',
+  accent: 'bg-lime text-on-lime font-medium hover:brightness-105 active:brightness-95',
 };
 
 const sizes: Record<Size, string> = {
-  sm: 'h-8 px-3 text-[13px] gap-1.5 rounded-[8px]',
-  md: 'h-9 px-3.5 text-[13.5px] gap-2 rounded-(--radius-control)',
-  lg: 'h-11 px-5 text-[14.5px] gap-2 rounded-[12px]',
+  sm: 'h-[30px] px-3.5 text-[13px] gap-1.5',
+  md: 'h-[34px] px-3.5 text-[13px] gap-1.5',
+  lg: 'h-[38px] px-4 text-[13px] gap-1.5',
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
@@ -41,14 +43,14 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       data-tip-pos={tipPos}
       disabled={disabled || loading}
       className={clsx(
-        'inline-flex shrink-0 select-none items-center justify-center font-medium whitespace-nowrap transition-[background,filter,color] duration-100 disabled:pointer-events-none disabled:opacity-45',
+        'inline-flex shrink-0 select-none items-center justify-center rounded-full whitespace-nowrap transition-[background,opacity,filter,color] duration-100 disabled:pointer-events-none disabled:opacity-45',
         variants[variant],
         sizes[size],
         className,
       )}
       {...rest}
     >
-      {loading ? <Spinner size={16} /> : icon}
+      {loading ? <Spinner size={15} /> : icon}
       {children}
     </button>
   );
@@ -59,9 +61,10 @@ export interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement>
   tipPos?: 'top' | 'bottom' | 'left' | 'right' | 'top-left';
   active?: boolean;
   size?: number;
-  tone?: 'default' | 'danger' | 'accent';
+  tone?: 'default' | 'danger' | 'solid';
 }
 
+/** Round icon button. `solid` sits on a picture (surface-colored disc). */
 export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(
   { tip, tipPos, active, size = 36, tone = 'default', className, children, style, ...rest },
   ref,
@@ -74,14 +77,14 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
       aria-label={tip}
       style={{ width: size, height: size, ...style }}
       className={clsx(
-        'inline-flex shrink-0 items-center justify-center rounded-[10px] transition-colors duration-100 disabled:pointer-events-none disabled:opacity-40',
+        'inline-flex shrink-0 items-center justify-center rounded-full transition-colors duration-100 disabled:pointer-events-none disabled:opacity-40',
         active
-          ? 'bg-accent-soft text-[#b9b9ff] ring-1 ring-inset ring-accent/40'
+          ? 'bg-primary text-on-primary'
           : tone === 'danger'
-            ? 'text-muted hover:bg-danger/15 hover:text-danger'
-            : tone === 'accent'
-              ? 'text-[#b9b9ff] hover:bg-accent-soft'
-              : 'text-muted hover:bg-white/7 hover:text-text active:bg-white/10',
+            ? 'text-muted hover:bg-danger/12 hover:text-danger'
+            : tone === 'solid'
+              ? 'bg-surface text-text shadow-(--shadow-soft) hover:bg-surface-2'
+              : 'text-muted hover:bg-text/7 hover:text-text active:bg-text/10',
         className,
       )}
       {...rest}
@@ -120,14 +123,14 @@ export function Switch({
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={clsx(
-        'relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full transition-colors duration-150 disabled:opacity-40',
-        checked ? 'brand-gradient' : 'bg-surface-3 ring-1 ring-inset ring-border-strong',
+        'relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors duration-150 disabled:opacity-40',
+        checked ? 'bg-primary' : 'bg-toggle-off',
       )}
     >
       <span
         className={clsx(
-          'absolute top-[3px] h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-150',
-          checked ? 'translate-x-[19px]' : 'translate-x-[3px] bg-[#c9cedb]',
+          'absolute top-0.5 left-0.5 h-4 w-4 rounded-full transition-transform duration-150',
+          checked ? 'translate-x-4 bg-on-primary' : 'bg-knob shadow-sm',
         )}
       />
     </button>
@@ -160,16 +163,18 @@ export function Segmented<T extends string | number>({
   className?: string;
 }) {
   return (
-    <div className={clsx('inline-flex rounded-[10px] bg-surface-2 p-0.5 ring-1 ring-inset ring-border', className)}>
+    <div role="radiogroup" className={clsx('inline-flex shrink-0 rounded-full bg-surface-2 p-[3px] text-[12px]', className)}>
       {options.map((o) => (
         <button
           key={String(o.value)}
           type="button"
+          role="radio"
+          aria-checked={value === o.value}
           data-tip={o.tip}
           onClick={() => onChange(o.value)}
           className={clsx(
-            'inline-flex h-7 min-w-8 items-center justify-center gap-1.5 rounded-[8px] px-2.5 text-[13px] transition-colors',
-            value === o.value ? 'bg-surface-3 text-text shadow-sm ring-1 ring-inset ring-white/8' : 'text-muted hover:text-text',
+            'inline-flex items-center justify-center gap-1.5 rounded-full px-3 py-1.5 whitespace-nowrap transition-colors',
+            value === o.value ? 'bg-primary text-on-primary' : 'text-muted hover:text-text',
           )}
         >
           {o.label}
@@ -179,50 +184,73 @@ export function Segmented<T extends string | number>({
   );
 }
 
+const fieldClass =
+  'h-9 rounded-(--radius-control) bg-surface-2 px-3 text-[13px] text-text outline-none ring-1 ring-inset ring-transparent transition-shadow placeholder:text-subtle focus:ring-border-strong disabled:opacity-50';
+
+/** Text field; give it a width via `className`. */
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(function Input({ className, ...rest }, ref) {
-  return (
-    <input
-      ref={ref}
-      className={clsx(
-        'h-9 w-full rounded-(--radius-control) bg-surface-2 px-3 text-[13.5px] text-text ring-1 ring-inset ring-border outline-none transition-shadow placeholder:text-subtle focus:ring-2 focus:ring-accent/70',
-        className,
-      )}
-      {...rest}
-    />
-  );
+  return <input ref={ref} className={clsx(fieldClass, className)} {...rest} />;
 });
 
 export function Select({ className, children, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
   return (
     <div className={clsx('relative', className)}>
-      <select
-        className="h-9 w-full appearance-none rounded-(--radius-control) bg-surface-2 pr-9 pl-3 text-[13.5px] text-text ring-1 ring-inset ring-border outline-none focus:ring-2 focus:ring-accent/70"
-        {...rest}
-      >
+      <select className={clsx(fieldClass, 'w-full appearance-none pr-9')} {...rest}>
         {children}
       </select>
-      <ChevronDown size={16} className="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-muted" />
+      <ChevronDown size={18} className="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-muted" />
     </div>
   );
 }
 
-export function Logo({ size = 28, className }: { size?: number; className?: string }) {
+/** Slider: `onChange` while dragging, `onCommit` once released (expensive changes). */
+export function Range({
+  value,
+  min,
+  max,
+  onChange,
+  onCommit,
+  className,
+  label,
+}: {
+  value: number;
+  min: number;
+  max: number;
+  onChange: (v: number) => void;
+  onCommit?: (v: number) => void;
+  className?: string;
+  label?: string;
+}) {
+  const commit = (e: { currentTarget: HTMLInputElement }) => onCommit?.(Number(e.currentTarget.value));
   return (
-    <svg width={size} height={size} viewBox="0 0 1024 1024" className={className} aria-hidden>
-      <defs>
-        <linearGradient id="logo-bg" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#5B6CFF" />
-          <stop offset="1" stopColor="#A24BFF" />
-        </linearGradient>
-      </defs>
-      <rect x="48" y="48" width="928" height="928" rx="220" fill="url(#logo-bg)" />
-      <g fill="none" stroke="#fff" strokeWidth="92" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M262 420 V330 a68 68 0 0 1 68 -68 H420" />
-        <path d="M604 262 H694 a68 68 0 0 1 68 68 V420" />
-        <path d="M762 604 V694 a68 68 0 0 1 -68 68 H604" />
-        <path d="M420 762 H330 a68 68 0 0 1 -68 -68 V604" />
-      </g>
-      <circle cx="512" cy="512" r="104" fill="#fff" />
+    <div className={clsx('flex shrink-0 items-center gap-3', className)}>
+      <input
+        type="range"
+        aria-label={label}
+        min={min}
+        max={max}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        onPointerUp={commit}
+        onKeyUp={commit}
+        className="range w-[180px]"
+        style={{ '--fill': `${((value - min) / (max - min)) * 100}%` } as CSSProperties}
+      />
+      <span className="w-7 text-right font-mono text-[13px] tabular-nums">{value}</span>
+    </div>
+  );
+}
+
+/** AShot mark (assets/logo-*.svg), 30.33 × 19.5 units. */
+export const LOGO_PATH =
+  'M7.09596 2.84774C7.83144 1.1235 9.57386 -0.00143435 11.5069 1.37266e-06L30.3333 0.0139846L27.505 6.60244H17.1063L23.5949 15.7635L23.5957 15.7628L22.0093 19.4956H18.014L11.3494 10.0864L7.29877 19.5L0 19.4834L7.09596 2.84774Z';
+
+/** App logo: the mark on an ink tile — white on dark in the light theme, inverted in the dark one. */
+export function Logo({ size = 28, className, radius }: { size?: number; className?: string; radius?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 1024 1024" className={clsx('shrink-0', className)} aria-hidden>
+      <rect width="1024" height="1024" rx={radius ?? 292} fill="var(--color-text)" />
+      <path d={LOGO_PATH} transform="translate(202 313) scale(20.44)" fill="var(--color-surface)" />
     </svg>
   );
 }

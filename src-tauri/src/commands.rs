@@ -12,6 +12,7 @@ use shoter_core::{imaging, links, Rect};
 use tauri::ipc::{InvokeBody, Request};
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::actions::{self, ActionResult};
@@ -91,6 +92,35 @@ pub async fn settings_set(app: AppHandle, settings: AppSettings) -> CmdResult<Ve
         s.last_region = last_region;
         s.welcomed = welcomed;
     });
+    apply_changes(&app, &before, &after).await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatchResult {
+    settings: AppSettings,
+    /// Hotkeys that could not be registered, autostart errors…
+    problems: Vec<String>,
+}
+
+/// Changes only the given keys (the settings window saves every change right away; the
+/// editor remembers its color). Unlike `settings_set` it never overwrites values that
+/// another window changed meanwhile.
+#[tauri::command]
+pub async fn settings_patch(app: AppHandle, patch: serde_json::Value) -> CmdResult<PatchResult> {
+    let state = app.state::<AppState>();
+    let before = state.settings();
+    let mut value = serde_json::to_value(&before).map_err(err)?;
+    merge(&mut value, patch);
+    let merged: AppSettings = serde_json::from_value(value).map_err(err)?;
+    let after = state.update_settings(|s| *s = merged);
+    let problems = apply_changes(&app, &before, &after).await?;
+    Ok(PatchResult { settings: after, problems })
+}
+
+/// Side effects of a settings change: hotkeys, history size, autostart, Box, theme.
+async fn apply_changes(app: &AppHandle, before: &AppSettings, after: &AppSettings) -> CmdResult<Vec<String>> {
+    let state = app.state::<AppState>();
     let mut problems = Vec::new();
     if before.hotkeys != after.hotkeys {
         // Register on the main thread (the plugin would otherwise block this thread on it).
@@ -104,7 +134,7 @@ pub async fn settings_set(app: AppHandle, settings: AppSettings) -> CmdResult<Ve
     }
     if before.history_limit != after.history_limit {
         state.history.set_limit(after.history_limit as usize).map_err(err)?;
-        actions::notify_history(&app);
+        actions::notify_history(app);
     }
     if before.autostart != after.autostart {
         let launcher = app.autolaunch();
@@ -124,20 +154,11 @@ pub async fn settings_set(app: AppHandle, settings: AppSettings) -> CmdResult<Ve
         state.reset_box_client();
         let _ = app.emit("box:changed", ());
     }
-    let _ = app.emit("settings:changed", &after);
+    if before.theme != after.theme {
+        ui::apply_theme(app);
+    }
+    let _ = app.emit("settings:changed", after);
     Ok(problems)
-}
-
-/// Quick toggles from the tray panel (e.g. "show cursor").
-#[tauri::command]
-pub fn settings_patch(app: AppHandle, patch: serde_json::Value) -> CmdResult<AppSettings> {
-    let state = app.state::<AppState>();
-    let mut value = serde_json::to_value(state.settings()).map_err(err)?;
-    merge(&mut value, patch);
-    let merged: AppSettings = serde_json::from_value(value).map_err(err)?;
-    let after = state.update_settings(|s| *s = merged);
-    let _ = app.emit("settings:changed", &after);
-    Ok(after)
 }
 
 fn merge(target: &mut serde_json::Value, patch: serde_json::Value) {
@@ -384,11 +405,6 @@ pub async fn open_settings(app: AppHandle, section: Option<String>) {
 }
 
 #[tauri::command]
-pub async fn open_about(app: AppHandle) {
-    ui::open_about(&app);
-}
-
-#[tauri::command]
 pub fn panel_hide(app: AppHandle) {
     ui::hide_panel(&app);
 }
@@ -431,6 +447,27 @@ pub fn reveal_path(app: AppHandle, path: String) -> CmdResult<()> {
         std::fs::create_dir_all(&p).map_err(err)?;
         app.opener().open_path(path, None::<&str>).map_err(err)
     }
+}
+
+/// Folder picker for "Save to". Returns `None` when cancelled.
+#[tauri::command]
+pub async fn pick_folder(window: WebviewWindow, current: Option<String>) -> Option<String> {
+    let start = current
+        .filter(|c| !c.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| window.state::<AppState>().save_dir());
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    window
+        .dialog()
+        .file()
+        .set_title("Папка для снимков")
+        .set_directory(start)
+        .set_parent(&window)
+        .pick_folder(move |path| {
+            let _ = tx.send(path);
+        });
+    let path = rx.await.ok().flatten()?;
+    path.into_path().ok().map(|p| p.display().to_string())
 }
 
 #[tauri::command]

@@ -417,8 +417,8 @@ export default function Editor({ id }: { id: string }) {
         ref={containerRef}
         className="relative min-h-0 flex-1 overflow-hidden"
         style={{
-          backgroundColor: '#0b0c10',
-          backgroundImage: 'radial-gradient(circle at 1px 1px, rgba(255,255,255,0.05) 1px, transparent 0)',
+          backgroundColor: 'var(--color-canvas)',
+          backgroundImage: 'radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--color-text) 8%, transparent) 1px, transparent 0)',
           backgroundSize: '22px 22px',
         }}
       >
@@ -480,7 +480,7 @@ export default function Editor({ id }: { id: string }) {
                       setCropDraft({ x: n.x(), y: n.y(), w, h });
                     }}
                   />
-                  <Transformer ref={cropTrRef} rotateEnabled={false} ignoreStroke keepRatio={false} anchorSize={10} anchorStroke="#fff" anchorFill="#7b7bff" borderEnabled={false} />
+                  <Transformer ref={cropTrRef} rotateEnabled={false} ignoreStroke keepRatio={false} anchorSize={10} anchorStroke="#1E1E20" anchorFill="#B5F000" borderEnabled={false} />
                 </>
               )}
             </Layer>
@@ -522,7 +522,7 @@ export default function Editor({ id }: { id: string }) {
             onClick={() => api.copyText(item.shareUrl!).then(() => setStatus({ kind: 'ok', text: 'Ссылка скопирована' }))}
             data-tip={item.linkOutdated || dirty ? 'Ссылка на предыдущую версию. Нажмите «Получить ссылку», чтобы загрузить новую' : 'Скопировать ссылку'}
             data-tip-pos="top"
-            className="inline-flex items-center gap-1.5 rounded-[7px] bg-accent-soft px-2 py-1 font-mono text-[11.5px] text-[#c3c3ff] hover:bg-accent/25"
+            className="inline-flex items-center gap-1.5 rounded-[7px] bg-surface-2 px-2 py-1 font-mono text-[11.5px] text-text hover:bg-surface-3"
           >
             <Link2 size={12} />
             {item.shortLink}

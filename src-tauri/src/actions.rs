@@ -152,7 +152,7 @@ fn file_label(p: &Path) -> String {
     p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string())
 }
 
-/// "Save": the configured folder (default `Pictures\AdvantShoter`) with the file name pattern.
+/// "Save": the configured folder (default `Pictures\AShot`) with the file name pattern.
 pub async fn save_item(app: &AppHandle, id: &str, dir: Option<PathBuf>) -> Result<PathBuf, String> {
     let state = app.state::<AppState>();
     let settings = state.settings();
@@ -160,7 +160,7 @@ pub async fn save_item(app: &AppHandle, id: &str, dir: Option<PathBuf>) -> Resul
     let dir = dir.unwrap_or_else(|| state.save_dir());
     std::fs::create_dir_all(&dir).map_err(|e| format!("не удалось создать папку {}: {e}", dir.display()))?;
     let name = filename::format(&settings.file_name_pattern, item.created_at, item.width, item.height);
-    let target = filename::unique_path(&dir, &name, settings.image_format.extension());
+    let target = filename::numbered_path(&dir, &name, settings.image_format.extension());
     write_image(app, id, target, settings.image_format).await
 }
 
@@ -170,12 +170,15 @@ pub async fn save_item_as(app: &AppHandle, id: &str) -> Result<Option<PathBuf>, 
     let settings = state.settings();
     let item = state.history.get(id).map_err(|e| e.to_string())?;
     let name = filename::format(&settings.file_name_pattern, item.created_at, item.width, item.height);
+    let ext = settings.image_format.extension();
+    let suggested = filename::numbered_path(&state.save_dir(), &name, ext);
+    let file_name = suggested.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| format!("{name}.{ext}"));
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
         .set_title("Сохранить снимок")
         .set_directory(state.save_dir())
-        .set_file_name(format!("{name}.{}", settings.image_format.extension()))
+        .set_file_name(file_name)
         .add_filter("PNG", &["png"])
         .add_filter("JPEG", &["jpg", "jpeg"])
         .save_file(move |path| {
@@ -198,7 +201,15 @@ pub async fn upload_item(app: &AppHandle, id: &str) -> Result<String, String> {
     let state = app.state::<AppState>();
     let settings = state.settings();
     let (item, png) = read_current(app, id)?;
-    ui::toast(app, Toast::progress("Загрузка в Box…").message(format!("{} × {}", item.width, item.height)).item(id));
+    let progress = || {
+        let hint = if settings.links.copy_after_upload {
+            "Ссылка скопируется автоматически".to_string()
+        } else {
+            format!("{} × {}", item.width, item.height)
+        };
+        Toast::progress("Загрузка в Box…").message(hint).item(id)
+    };
+    ui::toast(app, progress());
 
     let format = settings.image_format;
     let quality = settings.jpeg_quality;
@@ -207,7 +218,7 @@ pub async fn upload_item(app: &AppHandle, id: &str) -> Result<String, String> {
         .map_err(|e| e.to_string())??;
     let name = format!(
         "{}.{}",
-        filename::format(&settings.file_name_pattern, Local::now(), item.width, item.height),
+        filename::first_number(&filename::format(&settings.file_name_pattern, Local::now(), item.width, item.height)),
         format.extension()
     );
     let mime = match format {
@@ -221,7 +232,7 @@ pub async fn upload_item(app: &AppHandle, id: &str) -> Result<String, String> {
     if settings.box_.auth_mode == BoxAuthMode::OAuth && matches!(result, Err(BoxError::NotConfigured(_) | BoxError::Auth(_))) {
         result = match box_login(app).await {
             Ok(_) => {
-                ui::toast(app, Toast::progress("Загрузка в Box…").message(format!("{} × {}", item.width, item.height)).item(id));
+                ui::toast(app, progress());
                 upload_once(app, &name, data, mime).await
             }
             Err(e) => {
@@ -235,7 +246,7 @@ pub async fn upload_item(app: &AppHandle, id: &str) -> Result<String, String> {
     let uploaded = match result {
         Ok(r) => r,
         Err(e) => {
-            ui::toast(app, Toast::error("Не удалось загрузить в Box", e.clone()).item(id));
+            ui::toast(app, Toast::error("Не удалось загрузить в Box", e.clone()).item(id).retry_upload());
             return Err(e);
         }
     };

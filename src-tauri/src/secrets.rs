@@ -63,6 +63,8 @@ mod dpapi {
         CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
 
+    // The app was called AdvantShoter before; the entropy must stay, or saved tokens
+    // could no longer be decrypted.
     const ENTROPY: &[u8] = b"AdvantShoter/secrets/v1";
 
     fn blob(data: &[u8]) -> CRYPT_INTEGER_BLOB {

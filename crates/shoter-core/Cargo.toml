@@ -1,6 +1,6 @@
 [package]
 name = "shoter-core"
-description = "Platform-independent core of AdvantShoter: settings, history, imaging, Box.com client, link rewriting"
+description = "Platform-independent core of AShot: settings, history, imaging, Box.com client, link rewriting"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -73,11 +73,11 @@ jobs:
           New-Item -ItemType Directory -Force out | Out-Null
           Copy-Item target/release/bundle/nsis/*.exe out/
           Copy-Item target/release/bundle/msi/*.msi out/
-          Copy-Item target/release/AdvantShoter.exe "out/AdvantShoter-portable-$sha.exe"
+          Copy-Item target/release/AShot.exe "out/AShot-portable-$sha.exe"
           Get-ChildItem out
       - uses: actions/upload-artifact@v7
         with:
-          name: AdvantShoter-windows-${{ github.sha }}
+          name: AShot-windows-${{ github.sha }}
           path: out/*
           if-no-files-found: error
       - name: Publish release
