@@ -11,7 +11,6 @@ use shoter_core::settings::{AppSettings, BoxAuthMode};
 use shoter_core::{imaging, links, Rect};
 use tauri::ipc::{InvokeBody, Request};
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
-use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -134,9 +133,7 @@ async fn apply_changes(app: &AppHandle, before: &AppSettings, after: &AppSetting
         actions::notify_history(app);
     }
     if before.autostart != after.autostart {
-        let launcher = app.autolaunch();
-        let r = if after.autostart { launcher.enable() } else { launcher.disable() };
-        if let Err(e) = r {
+        if let Err(e) = crate::autostart::set(after.autostart) {
             problems.push(format!("Автозапуск: {e}"));
         }
     }

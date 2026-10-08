@@ -7,7 +7,7 @@
 // smaller UI element; handles — resize; drag inside the selection (Move tool) — move;
 // with a drawing tool — draw inside the selection; double click — editor;
 // right click — reset selection / cancel.
-// Keys: Enter — editor, Ctrl+C — copy, Ctrl+S — save, Ctrl+U — upload & copy link,
+// Keys: Enter — editor, Ctrl+C — copy, Ctrl+S — save as, Ctrl+U — upload & copy link,
 // V R E A L P M T N B — tools, 1/2/3 — size, Ctrl+Z / Ctrl+Y — undo / redo, Del — delete shape,
 // arrows — move the shape / selection by 1 px (Shift — 10 px, Ctrl — resize the selection),
 // F — whole monitor, C — copy color, Esc — cancel.
@@ -788,7 +788,7 @@ export default function Overlay() {
       }
       if (ctrl && selected) {
         if (code === 'KeyC') return (e.preventDefault(), finish('copy'));
-        if (code === 'KeyS') return (e.preventDefault(), finish('save'));
+        if (code === 'KeyS') return (e.preventDefault(), finish('saveAs'));
         if (code === 'KeyU') return (e.preventDefault(), finish('upload'));
         if (code === 'KeyZ' && !e.shiftKey) return (e.preventDefault(), a.undo());
         if ((code === 'KeyZ' && e.shiftKey) || code === 'KeyY') return (e.preventDefault(), a.redo());
@@ -988,7 +988,7 @@ export default function Overlay() {
           <BarButton tip="Копировать · Ctrl+C" onClick={() => finish('copy')}>
             <Copy size={19} />
           </BarButton>
-          <BarButton tip="Сохранить в папку · Ctrl+S" onClick={() => finish('save')}>
+          <BarButton tip="Сохранить… (куда и под каким именем) · Ctrl+S" onClick={() => finish('saveAs')}>
             <Download size={19} />
           </BarButton>
           <button

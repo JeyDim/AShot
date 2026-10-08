@@ -213,6 +213,8 @@ pub struct AppSettings {
     pub auto_update: bool,
     /// Version that ran last time ("updated to …" notification).
     pub last_version: String,
+    /// Folder chosen in the last "Save as…" dialog (it opens there next time).
+    pub last_save_as_dir: String,
 }
 
 impl Default for AppSettings {
@@ -237,6 +239,7 @@ impl Default for AppSettings {
             welcomed: false,
             auto_update: true,
             last_version: String::new(),
+            last_save_as_dir: String::new(),
         }
     }
 }

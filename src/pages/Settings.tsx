@@ -295,7 +295,7 @@ const TYPING = 500;
 function General({ s, update }: { s: AppSettings; update: Update }) {
   return (
     <>
-      <Title sub="Поведение при съёмке и запуск программы">Снимок</Title>
+      <Title sub="Поведение при съёмке">Снимок</Title>
       <Group title="Захват">
         <Row label="Показывать курсор" hint="Указатель мыши попадёт на снимок">
           <Switch checked={s.showCursor} onChange={(v) => update({ showCursor: v })} label="Показывать курсор" />
@@ -323,22 +323,6 @@ function General({ s, update }: { s: AppSettings; update: Update }) {
             <option value="save">Сохранить в папку</option>
             <option value="upload">Загрузить и скопировать ссылку</option>
           </Select>
-        </Row>
-      </Group>
-      <Group title="Система">
-        <Row label="Запускать вместе с Windows">
-          <Switch checked={s.autostart} onChange={(v) => update({ autostart: v })} label="Запускать вместе с Windows" />
-        </Row>
-        <Row label="Тема">
-          <Segmented
-            value={s.theme}
-            onChange={(v) => update({ theme: v })}
-            options={[
-              { value: 'system', label: 'Системная' },
-              { value: 'light', label: 'Светлая' },
-              { value: 'dark', label: 'Тёмная' },
-            ]}
-          />
         </Row>
       </Group>
     </>
@@ -858,47 +842,72 @@ function About({ s, update }: { s: AppSettings; update: Update }) {
     ['Платформа', info ? `${info.os} · Tauri ${info.tauriVersion}` : '…'],
   ];
 
+  const copyVersion = async () => {
+    await api.copyText(versionLine);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+  };
+
   return (
-    <div className="flex flex-col items-center gap-5 py-2">
-      <Logo size={72} radius={284} />
-      <div className="flex flex-col items-center gap-1.5 text-center">
-        <h1 className="font-display text-[22px] font-normal">AShot</h1>
-        <div className="text-[14px] text-muted">Скриншоты с редактором и ссылками Box</div>
+    <div className="mx-auto flex w-full max-w-[460px] flex-col gap-4">
+      <div className="flex items-center gap-3.5">
+        <Logo size={52} radius={284} />
+        <div className="flex flex-col gap-0.5">
+          <h1 className="font-display text-[22px] leading-tight font-normal">AShot</h1>
+          <div className="text-[13.5px] text-muted">Скриншоты с редактором и ссылками Box</div>
+        </div>
       </div>
-      <div className="w-full max-w-[440px] rounded-[14px] bg-surface-2 px-4 py-1.5">
-        {rows.map(([k, v]) => (
-          <div key={k} className="flex justify-between gap-4 py-2.5 text-[14px]">
+      <div className="rounded-[14px] bg-surface-2 px-4 py-1">
+        {rows.map(([k, v], i) => (
+          <div key={k} className="flex h-10 items-center justify-between gap-4 text-[14px]">
             <span className="text-muted">{k}</span>
-            <span className="truncate font-mono text-[13px]">{v}</span>
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate font-mono text-[13px]">{v}</span>
+              {i === 0 && (
+                <IconButton tip={copied ? 'Скопировано' : 'Скопировать версию и сборку'} tipPos="left" size={28} disabled={!info} onClick={copyVersion}>
+                  {copied ? <Check size={15} className="text-success" /> : <Copy size={15} />}
+                </IconButton>
+              )}
+            </span>
           </div>
         ))}
       </div>
-      <Updates autoUpdate={s.autoUpdate} onAutoUpdate={(v) => update({ autoUpdate: v })} />
-      <Button
-        variant="secondary"
-        size="lg"
-        icon={copied ? <Check size={16} /> : <Copy size={16} />}
-        disabled={!info}
-        onClick={async () => {
-          await api.copyText(versionLine);
-          setCopied(true);
-          window.setTimeout(() => setCopied(false), 1500);
-        }}
-      >
-        {copied ? 'Скопировано' : 'Скопировать версию'}
-      </Button>
-      <div className="flex gap-5 text-[13px]">
-        <button className="flex items-center gap-1.5 transition-colors hover:text-muted" onClick={() => api.openFolder('logs')}>
-          <FileText size={16} className="text-muted" />
-          Журнал
-        </button>
-        <button className="flex items-center gap-1.5 transition-colors hover:text-muted" onClick={() => api.openFolder('history')}>
-          <FolderOpen size={16} className="text-muted" />
-          Временные снимки
-        </button>
+      <div className="rounded-[14px] bg-surface-2 px-4 py-1">
+        <div className="flex items-center justify-between gap-4 py-2 text-[14px]">
+          Тема
+          <Segmented
+            value={s.theme}
+            onChange={(v) => update({ theme: v })}
+            options={[
+              { value: 'system', label: 'Системная' },
+              { value: 'light', label: 'Светлая' },
+              { value: 'dark', label: 'Тёмная' },
+            ]}
+          />
+        </div>
+        <div className="flex items-center justify-between gap-4 border-t border-border py-2.5 text-[14px]">
+          <span className="flex flex-col">
+            Запускать вместе с Windows
+            <span className="text-[12px] text-muted">Ярлык в папке «Автозагрузка», без прав администратора</span>
+          </span>
+          <Switch checked={s.autostart} onChange={(v) => update({ autostart: v })} label="Запускать вместе с Windows" />
+        </div>
       </div>
-      <div className="max-w-[440px] text-center text-[12px] leading-normal text-muted">
-        Используются: Tauri, React, Konva, иконки Lucide (ISC), snow-ui-selector из Snow Shot (Apache-2.0), шрифты Roboto и Roboto Mono (OFL).
+      <Updates autoUpdate={s.autoUpdate} onAutoUpdate={(v) => update({ autoUpdate: v })} />
+      <div className="flex flex-col gap-2 px-1">
+        <div className="flex gap-5 text-[13px]">
+          <button className="flex items-center gap-1.5 transition-colors hover:text-muted" onClick={() => api.openFolder('logs')}>
+            <FileText size={16} className="text-muted" />
+            Журнал
+          </button>
+          <button className="flex items-center gap-1.5 transition-colors hover:text-muted" onClick={() => api.openFolder('history')}>
+            <FolderOpen size={16} className="text-muted" />
+            Временные снимки
+          </button>
+        </div>
+        <div className="text-[12px] leading-normal text-muted">
+          Используются: Tauri, React, Konva, иконки Lucide (ISC), snow-ui-selector из Snow Shot (Apache-2.0), шрифты Roboto и Roboto Mono (OFL).
+        </div>
       </div>
     </div>
   );
@@ -1002,7 +1011,7 @@ function Updates({ autoUpdate, onAutoUpdate }: { autoUpdate: boolean; onAutoUpda
   }
 
   return (
-    <div className="w-full max-w-[440px] rounded-[14px] bg-surface-2 px-4 py-1.5">
+    <div className="rounded-[14px] bg-surface-2 px-4 py-1">
       <div className="flex min-h-[52px] items-center justify-between gap-3 py-2 text-[14px]">
         <div className="flex min-w-0 flex-1">{text}</div>
         {action && <div className="shrink-0">{action}</div>}

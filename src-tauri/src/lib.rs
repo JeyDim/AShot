@@ -3,6 +3,7 @@
 //! screenshots and publishing to Box.com with links on the custom proxy domain.
 
 mod actions;
+mod autostart;
 mod capture;
 mod clipboard;
 mod commands;
@@ -19,7 +20,6 @@ mod uiselect;
 mod updater;
 
 use tauri::{AppHandle, Manager, RunEvent};
-use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
 use state::{AppState, CaptureMode};
 use ui::Toast;
@@ -52,23 +52,6 @@ fn handle_args(app: &AppHandle, args: &[String], from_second_instance: bool) {
     }
 }
 
-/// Versions before the rename to AShot registered autostart as "AdvantShoter"; that entry
-/// points to the old executable, so it is removed (the setting re-creates it as "AShot").
-#[cfg(windows)]
-fn remove_legacy_autostart() {
-    use windows::core::w;
-    use windows::Win32::System::Registry::{RegDeleteKeyValueW, HKEY_CURRENT_USER};
-    for key in [
-        w!(r"Software\Microsoft\Windows\CurrentVersion\Run"),
-        w!(r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"),
-    ] {
-        let _ = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key, w!("AdvantShoter")) };
-    }
-}
-
-#[cfg(not(windows))]
-fn remove_legacy_autostart() {}
-
 pub fn run() {
     // After a portable self-update the new exe starts before the old one has exited.
     updater::wait_for_previous_instance(&std::env::args().collect::<Vec<_>>());
@@ -83,7 +66,6 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(hotkeys::handle).build())
-        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--autostart"])))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .register_asynchronous_uri_scheme_protocol("shot", protocol::handle)
@@ -146,12 +128,8 @@ pub fn run() {
             let state = handle.state::<AppState>();
             let settings = state.settings();
 
-            // Keep the OS autostart entry in sync with the setting.
-            remove_legacy_autostart();
-            let launcher = handle.autolaunch();
-            if settings.autostart != launcher.is_enabled().unwrap_or(false) {
-                let _ = if settings.autostart { launcher.enable() } else { launcher.disable() };
-            }
+            // Keep the Startup-folder shortcut in sync with the setting.
+            autostart::sync(settings.autostart);
 
             updater::cleanup();
             updater::start(&handle);

@@ -346,7 +346,7 @@ export default function Editor({ id }: { id: string }) {
         if (code === 'KeyZ' && !e.shiftKey) return (e.preventDefault(), ann.undo());
         if ((code === 'KeyZ' && e.shiftKey) || code === 'KeyY') return (e.preventDefault(), ann.redo());
         if (code === 'KeyC') return (e.preventDefault(), act('copy'));
-        if (code === 'KeyS') return (e.preventDefault(), act(e.shiftKey ? 'saveAs' : 'save'));
+        if (code === 'KeyS') return (e.preventDefault(), act('saveAs'));
         if (code === 'KeyU') return (e.preventDefault(), act('upload'));
         if (code === 'Digit0') return (e.preventDefault(), setUserZoomed(false), fit());
         if (code === 'Digit1') return (e.preventDefault(), zoomTo(1 / dpr));

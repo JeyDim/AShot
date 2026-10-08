@@ -28,6 +28,7 @@ const settings: AppSettings = {
   welcomed: true,
   autoUpdate: true,
   lastVersion: '0.1.57',
+  lastSaveAsDir: '',
 };
 
 const now = Date.now();

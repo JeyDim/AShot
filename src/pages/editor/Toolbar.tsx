@@ -4,7 +4,6 @@ import {
   Circle,
   Copy,
   Crop,
-  Download,
   Grid3x3,
   Highlighter,
   Link2,
@@ -102,12 +101,9 @@ export function Toolbar(props: {
       <Button variant="secondary" icon={<Copy size={16} />} loading={busy === 'copy'} tip="Копировать в буфер · Ctrl+C" onClick={() => act('copy')}>
         {width >= 1560 && 'Копировать'}
       </Button>
-      <Button variant="secondary" icon={<Save size={16} />} loading={busy === 'save'} tip="Сохранить в папку снимков · Ctrl+S" onClick={() => act('save')}>
+      <Button variant="secondary" icon={<Save size={16} />} loading={busy === 'saveAs'} tip="Сохранить… (куда и под каким именем) · Ctrl+S" onClick={() => act('saveAs')}>
         {width >= 1560 && 'Сохранить'}
       </Button>
-      <IconButton tip="Сохранить как… · Ctrl+Shift+S" tipPos="left" size={36} onClick={() => act('saveAs')}>
-        <Download size={18} />
-      </IconButton>
       <Button variant="primary" icon={<Link2 size={17} />} loading={busy === 'upload'} tip="Загрузить в Box и скопировать ссылку · Ctrl+U" tipPos="left" onClick={() => act('upload')}>
         {width >= 1180 ? 'Получить ссылку' : width >= 980 ? 'Ссылка' : null}
       </Button>

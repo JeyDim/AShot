@@ -321,7 +321,7 @@ pub fn open_settings(app: &AppHandle, section: Option<&str>) {
     let route = section.map(|s| format!("settings/{s}")).unwrap_or_else(|| "settings".into());
     let _ = WebviewWindowBuilder::new(app, SETTINGS, url(&route))
         .title("Настройки — AShot")
-        .inner_size(840.0, 640.0)
+        .inner_size(840.0, 700.0)
         // Fixed size; own title bar (drag area, minimize / close) is drawn by the page.
         .resizable(false)
         .maximizable(false)

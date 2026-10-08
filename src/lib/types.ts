@@ -65,6 +65,7 @@ export interface AppSettings {
   welcomed: boolean;
   autoUpdate: boolean;
   lastVersion: string;
+  lastSaveAsDir: string;
 }
 
 export interface PatchResult {

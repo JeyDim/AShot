@@ -134,20 +134,32 @@ pub async fn copy_link(app: &AppHandle, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-async fn write_image(app: &AppHandle, id: &str, target: PathBuf, format: ImageFormat) -> Result<PathBuf, String> {
-    let state = app.state::<AppState>();
-    let quality = state.settings().jpeg_quality;
+/// The current image of a history item in the given format.
+async fn encode_current(app: &AppHandle, id: &str, format: ImageFormat) -> Result<Vec<u8>, String> {
+    let quality = app.state::<AppState>().settings().jpeg_quality;
     let (_, png) = read_current(app, id)?;
-    let data = tauri::async_runtime::spawn_blocking(move || encode_as(png, format, quality))
+    tauri::async_runtime::spawn_blocking(move || encode_as(png, format, quality))
         .await
-        .map_err(|e| e.to_string())??;
+        .map_err(|e| e.to_string())?
+}
+
+fn write_file(target: &Path, data: &[u8]) -> Result<(), String> {
     if let Some(dir) = target.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("не удалось создать папку {}: {e}", dir.display()))?;
     }
-    std::fs::write(&target, data).map_err(|e| format!("не удалось сохранить {}: {e}", target.display()))?;
-    let saved = target.to_string_lossy().to_string();
-    let _ = state.history.modify(id, |i| i.saved_path = Some(saved.clone()));
+    std::fs::write(target, data).map_err(|e| format!("не удалось сохранить {}: {e}", target.display()))
+}
+
+fn mark_saved(app: &AppHandle, id: &str, path: &Path) -> String {
+    let saved = path.to_string_lossy().to_string();
+    let _ = app.state::<AppState>().history.modify(id, |i| i.saved_path = Some(saved.clone()));
     notify_history(app);
+    saved
+}
+
+async fn write_image(app: &AppHandle, id: &str, target: PathBuf, format: ImageFormat) -> Result<PathBuf, String> {
+    write_file(&target, &encode_current(app, id, format).await?)?;
+    let saved = mark_saved(app, id, &target);
     ui::toast(app, Toast::success("Сохранено").message(file_label(&target)).path(saved).item(id));
     Ok(target)
 }
@@ -168,35 +180,61 @@ pub async fn save_item(app: &AppHandle, id: &str, dir: Option<PathBuf>) -> Resul
     write_image(app, id, target, settings.image_format).await
 }
 
-/// "Save as…": native dialog; the format follows the chosen extension.
+/// "Save as…" (also "Save" in the overlay and the editor): any folder and name in the
+/// system dialog, the format follows the extension. A copy with the same name also goes
+/// to the screenshots folder, unless the file was saved right there.
 pub async fn save_item_as(app: &AppHandle, id: &str) -> Result<Option<PathBuf>, String> {
     let state = app.state::<AppState>();
     let settings = state.settings();
     let item = state.history.get(id).map_err(|e| e.to_string())?;
+    let save_dir = state.save_dir();
+    let start_dir = Some(PathBuf::from(&settings.last_save_as_dir)).filter(|d| d.is_dir()).unwrap_or_else(|| save_dir.clone());
     let name = filename::format(&settings.file_name_pattern, item.created_at, item.width, item.height);
-    let ext = settings.image_format.extension();
-    let suggested = filename::numbered_path(&state.save_dir(), &name, ext);
-    let file_name = suggested.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| format!("{name}.{ext}"));
+    let format = settings.image_format;
+    let suggested = filename::numbered_path(&start_dir, &name, format.extension());
+    let file_name = suggested.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| name.clone());
+    // The configured format comes first: the dialog starts with its filter.
+    let mut filters = vec![(ImageFormat::Png, "PNG", &["png"][..]), (ImageFormat::Jpeg, "JPEG", &["jpg", "jpeg"][..]), (ImageFormat::Webp, "WebP", &["webp"][..])];
+    filters.sort_by_key(|(f, _, _)| *f != format);
+    let mut dialog = app.dialog().file().set_title("Сохранить снимок").set_directory(&start_dir).set_file_name(file_name);
+    for (_, label, exts) in filters {
+        dialog = dialog.add_filter(label, exts);
+    }
     let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .set_title("Сохранить снимок")
-        .set_directory(state.save_dir())
-        .set_file_name(file_name)
-        .add_filter("PNG", &["png"])
-        .add_filter("JPEG", &["jpg", "jpeg"])
-        .add_filter("WebP", &["webp"])
-        .save_file(move |path| {
-            let _ = tx.send(path);
-        });
+    dialog.save_file(move |path| {
+        let _ = tx.send(path);
+    });
     let Some(path) = rx.await.ok().flatten() else { return Ok(None) };
     let path = path.into_path().map_err(|e| e.to_string())?;
     let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
     let (format, path) = match ImageFormat::from_extension(&ext) {
         Some(format) => (format, path),
-        None => (ImageFormat::Png, path.with_extension("png")),
+        None => (format, path.with_extension(format.extension())),
     };
-    write_image(app, id, path, format).await.map(Some)
+
+    let data = encode_current(app, id, format).await?;
+    write_file(&path, &data)?;
+    let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+    state.update_settings(|s| s.last_save_as_dir = dir.display().to_string());
+    let mut message = file_label(&path);
+    if !same_dir(&dir, &save_dir) {
+        let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or(name);
+        let copy = filename::numbered_path(&save_dir, &stem, format.extension());
+        match write_file(&copy, &data) {
+            Ok(()) => message.push_str(" · копия — в папке снимков"),
+            Err(e) => log::warn!("copy to the screenshots folder failed: {e}"),
+        }
+    }
+    let saved = mark_saved(app, id, &path);
+    ui::toast(app, Toast::success("Сохранено").message(message).path(saved).item(id));
+    Ok(Some(path))
+}
+
+fn same_dir(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
 }
 
 /// Uploads the current image of a history item to Box, creates the shared link,
