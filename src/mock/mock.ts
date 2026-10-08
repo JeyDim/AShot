@@ -153,6 +153,7 @@ export async function installMocks() {
           return overlay;
         case 'overlay_hit_test':
           return [];
+        case 'overlay_finish_annotated':
         case 'editor_commit': {
           // Exposed for scripts/ui-smoke.mjs: parse [u32 json len][json][png].
           const body = args as unknown as Uint8Array;
@@ -161,7 +162,7 @@ export async function installMocks() {
           const png = body.slice(4 + len);
           const dv = new DataView(png.buffer, png.byteOffset);
           const w = window as unknown as { __commits?: unknown[] };
-          (w.__commits ??= []).push({ shapes: doc.shapes.length, crop: doc.crop, width: dv.getUint32(16), height: dv.getUint32(20), bytes: png.length });
+          (w.__commits ??= []).push({ cmd, shapes: doc.shapes.length, crop: doc.crop, width: dv.getUint32(16), height: dv.getUint32(20), bytes: png.length });
           return { shareUrl: 'https://advant.one/3rud4dfakga5r953wt77anhyzo27tm7r', savedPath: null };
         }
         default:

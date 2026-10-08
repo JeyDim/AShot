@@ -34,6 +34,27 @@ await shot('overlay-drawing', 'overlay', {
   w: 1440, h: 810, wait: 900,
   setup: async (p) => { await p.mouse.move(300, 200); await p.mouse.down(); await p.mouse.move(520, 330, { steps: 5 }); await p.mouse.move(640, 420, { steps: 5 }); },
 });
+await shot('overlay-annotate', 'overlay', {
+  w: 1440, h: 810, wait: 900,
+  setup: async (p) => {
+    await p.evaluate(() => localStorage.removeItem('overlay.tool'));
+    await p.mouse.move(420, 90); await p.mouse.down(); await p.mouse.move(1246, 615, { steps: 8 }); await p.mouse.up();
+    await p.keyboard.press('r');
+    await p.mouse.move(1095, 180); await p.mouse.down(); await p.mouse.move(1215, 222, { steps: 5 }); await p.mouse.up();
+    await p.keyboard.press('a');
+    await p.mouse.move(980, 330); await p.mouse.down(); await p.mouse.move(1090, 235, { steps: 5 }); await p.mouse.up();
+    await p.keyboard.press('n');
+    await p.mouse.click(1100, 180);
+    await p.keyboard.press('t');
+    await p.mouse.click(860, 345);
+    await p.keyboard.type('Новая кнопка');
+    await p.keyboard.press('Enter');
+    await p.keyboard.press('b');
+    await p.mouse.move(605, 185); await p.mouse.down(); await p.mouse.move(910, 212, { steps: 4 }); await p.mouse.up();
+    await p.keyboard.press('v');
+    await p.mouse.move(1000, 700);
+  },
+});
 await shot('editor', 'editor/a1', { w: 1500, h: 900, wait: 1500 });
 await shot('settings-general', 'settings', { w: 900, h: 680 });
 await shot('settings-box', 'settings/box', { w: 900, h: 680 });

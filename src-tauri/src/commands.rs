@@ -190,6 +190,38 @@ pub async fn overlay_finish(app: AppHandle, rect: Rect, action: Action) -> CmdRe
     Ok(())
 }
 
+/// Finish with drawings. Body: `u32 LE` JSON length, editor document JSON (relative to
+/// the selection), rendered PNG. Headers: `x-rect` = "x,y,w,h" (virtual screen), `x-action`.
+#[tauri::command]
+pub async fn overlay_finish_annotated(app: AppHandle, request: Request<'_>) -> CmdResult<()> {
+    let header = |name: &str| request.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let rect_text = header("x-rect").ok_or("missing x-rect")?;
+    let parts: Vec<i64> = rect_text.split(',').filter_map(|p| p.trim().parse().ok()).collect();
+    let [x, y, w, h] = parts[..] else { return Err("bad x-rect".into()) };
+    if w <= 0 || h <= 0 {
+        return Err("пустая область".into());
+    }
+    let rect = Rect::new(x as i32, y as i32, w as u32, h as u32);
+    let action: Action = serde_json::from_value(serde_json::Value::String(header("x-action").unwrap_or_else(|| "edit".into())))
+        .map_err(err)?;
+    let InvokeBody::Raw(body) = request.body() else { return Err("expected binary body".into()) };
+    if body.len() < 4 {
+        return Err("bad body".into());
+    }
+    let json_len = u32::from_le_bytes([body[0], body[1], body[2], body[3]]) as usize;
+    if body.len() < 4 + json_len {
+        return Err("bad body".into());
+    }
+    let doc_json = std::str::from_utf8(&body[4..4 + json_len]).map_err(err)?.to_string();
+    let png = body[4 + json_len..].to_vec();
+    let annotated = actions::Annotated { png, doc_json };
+    if let Err(e) = flow::complete_with(&app, rect, action, Some(annotated)).await {
+        ui::toast(&app, Toast::error("Не удалось обработать снимок", e.clone()));
+        return Err(e);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn overlay_cancel(app: AppHandle) {
     flow::cancel(&app);

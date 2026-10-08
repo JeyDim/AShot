@@ -27,6 +27,17 @@ export const api = {
   overlayPending: () => invoke<OverlayPrepare | null>('overlay_pending'),
   overlayReady: (sessionId: number) => invoke<void>('overlay_ready', { sessionId }),
   overlayFinish: (rect: Rect, action: Action) => invoke<void>('overlay_finish', { rect, action }),
+  /** Finish with drawings: the rendered PNG + the editor document (relative to the selection). */
+  overlayFinishAnnotated: (rect: Rect, action: Action, png: Uint8Array, docJson: string) => {
+    const json = new TextEncoder().encode(docJson);
+    const body = new Uint8Array(4 + json.length + png.length);
+    new DataView(body.buffer).setUint32(0, json.length, true);
+    body.set(json, 4);
+    body.set(png, 4 + json.length);
+    return invoke<void>('overlay_finish_annotated', body, {
+      headers: { 'x-rect': `${rect.x},${rect.y},${rect.width},${rect.height}`, 'x-action': action },
+    });
+  },
   overlayCancel: () => invoke<void>('overlay_cancel'),
   overlayHitTest: (x: number, y: number) => invoke<Rect[]>('overlay_hit_test', { x, y }),
 

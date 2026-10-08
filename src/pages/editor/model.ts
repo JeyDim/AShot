@@ -65,6 +65,8 @@ export interface Doc {
   version: 1;
   shapes: Shape[];
   crop: Crop | null;
+  /** Stroke scale used when the shapes were drawn (kept when re-editing a crop). */
+  scale?: number;
 }
 
 export const emptyDoc = (): Doc => ({ version: 1, shapes: [], crop: null });
@@ -158,7 +160,7 @@ export function parseDoc(json: string | null): Doc {
   if (!json) return emptyDoc();
   try {
     const d = JSON.parse(json);
-    if (d && Array.isArray(d.shapes)) return { version: 1, shapes: d.shapes, crop: d.crop ?? null };
+    if (d && Array.isArray(d.shapes)) return { version: 1, shapes: d.shapes, crop: d.crop ?? null, ...(typeof d.scale === 'number' ? { scale: d.scale } : {}) };
   } catch {
     /* ignore corrupt documents */
   }

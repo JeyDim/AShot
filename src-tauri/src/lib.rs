@@ -77,6 +77,7 @@ pub fn run() {
             commands::overlay_pending,
             commands::overlay_ready,
             commands::overlay_finish,
+            commands::overlay_finish_annotated,
             commands::overlay_cancel,
             commands::overlay_hit_test,
             commands::history_list,

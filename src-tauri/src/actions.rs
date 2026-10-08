@@ -33,25 +33,51 @@ pub fn notify_history(app: &AppHandle) {
 const THUMB: (u32, u32) = (360, 220);
 
 /// Stores a fresh capture in the history and performs the requested action.
-pub async fn process_capture(app: &AppHandle, image: RgbaImage, source: &str, action: Action) -> Result<(), String> {
+/// Drawings made on the capture overlay: the rendered PNG and the editor document.
+pub struct Annotated {
+    pub png: Vec<u8>,
+    pub doc_json: String,
+}
+
+/// Stores a fresh capture in the history and performs the requested action.
+/// With `annotated`, the original stays re-editable and the rendered image is used.
+pub async fn process_capture(
+    app: &AppHandle,
+    image: RgbaImage,
+    source: &str,
+    action: Action,
+    annotated: Option<Annotated>,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     let (w, h) = image.dimensions();
-    let encoded = image.clone();
-    let (png, thumb) = tauri::async_runtime::spawn_blocking(move || -> Result<_, String> {
-        let png = imaging::encode_png(&encoded).map_err(|e| e.to_string())?;
-        let thumb = imaging::encode_png(&imaging::thumbnail(&encoded, THUMB.0, THUMB.1)).map_err(|e| e.to_string())?;
-        Ok((png, thumb))
+    let original = image.clone();
+    let rendered_png = annotated.as_ref().map(|a| a.png.clone());
+    let (png, thumb, final_image) = tauri::async_runtime::spawn_blocking(move || -> Result<_, String> {
+        let png = imaging::encode_png(&original).map_err(|e| e.to_string())?;
+        let final_image = match rendered_png {
+            Some(bytes) => imaging::decode(&bytes).map_err(|e| e.to_string())?,
+            None => original,
+        };
+        let thumb = imaging::encode_png(&imaging::thumbnail(&final_image, THUMB.0, THUMB.1)).map_err(|e| e.to_string())?;
+        Ok((png, thumb, final_image))
     })
     .await
     .map_err(|e| e.to_string())??;
     let item = state.history.add(&png, &thumb, w, h, source).map_err(|e| e.to_string())?;
+    if let Some(a) = &annotated {
+        state
+            .history
+            .update_image(&item.id, &a.png, &thumb, final_image.width(), final_image.height(), Some(&a.doc_json))
+            .map_err(|e| e.to_string())?;
+    }
     notify_history(app);
 
     match action {
         Action::Edit => ui::open_editor(app, &item.id),
         Action::Copy => {
-            clipboard::set_image(image).await?;
-            ui::toast(app, Toast::success("Скопировано в буфер обмена").message(format!("{w} × {h}")).item(&item.id));
+            let (fw, fh) = final_image.dimensions();
+            clipboard::set_image(final_image).await?;
+            ui::toast(app, Toast::success("Скопировано в буфер обмена").message(format!("{fw} × {fh}")).item(&item.id));
         }
         Action::Save => {
             save_item(app, &item.id, None).await?;

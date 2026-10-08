@@ -1,17 +1,30 @@
 // Full-screen selection overlay (one window per monitor) over the frozen screenshot.
 //
+// Like Snow Shot / Snipaste: select an area, then draw on it right away — arrows, boxes,
+// text, steps, marker, pixelation — and copy / save / get a link without opening the editor.
+//
 // Mouse: drag — free region; click — the highlighted window / UI element; wheel — bigger /
-// smaller UI element; drag inside the selection — move; handles — resize; double click — editor;
+// smaller UI element; handles — resize; drag inside the selection (Move tool) — move;
+// with a drawing tool — draw inside the selection; double click — editor;
 // right click — reset selection / cancel.
 // Keys: Enter — editor, Ctrl+C — copy, Ctrl+S — save, Ctrl+U — upload & copy link,
-// arrows — move by 1 px (Shift — 10 px, Ctrl — resize), F — whole monitor, C — copy color, Esc — cancel.
+// V R E A L P M T N B — tools, 1/2/3 — size, Ctrl+Z / Ctrl+Y — undo / redo, Del — delete shape,
+// arrows — move the shape / selection by 1 px (Shift — 10 px, Ctrl — resize the selection),
+// F — whole monitor, C — copy color, Esc — cancel.
 import clsx from 'clsx';
-import { Copy, Download, Link2, Pencil, X } from 'lucide-react';
+import type Konva from 'konva';
+import { Copy, Download, Link2, Pencil, Redo2, Undo2, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Group, Layer, Stage } from 'react-konva';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { IconButton } from '../components/ui';
 import { useTauriEvent } from '../lib/hooks';
 import { api, shotUrl } from '../lib/ipc';
 import type { Action, OverlayPrepare, Rect } from '../lib/types';
+import { emptyDoc, historyOf, imageScaleFor, translate, type History, type Tool } from './editor/model';
+import type { PixelSource } from './editor/pixelate';
+import { ColorPicker, TOOLS } from './editor/Toolbar';
+import { isHandle, shapeIdOf, useAnnotator } from './editor/useAnnotator';
 import {
   actionBarPosition,
   clamp,
@@ -27,6 +40,11 @@ import {
   topmostAt,
   type Handle,
 } from './overlay/geometry';
+
+const OVERLAY_TOOLS = TOOLS.filter((t) => t.id !== 'crop');
+const TOOL_BY_KEY: Record<string, Tool> = { ...Object.fromEntries(OVERLAY_TOOLS.map((t) => [t.key.toLowerCase(), t.id])), h: 'marker' };
+
+type PointerLike = { clientX: number; clientY: number; button: number; shiftKey: boolean };
 
 type Phase = 'idle' | 'pending' | 'drawing' | 'selected' | 'moving' | 'resizing';
 
@@ -89,6 +107,26 @@ export default function Overlay() {
   const [toast, setToast] = useState<string | null>(null);
   const finishing = useRef(false);
 
+  // Drawing on the selection (shared logic with the editor).
+  const stageRef = useRef<Konva.Stage>(null);
+  const shapesLayerRef = useRef<Konva.Layer>(null);
+  const clipRef = useRef<Konva.Group>(null);
+  // The last tool is remembered, so a habitual "arrow" user can draw right after selecting.
+  const lastTool = (): Tool => {
+    try {
+      const t = localStorage.getItem('overlay.tool') as Tool | null;
+      return t && OVERLAY_TOOLS.some((x) => x.id === t) ? t : 'select';
+    } catch {
+      return 'select';
+    }
+  };
+  const [tool, setToolState] = useState<Tool>(lastTool);
+  const [color, setColor] = useState('#FF3B30');
+  const [size, setSize] = useState(1);
+  const [hist, setHist] = useState<History>(historyOf(emptyDoc()));
+  const [source, setSource] = useState<PixelSource | null>(null);
+  const [selectionRev, setSelectionRev] = useState(0);
+
   /** Physical pixels per CSS pixel. */
   const scale = () => {
     const img = s.current.img;
@@ -104,6 +142,82 @@ export default function Overlay() {
     const st = s.current;
     if (st.phase === 'selected' && st.selection && !st.prep?.autoAction) setBar({ sel: { ...st.selection } });
     else setBar(null);
+  };
+
+  // ------------------------------------------------------------ annotations
+  const strokeScale = () => {
+    const b = s.current.bounds;
+    return imageScaleFor(b.width, b.height);
+  };
+  const sel = s.current.selection;
+  const ann = useAnnotator({
+    hist,
+    setHist,
+    tool,
+    color,
+    size,
+    k: strokeScale(),
+    source,
+    stageRef,
+    view: { zoom: 1 / scale(), x: 0, y: 0 },
+    drawArea: sel ? { x: sel.x, y: sel.y, w: sel.width, h: sel.height } : null,
+    cursor: 'crosshair',
+  });
+  const annRef = useRef(ann);
+  annRef.current = ann;
+  const docRef = useRef(hist.present);
+  docRef.current = hist.present;
+  const toolRef = useRef(tool);
+  toolRef.current = tool;
+  void selectionRev; // re-render trigger for the selection-dependent props above
+
+  const resetDrawing = () => {
+    annRef.current.reset();
+    setHist(historyOf(emptyDoc()));
+    setToolState(lastTool());
+    setSource(null);
+  };
+
+  const setTool = (t: Tool) => {
+    annRef.current.commitText();
+    if (t !== 'select') annRef.current.setSelectedId(null);
+    setToolState(t);
+    setHint(false);
+    try {
+      localStorage.setItem('overlay.tool', t);
+    } catch {
+      /* storage unavailable */
+    }
+  };
+
+  // Pixelation needs the pixels of the frozen screen — read them only when used.
+  useEffect(() => {
+    const st = s.current;
+    if (source || !st.sampler) return;
+    if (tool !== 'pixelate' && !hist.present.shapes.some((sh) => sh.type === 'pixelate')) return;
+    const { width, height } = st.bounds;
+    setSource({ data: st.sampler.getImageData(0, 0, width, height).data, width, height });
+  }, [tool, hist, source]);
+
+  // Last used color / size are shared with the editor.
+  useEffect(() => {
+    api
+      .settingsGet()
+      .then((v) => {
+        setColor(v.settings.editor.color || '#FF3B30');
+        setSize(v.settings.editor.size ?? 1);
+      })
+      .catch(() => {});
+  }, []);
+  const changeColor = (c: string) => {
+    setColor(c);
+    ann.setStyle({ color: c });
+    api.settingsPatch({ editor: { color: c, size } }).catch(() => {});
+  };
+  const changeSize = (v: number) => {
+    setSize(v);
+    ann.setStyle({ size: v });
+    api.settingsPatch({ editor: { color, size: v } }).catch(() => {});
   };
 
   // ------------------------------------------------------------ drawing
@@ -188,6 +302,14 @@ export default function Overlay() {
 
     if (st.prep?.showMagnifier && st.phase !== 'selected' && st.phase !== 'moving' && st.mouse.x >= 0) {
       drawMagnifier(ctx, st, k, W, H);
+    }
+
+    // Drawings are clipped to the selection (also while it is being moved / resized).
+    const g = clipRef.current;
+    if (g) {
+      const sel = st.selection ?? { x: 0, y: 0, width: 0, height: 0 };
+      g.clip({ x: sel.x, y: sel.y, width: sel.width, height: sel.height });
+      g.getLayer()?.batchDraw();
     }
   }
 
@@ -340,6 +462,7 @@ export default function Overlay() {
       setMode(p.mode);
       setHint(true);
       setBar(null);
+      resetDrawing();
       const img = new Image();
       img.crossOrigin = 'anonymous';
       img.src = shotUrl(p.image);
@@ -393,11 +516,36 @@ export default function Overlay() {
     s.current = emptyState();
     setImageSrc('');
     setBar(null);
+    resetDrawing();
     const c = canvasRef.current;
     c?.getContext('2d')?.clearRect(0, 0, c.width, c.height);
   });
 
   // ------------------------------------------------------------ actions
+  /** Selection image with the drawings on top, as PNG bytes. */
+  const renderAnnotated = async (sel: Rect): Promise<Uint8Array> => {
+    const st = s.current;
+    const out = document.createElement('canvas');
+    out.width = sel.width;
+    out.height = sel.height;
+    const ctx = out.getContext('2d')!;
+    ctx.drawImage(st.img!, sel.x, sel.y, sel.width, sel.height, 0, 0, sel.width, sel.height);
+    const stage = stageRef.current!;
+    const layer = shapesLayerRef.current!;
+    const old = { scale: stage.scale(), pos: stage.position() };
+    stage.scale({ x: 1, y: 1 });
+    stage.position({ x: 0, y: 0 });
+    try {
+      ctx.drawImage(layer.toCanvas({ x: sel.x, y: sel.y, width: sel.width, height: sel.height, pixelRatio: 1 }), 0, 0);
+    } finally {
+      stage.scale(old.scale);
+      stage.position(old.pos);
+      stage.batchDraw();
+    }
+    const blob = await new Promise<Blob>((resolve, reject) => out.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png'));
+    return new Uint8Array(await blob.arrayBuffer());
+  };
+
   const finish = useCallback(async (action: Action, rect?: Rect) => {
     const st = s.current;
     const sel = rect ?? st.selection;
@@ -407,11 +555,25 @@ export default function Overlay() {
     const b = st.prep.monitor.bounds;
     const target = { x: Math.round(sel.x + b.x), y: Math.round(sel.y + b.y), width: Math.round(sel.width), height: Math.round(sel.height) };
     try {
-      await api.overlayFinish(target, action);
+      const a = annRef.current;
+      a.commitText();
+      a.setSelectedId(null);
+      // Let React apply a pending text commit before reading the document.
+      await new Promise((r) => setTimeout(r, 30));
+      const shapes = docRef.current.shapes;
+      if (!shapes.length) {
+        await api.overlayFinish(target, action);
+        return;
+      }
+      const png = await renderAnnotated({ ...target, x: target.x - b.x, y: target.y - b.y });
+      // Document relative to the selection, so the editor can keep editing the drawings.
+      const doc = { version: 1, crop: null, scale: strokeScale(), shapes: shapes.map((sh) => translate(sh, -(target.x - b.x), -(target.y - b.y))) };
+      await api.overlayFinishAnnotated(target, action, png, JSON.stringify(doc));
     } catch (e) {
       finishing.current = false;
       console.error(e);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const cancel = useCallback(() => {
@@ -428,6 +590,7 @@ export default function Overlay() {
       return;
     }
     syncBar();
+    setSelectionRev((v) => v + 1);
   };
 
   // ------------------------------------------------------------ input
@@ -436,19 +599,23 @@ export default function Overlay() {
     return { x: Math.round(e.clientX * k), y: Math.round(e.clientY * k) };
   };
 
-  const onMouseMove = (e: React.MouseEvent) => {
+  const setCursor = (c: string) => {
+    const el = stageRef.current?.container();
+    if (el && el.style.cursor !== c) el.style.cursor = c;
+  };
+
+  const onMouseMove = (e: PointerLike) => {
     const st = s.current;
     if (!st.img) return;
     const p = point(e);
     st.mouse = p;
     st.shift = e.shiftKey;
-    const canvas = canvasRef.current!;
     const k = scale();
     switch (st.phase) {
       case 'idle':
         updateHover();
         if (Math.abs(p.x - st.lastQuery.x) + Math.abs(p.y - st.lastQuery.y) > 2) queryElements();
-        canvas.style.cursor = 'crosshair';
+        setCursor('crosshair');
         break;
       case 'pending':
       case 'drawing':
@@ -467,14 +634,17 @@ export default function Overlay() {
         break;
       case 'selected': {
         const h = st.selection ? hitHandle(st.selection, p.x, p.y, 8 * k) : null;
-        canvas.style.cursor = cursorFor(h, !!st.selection && contains(st.selection, p.x, p.y));
+        const inside = !!st.selection && contains(st.selection, p.x, p.y);
+        const t = toolRef.current;
+        if (h || t === 'select') setCursor(cursorFor(h, inside));
+        else setCursor(inside ? (t === 'text' ? 'text' : 'crosshair') : 'default');
         break;
       }
     }
     redraw();
   };
 
-  const onMouseDown = (e: React.MouseEvent) => {
+  const onMouseDown = (e: PointerLike) => {
     const st = s.current;
     if (!st.img || e.button !== 0) return;
     const p = point(e);
@@ -504,7 +674,7 @@ export default function Overlay() {
     redraw();
   };
 
-  const onMouseUp = (e: React.MouseEvent) => {
+  const onMouseUp = (e: PointerLike) => {
     const st = s.current;
     if (!st.img || e.button !== 0) return;
     switch (st.phase) {
@@ -527,21 +697,22 @@ export default function Overlay() {
         st.dragOrigin = null;
         st.handle = null;
         syncBar();
+        setSelectionRev((v) => v + 1);
         break;
     }
     redraw();
   };
 
-  const onDoubleClick = (e: React.MouseEvent) => {
+  const onDoubleClick = (e: PointerLike) => {
     const st = s.current;
     const p = point(e);
     if (st.selection && contains(st.selection, p.x, p.y)) finish('edit');
   };
 
-  const onContextMenu = (e: React.MouseEvent) => {
+  const onContextMenu = (e: { preventDefault: () => void }) => {
     e.preventDefault();
     const st = s.current;
-    if (st.selection && st.phase === 'selected' && !st.prep?.preselect) {
+    if (st.selection && st.phase === 'selected' && !st.prep?.preselect && !docRef.current.shapes.length) {
       st.selection = null;
       st.phase = 'idle';
       updateHover();
@@ -552,7 +723,42 @@ export default function Overlay() {
     }
   };
 
-  const onWheel = (e: React.WheelEvent) => {
+  // Konva stage on top receives all pointer events and routes them:
+  // selection handles → frame; shapes / drawing tool inside the selection → annotator;
+  // otherwise → selection logic (new region, moving the frame).
+  const stageDown = (e: Konva.KonvaEventObject<MouseEvent>) => {
+    const st = s.current;
+    if (!st.img || e.evt.button !== 0) return;
+    if (st.phase === 'selected' && st.selection) {
+      const p = point(e.evt);
+      const frameHandle = hitHandle(st.selection, p.x, p.y, 8 * scale());
+      const inside = contains(st.selection, p.x, p.y);
+      const toAnnotator = isHandle(e.target) || (!frameHandle && (shapeIdOf(e.target) !== null || (tool !== 'select' && inside)));
+      if (toAnnotator && ann.onMouseDown(e)) {
+        setHint(false);
+        return;
+      }
+      if (ann.textEdit) ann.commitText();
+      if (!frameHandle && inside && tool === 'select') ann.setSelectedId(null);
+      // Keep the drawings: no new region once something is drawn.
+      if (!frameHandle && !inside && docRef.current.shapes.length) return;
+    }
+    onMouseDown(e.evt);
+  };
+  const stageMove = (e: Konva.KonvaEventObject<MouseEvent>) => {
+    if (ann.onMouseMove(e)) return;
+    onMouseMove(e.evt);
+  };
+  const stageUp = (e: Konva.KonvaEventObject<MouseEvent>) => {
+    if (ann.onMouseUp()) return;
+    onMouseUp(e.evt);
+  };
+  const stageDblClick = (e: Konva.KonvaEventObject<MouseEvent>) => {
+    if (shapeIdOf(e.target) !== null || tool !== 'select') return;
+    onDoubleClick(e.evt);
+  };
+
+  const onWheel = (e: { deltaY: number }) => {
     const st = s.current;
     if (st.phase !== 'idle' || st.path.length < 2) return;
     st.level = Math.min(st.path.length - 1, Math.max(0, st.level + (e.deltaY < 0 ? 1 : -1)));
@@ -564,23 +770,26 @@ export default function Overlay() {
     const onKey = async (e: KeyboardEvent) => {
       const st = s.current;
       if (!st.img) return;
+      const a = annRef.current;
+      if (a.textEdit) return; // the textarea handles its own keys
       const ctrl = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
+      const code = e.code;
+      const selected = st.phase === 'selected' && !!st.selection;
       if (e.key === 'Escape') return cancel();
       if (e.key === 'Enter') {
         if (st.selection) return finish('edit');
         if (st.hover) return finish('edit', st.hover);
       }
-      if (ctrl && (e.code === 'KeyC' || key === 'c') && st.selection) return finish('copy');
-      if (ctrl && (e.code === 'KeyS' || key === 's') && st.selection) {
-        e.preventDefault();
-        return finish('save');
+      if (ctrl && selected) {
+        if (code === 'KeyC') return (e.preventDefault(), finish('copy'));
+        if (code === 'KeyS') return (e.preventDefault(), finish('save'));
+        if (code === 'KeyU') return (e.preventDefault(), finish('upload'));
+        if (code === 'KeyZ' && !e.shiftKey) return (e.preventDefault(), a.undo());
+        if ((code === 'KeyZ' && e.shiftKey) || code === 'KeyY') return (e.preventDefault(), a.redo());
       }
-      if (ctrl && (e.code === 'KeyU' || key === 'u') && st.selection) {
-        e.preventDefault();
-        return finish('upload');
-      }
-      if (!ctrl && (e.code === 'KeyC' || key === 'c') && st.sampler) {
+      if (selected && (e.key === 'Delete' || e.key === 'Backspace') && a.removeSelected()) return;
+      if (!ctrl && st.phase !== 'selected' && (code === 'KeyC' || key === 'c') && st.sampler) {
         const px = Math.min(Math.max(0, st.mouse.x), st.bounds.width - 1);
         const py = Math.min(Math.max(0, st.mouse.y), st.bounds.height - 1);
         const d = st.sampler.getImageData(px, py, 1, 1).data;
@@ -590,25 +799,32 @@ export default function Overlay() {
         window.setTimeout(() => setToast(null), 1400);
         return;
       }
-      if (!ctrl && (e.code === 'KeyF' || key === 'f')) {
+      if (!ctrl && (code === 'KeyF' || key === 'f') && !docRef.current.shapes.length) {
         select({ ...st.bounds });
         return redraw();
+      }
+      if (!ctrl && selected) {
+        const tk = code.startsWith('Key') ? code.slice(3).toLowerCase() : key;
+        if (TOOL_BY_KEY[tk]) return setTool(TOOL_BY_KEY[tk]);
+        if (['1', '2', '3'].includes(e.key)) return changeSize(Number(e.key) - 1);
       }
       const arrows: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
       if (arrows[e.key] && st.selection && st.phase === 'selected') {
         e.preventDefault();
         const step = e.shiftKey ? 10 : 1;
         const [dx, dy] = arrows[e.key];
+        if (!ctrl && a.nudgeSelected(dx * step, dy * step)) return;
         st.selection = ctrl
           ? clamp({ ...st.selection, width: Math.max(1, st.selection.width + dx * step), height: Math.max(1, st.selection.height + dy * step) }, st.bounds)
           : moveWithin(st.selection, dx * step, dy * step, st.bounds);
         syncBar();
+        setSelectionRev((v) => v + 1);
         redraw();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [cancel, finish]);
+  });
 
   // The window can be re-placed after a DPI change: re-layout and redraw.
   const [, setViewport] = useState(0);
@@ -629,10 +845,25 @@ export default function Overlay() {
   }, [mode, imageSrc]);
 
   // ------------------------------------------------------------ render
+  const [barSize, setBarSize] = useState({ w: 960, h: 52 });
+  const barObserver = useRef<ResizeObserver | null>(null);
+  const measureBar = useCallback((el: HTMLDivElement | null) => {
+    barObserver.current?.disconnect();
+    if (!el) return;
+    const update = () => {
+      const w = Math.ceil(el.offsetWidth);
+      const h = Math.ceil(el.offsetHeight);
+      setBarSize((old) => (old.w === w && old.h === h ? old : { w, h }));
+    };
+    barObserver.current = new ResizeObserver(update);
+    barObserver.current.observe(el);
+    update();
+  }, []);
   const k = typeof window !== 'undefined' ? scale() : 1;
   const pixelExact = Math.abs(k - (window.devicePixelRatio || 1)) < 0.01;
-  const barW = 336;
-  const barH = 52;
+  // The toolbar hugs its content; its measured size is used for placement.
+  const barW = Math.min(barSize.w, window.innerWidth - 16);
+  const barH = barSize.h;
   const barPos = bar
     ? actionBarPosition(
         { x: bar.sel.x / k, y: bar.sel.y / k, width: bar.sel.width / k, height: bar.sel.height / k },
@@ -642,11 +873,17 @@ export default function Overlay() {
         window.innerHeight,
       )
     : null;
+  const barUp = !!barPos && barPos.top > window.innerHeight / 2;
 
   return (
     <div
       className="fixed inset-0 overflow-hidden bg-black select-none"
       onMouseEnter={() => getCurrentWindow().setFocus().catch(() => {})}
+      onMouseLeave={() => {
+        s.current.mouse = { x: -1000, y: -1000 };
+        if (s.current.phase === 'idle') s.current.hover = null;
+        redraw();
+      }}
     >
       {imageSrc && (
         <img
@@ -659,22 +896,29 @@ export default function Overlay() {
           style={{ imageRendering: pixelExact ? 'pixelated' : 'auto' }}
         />
       )}
-      <canvas
-        ref={canvasRef}
-        className="absolute inset-0 h-full w-full"
+      <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 h-full w-full" />
+      {/* Drawings + input surface (stage units = physical pixels of the monitor). */}
+      <Stage
+        ref={stageRef}
+        className="absolute inset-0"
         style={{ cursor: 'crosshair' }}
-        onMouseMove={onMouseMove}
-        onMouseDown={onMouseDown}
-        onMouseUp={onMouseUp}
-        onDoubleClick={onDoubleClick}
-        onContextMenu={onContextMenu}
-        onWheel={onWheel}
-        onMouseLeave={() => {
-          s.current.mouse = { x: -1000, y: -1000 };
-          if (s.current.phase === 'idle') s.current.hover = null;
-          redraw();
-        }}
-      />
+        width={window.innerWidth}
+        height={window.innerHeight}
+        scaleX={1 / k}
+        scaleY={1 / k}
+        onMouseDown={stageDown}
+        onMouseMove={stageMove}
+        onMouseUp={stageUp}
+        onDblClick={stageDblClick}
+        onContextMenu={(e) => onContextMenu(e.evt)}
+        onWheel={(e) => onWheel(e.evt)}
+      >
+        <Layer ref={shapesLayerRef}>
+          <Group ref={clipRef}>{ann.shapeElements}</Group>
+        </Layer>
+        <Layer>{ann.uiElements}</Layer>
+      </Stage>
+      {ann.textArea}
 
       {hint && imageSrc && (
         <div className="animate-fade-in pointer-events-none absolute top-6 left-1/2 flex -translate-x-1/2 items-center gap-3 rounded-full bg-[#0c0e14]/90 px-5 py-2.5 text-[13px] text-text shadow-(--shadow-pop)">
@@ -698,36 +942,69 @@ export default function Overlay() {
 
       {barPos && (
         <div
-          className="animate-pop-in absolute flex items-center gap-1 rounded-[14px] bg-[#12141b]/95 p-1.5 shadow-(--shadow-pop) backdrop-blur"
-          style={{ left: barPos.left, top: barPos.top, width: barW, height: barH }}
+          ref={measureBar}
+          className="animate-pop-in absolute flex w-max flex-wrap items-center justify-end gap-1 rounded-[14px] bg-[#12141b]/95 p-1.5 shadow-(--shadow-pop) backdrop-blur"
+          style={{ left: barPos.left, top: barPos.top, maxWidth: window.innerWidth - 16 }}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <BarButton tip="Редактировать · Enter" onClick={() => finish('edit')}>
-            <Pencil size={20} />
+          <div className="flex items-center gap-0.5" role="toolbar" aria-label="Инструменты">
+            {OVERLAY_TOOLS.map((t) => (
+              <IconButton key={t.id} tip={`${t.label} · ${t.key}`} tipPos="top" active={tool === t.id} size={36} onClick={() => setTool(t.id)}>
+                {t.icon}
+              </IconButton>
+            ))}
+          </div>
+          <BarDivider />
+          <ColorPicker color={color} setColor={changeColor} compact up={barUp} />
+          <div className="flex items-center rounded-[10px] bg-white/5 p-0.5">
+            {[0, 1, 2].map((v) => (
+              <button
+                key={v}
+                data-tip={['Тонко · 1', 'Средне · 2', 'Толсто · 3'][v]}
+                data-tip-pos="top"
+                onClick={() => changeSize(v)}
+                className={clsx('flex h-8 w-8 items-center justify-center rounded-[8px] transition-colors', size === v ? 'bg-white/12' : 'hover:bg-white/6')}
+              >
+                <span className="rounded-full" style={{ width: [5, 9, 14][v], height: [5, 9, 14][v], background: color }} />
+              </button>
+            ))}
+          </div>
+          <BarDivider />
+          <IconButton tip="Отменить · Ctrl+Z" tipPos="top" size={34} disabled={!hist.past.length} onClick={ann.undo}>
+            <Undo2 size={18} />
+          </IconButton>
+          <IconButton tip="Повторить · Ctrl+Y" tipPos="top" size={34} disabled={!hist.future.length} onClick={ann.redo}>
+            <Redo2 size={18} />
+          </IconButton>
+          <BarDivider />
+          <BarButton tip="Открыть в редакторе · Enter" onClick={() => finish('edit')}>
+            <Pencil size={19} />
           </BarButton>
           <BarButton tip="Копировать · Ctrl+C" onClick={() => finish('copy')}>
-            <Copy size={20} />
+            <Copy size={19} />
           </BarButton>
           <BarButton tip="Сохранить в папку · Ctrl+S" onClick={() => finish('save')}>
-            <Download size={20} />
+            <Download size={19} />
           </BarButton>
-          <div className="mx-1 h-6 w-px bg-white/10" />
           <button
             data-tip="Загрузить в Box и скопировать ссылку · Ctrl+U"
-            data-tip-pos="top"
+            data-tip-pos="top-left"
             onClick={() => finish('upload')}
-            className="brand-gradient inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-[10px] text-[13.5px] font-semibold text-white transition hover:brightness-110"
+            className="brand-gradient inline-flex h-10 items-center justify-center gap-2 rounded-[10px] px-3.5 text-[13.5px] font-semibold text-white transition hover:brightness-110"
           >
             <Link2 size={18} /> Ссылка
           </button>
-          <div className="mx-1 h-6 w-px bg-white/10" />
           <BarButton tip="Отмена · Esc" onClick={cancel} danger>
-            <X size={20} />
+            <X size={19} />
           </BarButton>
         </div>
       )}
     </div>
   );
+}
+
+function BarDivider() {
+  return <div className="mx-1 h-6 w-px shrink-0 bg-white/10" />;
 }
 
 function BarButton({ children, tip, onClick, danger }: { children: ReactNode; tip: string; onClick: () => void; danger?: boolean }) {

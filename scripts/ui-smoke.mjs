@@ -118,6 +118,52 @@ const check = (cond, msg) => {
   await page.close();
 }
 
+// ---------------------------------------------------------------- drawing on the overlay
+{
+  const page = await browser.newPage({ viewport: { width: 1440, height: 810 } });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(`${base}?mock#/overlay`);
+  await page.waitForTimeout(900);
+  await page.mouse.move(200, 150);
+  await page.mouse.down();
+  await page.mouse.move(700, 500, { steps: 8 });
+  await page.mouse.up();
+  check(await page.getByRole('toolbar', { name: 'Инструменты' }).isVisible(), 'drawing toolbar appears after selection');
+  // arrow via hotkey, rectangle via toolbar button
+  await page.keyboard.press('a');
+  await page.mouse.move(300, 400);
+  await page.mouse.down();
+  await page.mouse.move(450, 260, { steps: 6 });
+  await page.mouse.up();
+  await page.getByRole('button', { name: 'Прямоугольник · R' }).click();
+  await page.mouse.move(480, 200);
+  await page.mouse.down();
+  await page.mouse.move(650, 300, { steps: 6 });
+  await page.mouse.up();
+  // a stroke outside the selection must not add a shape
+  await page.mouse.move(900, 600);
+  await page.mouse.down();
+  await page.mouse.move(1000, 700, { steps: 4 });
+  await page.mouse.up();
+  // resize the selection with its bottom-right handle while a tool is active
+  await page.mouse.move(700, 500);
+  await page.mouse.down();
+  await page.mouse.move(760, 540, { steps: 4 });
+  await page.mouse.up();
+  await page.keyboard.press('Control+c');
+  await page.waitForTimeout(800);
+  const c = await page.evaluate(() => window.__commits ?? []);
+  const k = 1920 / 1440;
+  const last = c[c.length - 1];
+  check(last?.cmd === 'overlay_finish_annotated', 'Ctrl+C sends the annotated image');
+  check(last?.shapes === 2, `drawings inside the selection only (got ${last?.shapes}, want 2)`);
+  check(last && Math.abs(last.width - Math.round(560 * k)) <= 2 && Math.abs(last.height - Math.round(390 * k)) <= 2, `image has the resized selection size (${last?.width}×${last?.height})`);
+  check(errors.length === 0, `no page errors ${errors.join('; ')}`);
+  await page.screenshot({ path: process.env.OUT_OVERLAY || '/tmp/overlay-smoke.png' });
+  await page.close();
+}
+
 await browser.close();
 if (failures) {
   console.error(`${failures} check(s) failed`);

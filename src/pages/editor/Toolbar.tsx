@@ -160,7 +160,7 @@ function Swatches({ color, setColor }: { color: string; setColor: (c: string) =>
   );
 }
 
-function ColorPicker({ color, setColor, compact }: { color: string; setColor: (c: string) => void; compact: boolean }) {
+export function ColorPicker({ color, setColor, compact, up }: { color: string; setColor: (c: string) => void; compact: boolean; up?: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -190,7 +190,11 @@ function ColorPicker({ color, setColor, compact }: { color: string; setColor: (c
         <ChevronDown size={14} className="text-muted" />
       </button>
       {open && (
-        <div className="animate-pop-in fixed z-40 mt-2 flex items-center gap-2 rounded-[12px] bg-elevated p-2.5 shadow-(--shadow-pop)">
+        <div
+          className="animate-pop-in fixed z-40 mt-2 flex items-center gap-2 rounded-[12px] bg-elevated p-2.5 shadow-(--shadow-pop)"
+          // `up`: open above the button (toolbar near the bottom of the screen).
+          style={up ? { transform: 'translateY(calc(-100% - 52px))' } : undefined}
+        >
           <Swatches
             color={color}
             setColor={(c) => {
