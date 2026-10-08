@@ -17,7 +17,7 @@ const settings: AppSettings = {
   imageFormat: 'png',
   jpegQuality: 90,
   hotkeys: { region: 'PrintScreen', window: 'Alt+PrintScreen', fullscreen: 'Control+PrintScreen', lastRegion: 'Shift+PrintScreen' },
-  box: { authMode: 'oAuth', clientId: 'k2x8v1n0q9example', enterpriseId: '', userId: '', folderId: '254711938204', sharedLinkAccess: 'open', redirectPort: 47615 },
+  box: { authMode: 'oAuth', clientId: 'k2x8v1n0q9example', enterpriseId: '', userId: '', folderId: '', folderName: 'AdvantShoter', sharedLinkAccess: 'open', redirectPort: 47615, redirectUri: '' },
   links: { rewrite: true, template: 'https://advant.one/{id}', copyAfterUpload: true, openAfterUpload: false },
   editor: { color: '#FF3B30', size: 1 },
   lastRegion: { x: 200, y: 120, width: 1280, height: 720 },
@@ -132,7 +132,19 @@ export async function installMocks() {
         case 'history_annotations':
           return JSON.stringify(sampleDoc);
         case 'box_status':
-          return { mode: 'oAuth', hasClientSecret: true, hasDeveloperToken: false, signedIn: true, redirectUri: 'http://localhost:47615/callback' };
+          return new URLSearchParams(location.search).has('signedout')
+            ? { mode: 'oAuth', ready: false, signedIn: false, account: null, builtinApp: true, customApp: false, hasClientSecret: false, hasDeveloperToken: false, redirectUri: 'http://localhost:47615/callback' }
+            : {
+                mode: 'oAuth',
+                ready: true,
+                signedIn: true,
+                account: { id: '1', name: 'Иван Петров', login: 'ivan.petrov@advant.one' },
+                builtinApp: true,
+                customApp: false,
+                hasClientSecret: false,
+                hasDeveloperToken: false,
+                redirectUri: 'http://localhost:47615/callback',
+              };
         case 'link_preview':
           return String(a.template).replace('{id}', '3rud4dfakga5r953wt77anhyzo27tm7r');
         case 'toast_current':

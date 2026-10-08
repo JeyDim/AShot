@@ -83,18 +83,25 @@ pub enum BoxAuthMode {
 #[serde(rename_all = "camelCase", default)]
 pub struct BoxSettings {
     pub auth_mode: BoxAuthMode,
+    /// Own Box app (advanced). Empty = the Box app built into this build, so users
+    /// only press "Sign in with Box".
     pub client_id: String,
     /// For Client Credentials: enterprise id (or empty when `user_id` is used).
     pub enterprise_id: String,
     /// For Client Credentials: act as this user instead of the service account.
     pub user_id: String,
     /// Destination folder id ("0" is the root "All files" folder).
+    /// Empty = folder `folder_name` in the root, created automatically.
     pub folder_id: String,
+    pub folder_name: String,
     /// Shared link access level: "open" (anyone with the link – needed for phones
     /// without a Box login), "company" or "collaborators".
     pub shared_link_access: String,
-    /// Port of the local OAuth redirect: `http://localhost:{port}/callback`.
+    /// Port of the default local OAuth redirect: `http://localhost:{port}/callback`.
     pub redirect_port: u16,
+    /// Redirect URI of the own Box app (advanced). Empty = the default local redirect.
+    /// A non-local URI (as in Greenshot) makes the app show the Box sign-in in its own window.
+    pub redirect_uri: String,
 }
 
 impl Default for BoxSettings {
@@ -104,15 +111,17 @@ impl Default for BoxSettings {
             client_id: String::new(),
             enterprise_id: String::new(),
             user_id: String::new(),
-            folder_id: "0".into(),
+            folder_id: String::new(),
+            folder_name: DEFAULT_BOX_FOLDER.into(),
             shared_link_access: "open".into(),
             redirect_port: 47615,
+            redirect_uri: String::new(),
         }
     }
 }
 
 impl BoxSettings {
-    pub fn redirect_uri(&self) -> String {
+    pub fn default_redirect_uri(&self) -> String {
         format!("http://localhost:{}/callback", self.redirect_port)
     }
 }
@@ -202,6 +211,7 @@ impl Default for AppSettings {
 }
 
 pub const MAX_HISTORY_LIMIT: u32 = 100;
+pub const DEFAULT_BOX_FOLDER: &str = "AdvantShoter";
 
 impl AppSettings {
     /// Clamps values coming from the UI or a hand-edited file.
@@ -209,9 +219,13 @@ impl AppSettings {
         self.history_limit = self.history_limit.clamp(1, MAX_HISTORY_LIMIT);
         self.jpeg_quality = self.jpeg_quality.clamp(10, 100);
         self.editor.size = self.editor.size.min(2);
-        if self.box_.folder_id.trim().is_empty() {
-            self.box_.folder_id = "0".into();
-        }
+        self.box_.folder_id = self.box_.folder_id.trim().to_string();
+        self.box_.redirect_uri = self.box_.redirect_uri.trim().to_string();
+        self.box_.folder_name = if self.box_.folder_name.trim().is_empty() {
+            DEFAULT_BOX_FOLDER.into()
+        } else {
+            crate::filename::sanitize(&self.box_.folder_name)
+        };
         if !matches!(self.box_.shared_link_access.as_str(), "open" | "company" | "collaborators") {
             self.box_.shared_link_access = "open".into();
         }
@@ -268,6 +282,10 @@ mod tests {
         assert_eq!(s.links.template, "https://advant.one/{id}");
         assert!(s.links.rewrite);
         assert_eq!(s.box_.shared_link_access, "open");
+        // No folder id needed: the "AdvantShoter" folder is created automatically.
+        assert!(s.box_.folder_id.is_empty());
+        assert_eq!(s.box_.folder_name, "AdvantShoter");
+        assert!(s.box_.client_id.is_empty(), "built-in Box app by default");
     }
 
     #[test]
@@ -303,7 +321,9 @@ mod tests {
         s.history_limit = 0;
         s.box_.shared_link_access = "public".into();
         s.links.template = "advant.one".into();
+        s.box_.folder_name = "  ".into();
         let s = s.sanitized();
+        assert_eq!(s.box_.folder_name, "AdvantShoter");
         assert_eq!(s.history_limit, 1);
         assert_eq!(s.box_.shared_link_access, "open");
         assert_eq!(s.links.template, "https://advant.one/{id}");

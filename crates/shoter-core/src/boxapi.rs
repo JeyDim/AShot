@@ -93,6 +93,8 @@ pub struct BoxClient {
     credentials: Mutex<Credentials>,
     cached: Mutex<Option<CachedToken>>,
     sink: Option<Arc<dyn TokenSink>>,
+    /// (parent id, folder name) → folder id, resolved once per client.
+    folders: Mutex<std::collections::HashMap<(String, String), String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -247,7 +249,14 @@ async fn api_error(resp: Response) -> BoxError {
 
 impl BoxClient {
     pub fn new(http: Client, endpoints: Endpoints, credentials: Credentials, sink: Option<Arc<dyn TokenSink>>) -> Self {
-        Self { http, endpoints, credentials: Mutex::new(credentials), cached: Mutex::new(None), sink }
+        Self {
+            http,
+            endpoints,
+            credentials: Mutex::new(credentials),
+            cached: Mutex::new(None),
+            sink,
+            folders: Mutex::new(std::collections::HashMap::new()),
+        }
     }
 
     /// Returns a valid access token, refreshing it when needed. Serialised by a mutex so
@@ -410,6 +419,38 @@ impl BoxClient {
         let file = self.upload(folder_id, file_name, bytes, mime).await?;
         let shared_link = self.create_shared_link(&file.id, access).await?;
         Ok(UploadResult { file_id: file.id, file_name: file.name, shared_link })
+    }
+
+    /// Id of the folder `name` inside `parent_id`, creating it when it does not exist.
+    pub async fn ensure_folder(&self, parent_id: &str, name: &str) -> Result<String> {
+        let key = (parent_id.to_string(), name.to_string());
+        if let Some(id) = self.folders.lock().await.get(&key) {
+            return Ok(id.clone());
+        }
+        let url = format!("{}/folders?fields=id,name", self.endpoints.api);
+        let body = serde_json::json!({ "name": name, "parent": { "id": parent_id } });
+        let resp = self.send_authorized(|t| self.http.post(&url).bearer_auth(t).json(&body)).await?;
+        let status = resp.status();
+        let id = if status.is_success() {
+            let v: serde_json::Value = resp.json().await?;
+            v["id"].as_str().map(str::to_string)
+        } else if status == StatusCode::CONFLICT {
+            // Already exists: Box returns the existing item in context_info.conflicts
+            // (an array for folders, an object in some responses).
+            let v: serde_json::Value = resp.json().await.unwrap_or_default();
+            let conflicts = &v["context_info"]["conflicts"];
+            let item = if conflicts.is_array() { &conflicts[0] } else { conflicts };
+            match (item["type"].as_str(), item["id"].as_str()) {
+                (Some("folder") | None, Some(id)) => Some(id.to_string()),
+                // A *file* with that name is in the way – fall back to the parent folder.
+                _ => Some(parent_id.to_string()),
+            }
+        } else {
+            return Err(api_error(resp).await);
+        };
+        let id = id.ok_or_else(|| BoxError::Unexpected("Box не вернул id папки".into()))?;
+        self.folders.lock().await.insert(key, id.clone());
+        Ok(id)
     }
 
     pub async fn delete_file(&self, file_id: &str) -> Result<()> {
@@ -621,6 +662,37 @@ mod tests {
             }
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn ensures_folder_once() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/2.0/folders"))
+            .and(body_string_contains("\"name\":\"AdvantShoter\""))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({ "id": "555", "name": "AdvantShoter" })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = BoxClient::new(http_client(), endpoints(&server), Credentials::DeveloperToken("T".into()), None);
+        assert_eq!(client.ensure_folder("0", "AdvantShoter").await.unwrap(), "555");
+        // cached – no second request
+        assert_eq!(client.ensure_folder("0", "AdvantShoter").await.unwrap(), "555");
+    }
+
+    #[tokio::test]
+    async fn existing_folder_is_reused() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/2.0/folders"))
+            .respond_with(ResponseTemplate::new(409).set_body_json(serde_json::json!({
+                "code": "item_name_in_use",
+                "context_info": { "conflicts": [{ "type": "folder", "id": "777", "name": "AdvantShoter" }] }
+            })))
+            .mount(&server)
+            .await;
+        let client = BoxClient::new(http_client(), endpoints(&server), Credentials::DeveloperToken("T".into()), None);
+        assert_eq!(client.ensure_folder("0", "AdvantShoter").await.unwrap(), "777");
     }
 
     #[test]

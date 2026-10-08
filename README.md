@@ -76,24 +76,56 @@
 
 ## Подключение Box.com
 
-Настройки → **Box.com**. Поддерживаются три способа:
+Для пользователя — **одна кнопка**: «Войти в Box» в трее (или в «Настройки → Box.com»).
+Открывается сайт Box, пользователь входит и нажимает «Предоставить доступ» — всё.
+Если вход ещё не выполнен (или токен истёк), при нажатии «Ссылка» сайт Box откроется сам,
+а загрузка продолжится после входа. Снимки попадают в папку **AdvantShoter** в Box (создаётся
+автоматически), ID папки указывать не нужно.
 
-1. **Вход через браузер (OAuth 2.0)** — рекомендуемый для сотрудников.
-   1. [Box Developer Console](https://app.box.com/developers/console) → *Create Platform App* →
-      *Custom App* → **User Authentication (OAuth 2.0)**.
-   2. В *Configuration*: Redirect URI `http://localhost:47615/callback`,
-      Application Scopes: **Read and write all files and folders**.
-   3. Скопируйте *Client ID* и *Client Secret* в AdvantShoter → «Войти через браузер».
-2. **Сервисный аккаунт (Client Credentials Grant)** — без входа пользователей: приложение типа
-   *Server Authentication (Client Credentials Grant)*, одобренное администратором Box; нужны Client ID,
-   Client Secret и Enterprise ID (или User ID, чтобы загружать от имени пользователя).
-3. **Developer token** — временный токен из консоли (60 минут), для проверки.
+### Однократная настройка (администратор)
 
-Далее укажите **ID папки** (число из `app.box.com/folder/<ID>`, `0` — корень) и доступ по ссылке.
+Ключи приложения Box зашиваются в сборку из секретов GitHub — пользователи их не вводят.
+
+1. Сделайте репозиторий **приватным** (Settings → General → Change visibility): иначе
+   собранный exe с ключом сможет скачать любой.
+2. Возьмите ключи существующего приложения Box (например, того, что зашит в ваш Greenshot)
+   или создайте новое в [Box Developer Console](https://app.box.com/developers/console):
+   *Custom App → User Authentication (OAuth 2.0)*, scope **Read and write all files and folders**.
+3. Добавьте в GitHub → Settings → Secrets and variables → **Actions**:
+
+   | Секрет | Значение |
+   | --- | --- |
+   | `BOX_CLIENT_ID` | Client ID приложения Box |
+   | `BOX_CLIENT_SECRET` | Client Secret |
+   | `BOX_REDIRECT_URI` | Redirect URI, указанный у приложения Box |
+
+   Redirect URI можно взять любой из прописанных у приложения:
+   `http://localhost:<порт>/...` — вход откроется в браузере; любой другой адрес (например,
+   как у Greenshot `https://…/authorize/box`) — вход откроется в окне AdvantShoter, адрес
+   перехватывается и сам может не существовать. Поэтому приложение Box от Greenshot можно
+   использовать без изменений в консоли Box. Если `BOX_REDIRECT_URI` не задан —
+   `http://localhost:47615/callback`.
+4. Перезапустите сборку (Actions → Build → Re-run) — в новой версии кнопка входа заработает.
+
+Если в Box включено «новые приложения отключены по умолчанию», администратор Box должен
+разрешить приложение: Admin Console → Apps → Custom Apps Manager.
+
+Ключ, зашитый в программу, можно извлечь из exe (как и у Greenshot) — поэтому сборки
+не публикуются наружу.
+
+### Другие способы (Настройки → Box.com → Дополнительно)
+
+- **Своё приложение Box** — Client ID / Secret / Redirect URI вручную (если сборка без встроенного).
+- **Сервисный аккаунт (Client Credentials Grant)** — без входа пользователей: приложение типа
+  *Server Authentication (Client Credentials Grant)*, одобренное администратором; нужны Client ID,
+  Client Secret и Enterprise ID (или User ID).
+- **Developer token** — временный токен из консоли (60 минут), для проверки.
+- **ID папки** вместо имени — число из `app.box.com/folder/<ID>`.
+
 Чтобы ссылка открывалась на телефоне без входа, нужен доступ **«Все, у кого есть ссылка» (open)** —
-если администратор Box его запретил, приложение предупредит.
+если администратор Box его запретил, приложение создаст ссылку с доступом по умолчанию и предупредит.
 
-Секреты (Client Secret, токены) хранятся отдельно от настроек и зашифрованы Windows DPAPI
+Токены хранятся отдельно от настроек и зашифрованы Windows DPAPI
 (`%APPDATA%\one.advant.shoter\secrets.dat`).
 
 ## Ссылки advant.one

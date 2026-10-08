@@ -27,8 +27,10 @@ export interface BoxSettings {
   enterpriseId: string;
   userId: string;
   folderId: string;
+  folderName: string;
   sharedLinkAccess: 'open' | 'company' | 'collaborators';
   redirectPort: number;
+  redirectUri: string;
 }
 
 export interface LinkSettings {
@@ -136,9 +138,13 @@ export interface AppInfo {
 
 export interface BoxStatus {
   mode: BoxAuthMode;
+  ready: boolean;
+  signedIn: boolean;
+  account: BoxUser | null;
+  builtinApp: boolean;
+  customApp: boolean;
   hasClientSecret: boolean;
   hasDeveloperToken: boolean;
-  signedIn: boolean;
   redirectUri: string;
 }
 

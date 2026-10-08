@@ -1,12 +1,15 @@
 //! What happens with a screenshot: copy, save, upload to Box, open in the editor.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use chrono::Local;
 use image::RgbaImage;
 use serde::Serialize;
 use shoter_core::history::HistoryItem;
-use shoter_core::settings::ImageFormat;
+use shoter_core::boxapi::{self, BoxError, BoxUser, UploadResult};
+use shoter_core::oauth;
+use shoter_core::settings::{BoxAuthMode, ImageFormat};
 use shoter_core::{filename, imaging, links};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
@@ -171,28 +174,37 @@ pub async fn upload_item(app: &AppHandle, id: &str) -> Result<String, String> {
     let (item, png) = read_current(app, id)?;
     ui::toast(app, Toast::progress("Загрузка в Box…").message(format!("{} × {}", item.width, item.height)).item(id));
 
-    let result = async {
-        let client = state.box_client(app)?;
-        let format = settings.image_format;
-        let quality = settings.jpeg_quality;
-        let data = tauri::async_runtime::spawn_blocking(move || encode_as(png, format, quality))
-            .await
-            .map_err(|e| e.to_string())??;
-        let name = format!(
-            "{}.{}",
-            filename::format(&settings.file_name_pattern, Local::now(), item.width, item.height),
-            format.extension()
-        );
-        let mime = match format {
-            ImageFormat::Png => "image/png",
-            ImageFormat::Jpeg => "image/jpeg",
+    let format = settings.image_format;
+    let quality = settings.jpeg_quality;
+    let data = tauri::async_runtime::spawn_blocking(move || encode_as(png, format, quality))
+        .await
+        .map_err(|e| e.to_string())??;
+    let name = format!(
+        "{}.{}",
+        filename::format(&settings.file_name_pattern, Local::now(), item.width, item.height),
+        format.extension()
+    );
+    let mime = match format {
+        ImageFormat::Png => "image/png",
+        ImageFormat::Jpeg => "image/jpeg",
+    };
+
+    let mut result = upload_once(app, &name, data.clone(), mime).await;
+    // Not signed in yet / token expired or revoked: open the Box sign-in page right away
+    // and continue the upload after the user grants access — like Greenshot.
+    if settings.box_.auth_mode == BoxAuthMode::OAuth && matches!(result, Err(BoxError::NotConfigured(_) | BoxError::Auth(_))) {
+        result = match box_login(app).await {
+            Ok(_) => {
+                ui::toast(app, Toast::progress("Загрузка в Box…").message(format!("{} × {}", item.width, item.height)).item(id));
+                upload_once(app, &name, data, mime).await
+            }
+            Err(e) => {
+                ui::toast(app, Toast::error("Вход в Box не выполнен", e.clone()).item(id));
+                return Err(e);
+            }
         };
-        client
-            .upload_and_share(&settings.box_.folder_id, &name, data, mime, &settings.box_.shared_link_access)
-            .await
-            .map_err(|e| e.to_string())
     }
-    .await;
+    let result = result.map_err(|e| e.to_string());
 
     let uploaded = match result {
         Ok(r) => r,
@@ -235,4 +247,89 @@ pub async fn upload_item(app: &AppHandle, id: &str) -> Result<String, String> {
     }
     ui::toast(app, toast);
     Ok(share)
+}
+
+async fn upload_once(app: &AppHandle, name: &str, data: Vec<u8>, mime: &str) -> Result<UploadResult, BoxError> {
+    let state = app.state::<AppState>();
+    let settings = state.settings();
+    let client = state.box_client(app).map_err(BoxError::NotConfigured)?;
+    let folder = if settings.box_.folder_id.is_empty() {
+        client.ensure_folder("0", &settings.box_.folder_name).await?
+    } else {
+        settings.box_.folder_id.clone()
+    };
+    client.upload_and_share(&folder, name, data, mime, &settings.box_.shared_link_access).await
+}
+
+/// "Sign in with Box": opens the Box authorization page in the browser and waits for
+/// the redirect to the local port. Used by the button in the UI and automatically
+/// before the first upload. Starting a new sign-in cancels a pending one.
+pub async fn box_login(app: &AppHandle) -> Result<BoxUser, String> {
+    let state = app.state::<AppState>();
+    state.box_login_cancel.notify_waiters();
+    let _guard = state.box_login.lock().await;
+
+    let oauth_app = state.oauth_app().ok_or(
+        "в этой сборке нет встроенного приложения Box — укажите Client ID и Client Secret в «Настройки → Box.com → Дополнительно»",
+    )?;
+    let endpoints = boxapi::Endpoints::default();
+    let csrf = shoter_core::random_string(24);
+    let authorize = boxapi::authorize_url(&endpoints, &oauth_app.client_id, &oauth_app.redirect_uri, &csrf);
+
+    let code = if let Some(port) = oauth::loopback_port(&oauth_app.redirect_uri) {
+        // Local redirect: sign in in the system browser (existing Box / SSO session).
+        let path = url_path(&oauth_app.redirect_uri);
+        let listener = oauth::bind(port).await.map_err(|e| e.to_string())?;
+        app.opener().open_url(authorize, None::<&str>).map_err(|e| e.to_string())?;
+        ui::toast(
+            app,
+            Toast::progress("Вход в Box").message("В браузере открылся сайт Box: войдите и нажмите «Предоставить доступ»."),
+        );
+        tokio::select! {
+            r = oauth::wait_for_code(listener, &csrf, &path, Duration::from_secs(300)) => r.map_err(|e| e.to_string())?,
+            _ = state.box_login_cancel.notified() => return Err("вход отменён".into()),
+        }
+    } else {
+        // Any other redirect URI (e.g. the one of an existing Greenshot Box app):
+        // Box opens in our own window and the redirect is intercepted there.
+        tokio::select! {
+            r = ui::box_login_window(app, &authorize, &oauth_app.redirect_uri, &csrf) => r?,
+            _ = state.box_login_cancel.notified() => {
+                ui::close_box_login_window(app);
+                return Err("вход отменён".into());
+            }
+        }
+    };
+    let (client_id, client_secret, redirect_uri) = (oauth_app.client_id, oauth_app.client_secret, oauth_app.redirect_uri);
+    let tokens = boxapi::exchange_code(&boxapi::http_client(), &endpoints, &client_id, &client_secret, &code, &redirect_uri)
+        .await
+        .map_err(|e| e.to_string())?;
+    state.update_secrets(|s| s.box_oauth = Some(tokens))?;
+    state.reset_box_client();
+    let user = state.box_client(app)?.current_user().await.map_err(|e| e.to_string())?;
+    state.update_secrets(|s| s.box_account = Some(user.clone()))?;
+    let _ = app.emit("box:changed", ());
+    let who = if user.name.is_empty() { user.login.clone() } else { format!("{} · {}", user.name, user.login) };
+    ui::toast(app, Toast::success("Box подключён").message(who));
+    Ok(user)
+}
+
+pub fn box_logout(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    state.box_login_cancel.notify_waiters();
+    state.update_secrets(|s| {
+        s.box_oauth = None;
+        s.box_account = None;
+    })?;
+    state.reset_box_client();
+    let _ = app.emit("box:changed", ());
+    Ok(())
+}
+
+fn url_path(uri: &str) -> String {
+    uri.split_once("://")
+        .and_then(|(_, rest)| rest.find('/').map(|i| rest[i..].to_string()))
+        .map(|p| p.split(['?', '#']).next().unwrap_or("/").to_string())
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| "/".into())
 }

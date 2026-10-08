@@ -24,13 +24,14 @@ import { IconButton, Kbd, Logo, Spinner, Switch } from '../components/ui';
 import { relativeTime, sizeLabel } from '../lib/format';
 import { useKeyDown, useTauriEvent } from '../lib/hooks';
 import { api, errorText, shotUrl } from '../lib/ipc';
-import type { AppSettings, CaptureMode, HistoryItem } from '../lib/types';
+import type { AppSettings, BoxStatus, CaptureMode, HistoryItem } from '../lib/types';
 
 export default function TrayPanel() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [version, setVersion] = useState('');
-  const [boxReady, setBoxReady] = useState<boolean | null>(null);
+  const [box, setBox] = useState<BoxStatus | null>(null);
+  const [signingIn, setSigningIn] = useState(false);
   const [busy, setBusy] = useState<Record<string, string>>({});
   const [, setTick] = useState(0);
   const [animKey, setAnimKey] = useState(0);
@@ -40,13 +41,7 @@ export default function TrayPanel() {
       const [s, list, status] = await Promise.all([api.settingsGet(), api.historyList(), api.boxStatus()]);
       setSettings(s.settings);
       setItems(list);
-      setBoxReady(
-        status.mode === 'developerToken'
-          ? status.hasDeveloperToken
-          : status.mode === 'clientCredentials'
-            ? status.hasClientSecret && !!s.settings.box.clientId
-            : status.signedIn,
-      );
+      setBox(status);
     } catch (e) {
       console.error(e);
     }
@@ -60,6 +55,7 @@ export default function TrayPanel() {
   }, [refresh]);
 
   useTauriEvent('history:changed', () => refresh());
+  useTauriEvent('box:changed', () => refresh());
   useTauriEvent<AppSettings>('settings:changed', (e) => setSettings(e.payload));
   useTauriEvent('panel:shown', () => {
     refresh();
@@ -170,12 +166,34 @@ export default function TrayPanel() {
           <FooterButton icon={<FolderOpen size={15} />} onClick={() => api.openFolder('save')}>
             Папка снимков
           </FooterButton>
-          <FooterButton
-            icon={<span className={clsx('h-2 w-2 rounded-full', boxReady ? 'bg-success' : 'bg-warning')} />}
-            onClick={() => api.openSettings('box')}
-          >
-            {boxReady ? 'Box подключён' : 'Подключить Box'}
-          </FooterButton>
+          {box?.ready ? (
+            <FooterButton
+              icon={<span className="h-2 w-2 rounded-full bg-success" />}
+              tip={box.account ? `${box.account.name}\n${box.account.login}` : 'Box подключён'}
+              onClick={() => api.openSettings('box')}
+            >
+              <span className="max-w-[150px] truncate">{box.account?.name || 'Box подключён'}</span>
+            </FooterButton>
+          ) : (
+            <FooterButton
+              icon={signingIn ? <Spinner size={13} /> : <span className="h-2 w-2 rounded-full bg-warning" />}
+              tip="Откроется сайт Box — войдите и нажмите «Предоставить доступ»"
+              onClick={async () => {
+                if (box && box.mode !== 'oAuth') return api.openSettings('box');
+                setSigningIn(true);
+                try {
+                  await api.boxLogin();
+                } catch {
+                  /* the error is shown in a toast */
+                } finally {
+                  setSigningIn(false);
+                  refresh();
+                }
+              }}
+            >
+              {signingIn ? 'Вход в Box…' : 'Войти в Box'}
+            </FooterButton>
+          )}
           <div className="flex-1" />
           <IconButton tip="Выйти из AdvantShoter" tipPos="top-left" size={30} tone="danger" onClick={() => api.quit()}>
             <Power size={15} />
@@ -227,10 +245,12 @@ function CaptureTile({
   );
 }
 
-function FooterButton({ icon, children, onClick }: { icon: ReactNode; children: ReactNode; onClick: () => void }) {
+function FooterButton({ icon, children, onClick, tip }: { icon: ReactNode; children: ReactNode; onClick: () => void; tip?: string }) {
   return (
     <button
       onClick={onClick}
+      data-tip={tip}
+      data-tip-pos="top"
       className="inline-flex h-[30px] items-center gap-2 rounded-[8px] px-2.5 text-[12.5px] text-muted transition-colors hover:bg-white/6 hover:text-text"
     >
       {icon}

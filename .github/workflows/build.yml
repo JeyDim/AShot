@@ -60,6 +60,12 @@ jobs:
       - run: npm ci
       - name: Build installer (NSIS + MSI)
         run: npx tauri build
+        env:
+          # Built-in Box app: users only press "Sign in with Box" (see README).
+          # Empty when the secrets are not set – then the app asks for an own Box app.
+          SHOTER_BOX_CLIENT_ID: ${{ secrets.BOX_CLIENT_ID }}
+          SHOTER_BOX_CLIENT_SECRET: ${{ secrets.BOX_CLIENT_SECRET }}
+          SHOTER_BOX_REDIRECT_URI: ${{ secrets.BOX_REDIRECT_URI }}
       - name: Collect artifacts
         shell: pwsh
         run: |

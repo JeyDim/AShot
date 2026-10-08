@@ -342,3 +342,60 @@ pub fn open_editor(app: &AppHandle, id: &str) {
         let _ = window.set_focus();
     }
 }
+
+// ---------------------------------------------------------------- Box sign-in window
+
+const BOX_LOGIN: &str = "box-login";
+
+/// Shows the Box authorization page in an app window and waits until Box redirects
+/// to `redirect_uri`; the navigation is intercepted, so that URL never has to exist.
+pub async fn box_login_window(app: &AppHandle, authorize_url: &str, redirect_uri: &str, state: &str) -> Result<String, String> {
+    use std::sync::{Arc, Mutex};
+    close_box_login_window(app);
+    let url: tauri::Url = authorize_url.parse().map_err(|e| format!("некорректный адрес Box: {e}"))?;
+    let (tx, rx) = tokio::sync::oneshot::channel::<Result<String, String>>();
+    let tx = Arc::new(Mutex::new(Some(tx)));
+
+    let nav_tx = tx.clone();
+    let redirect = redirect_uri.to_string();
+    let expected = state.to_string();
+    let window = WebviewWindowBuilder::new(app, BOX_LOGIN, WebviewUrl::External(url))
+        .title("Вход в Box — AdvantShoter")
+        .inner_size(560.0, 760.0)
+        .min_inner_size(420.0, 560.0)
+        .center()
+        .focused(true)
+        .on_navigation(move |u| {
+            if !shoter_core::oauth::is_redirect(u.as_str(), &redirect) {
+                return true;
+            }
+            let result = shoter_core::oauth::code_from_redirect(u.as_str(), &expected).map_err(|e| e.to_string());
+            if let Some(tx) = nav_tx.lock().unwrap().take() {
+                let _ = tx.send(result);
+            }
+            false
+        })
+        .build()
+        .map_err(|e| e.to_string())?;
+    let close_tx = tx.clone();
+    window.on_window_event(move |event| {
+        if let WindowEvent::Destroyed = event {
+            if let Some(tx) = close_tx.lock().unwrap().take() {
+                let _ = tx.send(Err("окно входа закрыто".into()));
+            }
+        }
+    });
+    let _ = window.set_focus();
+    let result = tokio::time::timeout(Duration::from_secs(600), rx)
+        .await
+        .map_err(|_| "время ожидания входа истекло".to_string())?
+        .unwrap_or_else(|_| Err("вход прерван".into()));
+    close_box_login_window(app);
+    result
+}
+
+pub fn close_box_login_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window(BOX_LOGIN) {
+        let _ = w.close();
+    }
+}

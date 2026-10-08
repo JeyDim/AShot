@@ -1,12 +1,12 @@
 // Settings window.
 import clsx from 'clsx';
-import { Cloud, FolderOpen, Keyboard, Link2, LogIn, LogOut, MousePointerClick, Save, ShieldCheck, SlidersHorizontal } from 'lucide-react';
+import { ChevronRight, Cloud, FolderOpen, Keyboard, Link2, LogIn, LogOut, MousePointerClick, Save, ShieldCheck, SlidersHorizontal } from 'lucide-react';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Button, Input, Kbd, Logo, Segmented, Select, Switch } from '../components/ui';
+import { Button, Input, Kbd, Logo, Segmented, Select, Spinner, Switch } from '../components/ui';
 import { acceleratorFromEvent } from '../lib/format';
 import { useTauriEvent } from '../lib/hooks';
 import { api, errorText } from '../lib/ipc';
-import type { AppSettings, BoxStatus, BoxUser, Hotkeys, SettingsView } from '../lib/types';
+import type { AppSettings, BoxStatus, Hotkeys, SettingsView } from '../lib/types';
 
 type Section = 'general' | 'hotkeys' | 'saving' | 'box' | 'links';
 
@@ -339,9 +339,9 @@ function BoxSection({ draft, set }: { draft: AppSettings; set: SetFn }) {
   const [status, setStatus] = useState<BoxStatus | null>(null);
   const [secret, setSecret] = useState('');
   const [token, setToken] = useState('');
-  const [user, setUser] = useState<BoxUser | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  const [advanced, setAdvanced] = useState(false);
   const box = draft.box;
   const setBox = (patch: Partial<AppSettings['box']>) => set('box', { ...box, ...patch });
 
@@ -349,6 +349,12 @@ function BoxSection({ draft, set }: { draft: AppSettings; set: SetFn }) {
   useEffect(() => {
     refresh();
   }, []);
+  useTauriEvent('box:changed', () => refresh());
+  // Builds without an embedded Box app need the advanced fields.
+  useEffect(() => {
+    if (status && (box.authMode !== 'oAuth' || (!status.builtinApp && !status.customApp))) setAdvanced(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status?.builtinApp, status?.customApp]);
 
   const run = async (name: string, fn: () => Promise<void>) => {
     setBusy(name);
@@ -377,86 +383,92 @@ function BoxSection({ draft, set }: { draft: AppSettings; set: SetFn }) {
     }
   };
 
+  const login = () =>
+    run('login', async () => {
+      await persist();
+      await api.boxLogin();
+    });
   const test = () =>
     run('test', async () => {
       await persist();
       const u = await api.boxTest();
-      setUser(u);
-      setMsg({ kind: 'ok', text: `Подключено: ${u.name || u.login} ${u.login ? `(${u.login})` : ''}` });
+      setMsg({ kind: 'ok', text: `Подключено: ${u.name || u.login}${u.login ? ` (${u.login})` : ''}` });
     });
 
-  const login = () =>
-    run('login', async () => {
-      await persist();
-      const u = await api.boxLogin();
-      setUser(u);
-      setMsg({ kind: 'ok', text: `Вход выполнен: ${u.name || u.login}` });
-    });
+  const oauth = box.authMode === 'oAuth';
+  const noApp = oauth && status && !status.builtinApp && !status.customApp;
+  const account = status?.account;
 
   return (
     <>
-      <Title sub="Снимки загружаются в папку Box, ссылка создаётся автоматически">Box.com</Title>
-      <Card title="Способ подключения">
-        <div className="p-3">
-          <Segmented
-            value={box.authMode}
-            onChange={(v) => setBox({ authMode: v })}
-            options={[
-              { value: 'oAuth', label: 'Вход через браузер' },
-              { value: 'clientCredentials', label: 'Сервисный аккаунт' },
-              { value: 'developerToken', label: 'Developer token' },
-            ]}
-          />
-          <p className="mt-2.5 px-1 text-[12px] leading-relaxed text-subtle">
-            {box.authMode === 'oAuth' && (
-              <>
-                Приложение Box с типом «User Authentication (OAuth 2.0)». В Redirect URI укажите <span className="font-mono text-muted">{status?.redirectUri ?? `http://localhost:${box.redirectPort}/callback`}</span>.
-              </>
-            )}
-            {box.authMode === 'clientCredentials' && <>Приложение Box с типом «Server Authentication (Client Credentials Grant)», одобренное администратором. Файлы попадут в папку сервисного аккаунта или указанного пользователя.</>}
-            {box.authMode === 'developerToken' && <>Временный токен из консоли разработчика Box (действует 60 минут) — для проверки.</>}
-          </p>
-        </div>
-      </Card>
+      <Title sub="Снимки загружаются в ваш Box, ссылка advant.one сразу копируется">Box.com</Title>
 
-      <Card title="Учётные данные">
-        {box.authMode !== 'developerToken' && (
-          <>
-            <Row label="Client ID" stack>
-              <Input value={box.clientId} onChange={(e) => setBox({ clientId: e.target.value.trim() })} placeholder="abc123…" />
-            </Row>
-            <Row label="Client Secret" hint={status?.hasClientSecret ? 'Сохранён (зашифрован Windows DPAPI). Введите новый, чтобы заменить.' : 'Хранится зашифрованным (Windows DPAPI)'} stack>
-              <Input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={status?.hasClientSecret ? '••••••••••••' : ''} />
-            </Row>
-          </>
-        )}
-        {box.authMode === 'clientCredentials' && (
-          <div className="grid grid-cols-2 divide-x divide-border">
-            <Row label="Enterprise ID" stack>
-              <Input value={box.enterpriseId} onChange={(e) => setBox({ enterpriseId: e.target.value.trim() })} />
-            </Row>
-            <Row label="User ID (необязательно)" stack>
-              <Input value={box.userId} onChange={(e) => setBox({ userId: e.target.value.trim() })} />
-            </Row>
+      {/* Account */}
+      <section className="mb-4 rounded-[16px] bg-surface p-5 ring-1 ring-inset ring-border">
+        {oauth && status?.signedIn ? (
+          <div className="flex items-center gap-4">
+            <div className="brand-gradient flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-[18px] font-semibold text-white">
+              {(account?.name || account?.login || 'B').slice(0, 1).toUpperCase()}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="truncate text-[15px] font-semibold">{account?.name || 'Аккаунт Box'}</span>
+                <span className="rounded-full bg-success/15 px-2 py-0.5 text-[11px] font-medium text-success">подключено</span>
+              </div>
+              <div className="truncate text-[12.5px] text-muted">{account?.login}</div>
+            </div>
+            <Button icon={<LogOut size={16} />} onClick={() => run('logout', () => api.boxLogout())}>
+              Выйти
+            </Button>
+          </div>
+        ) : oauth ? (
+          <div className="flex flex-col items-center gap-3 py-2 text-center">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-accent-soft text-[#b4b4ff]">
+              <Cloud size={28} />
+            </div>
+            <div>
+              <div className="text-[15px] font-semibold">Войдите в Box, чтобы получать ссылки</div>
+              <div className="mt-1 text-[12.5px] leading-relaxed text-muted">
+                Откроется сайт Box — войдите и нажмите «Предоставить доступ». Ключи и ID вводить не нужно.
+              </div>
+            </div>
+            {busy === 'login' ? (
+              <div className="flex items-center gap-3">
+                <span className="flex items-center gap-2 text-[13px] text-muted">
+                  <Spinner size={16} /> Ждём вход в браузере…
+                </span>
+                <Button size="sm" variant="ghost" onClick={() => api.boxLogout()}>
+                  Отмена
+                </Button>
+              </div>
+            ) : (
+              <Button variant="primary" size="lg" icon={<LogIn size={18} />} disabled={!!noApp} onClick={login}>
+                Войти через Box
+              </Button>
+            )}
+            {noApp && (
+              <p className="text-[12px] text-warning">
+                Эта сборка без встроенного приложения Box — укажите своё в «Дополнительно» ниже.
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 text-[13px]">
+            <ShieldCheck size={18} className={status?.ready ? 'text-success' : 'text-subtle'} />
+            <span className="flex-1">{box.authMode === 'clientCredentials' ? 'Сервисный аккаунт' : 'Developer token'}</span>
+            <Button size="sm" icon={<ShieldCheck size={15} />} loading={busy === 'test'} onClick={test}>
+              Проверить
+            </Button>
           </div>
         )}
-        {box.authMode === 'developerToken' && (
-          <Row label="Developer token" hint={status?.hasDeveloperToken ? 'Сохранён. Введите новый, чтобы заменить.' : undefined} stack>
-            <Input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder={status?.hasDeveloperToken ? '••••••••••••' : ''} />
-          </Row>
-        )}
-        {box.authMode === 'oAuth' && (
-          <Row label="Порт для входа" hint="Локальный адрес, на который Box вернёт браузер после входа">
-            <Input type="number" className="w-[110px]" value={box.redirectPort} onChange={(e) => setBox({ redirectPort: Number(e.target.value) || 47615 })} />
-          </Row>
-        )}
-      </Card>
+        {msg && <p className={clsx('mt-3 text-center text-[12.5px] whitespace-pre-line', msg.kind === 'error' ? 'text-danger' : 'text-success')}>{msg.text}</p>}
+      </section>
 
-      <Card title="Загрузка">
-        <Row label="ID папки" hint="Число из адреса папки в Box: app.box.com/folder/123456. 0 — корневая папка.">
-          <Input className="w-[160px]" value={box.folderId} onChange={(e) => setBox({ folderId: e.target.value.trim() })} />
+      <Card title="Куда загружать">
+        <Row label="Папка в Box" hint={box.folderId ? `Используется папка с ID ${box.folderId} (см. «Дополнительно»)` : 'Создаётся автоматически в «Все файлы»'}>
+          <Input className="w-[230px]" value={box.folderName} disabled={!!box.folderId} onChange={(e) => setBox({ folderName: e.target.value })} />
         </Row>
-        <Row label="Доступ по ссылке" hint="«Все, у кого есть ссылка» — ссылка откроется на телефоне без входа в Box">
+        <Row label="Доступ по ссылке" hint="«Все, у кого есть ссылка» — откроется на телефоне без входа в Box">
           <Select value={box.sharedLinkAccess} onChange={(e) => setBox({ sharedLinkAccess: e.target.value as AppSettings['box']['sharedLinkAccess'] })} className="w-[230px]">
             <option value="open">Все, у кого есть ссылка</option>
             <option value="company">Только сотрудники компании</option>
@@ -465,32 +477,85 @@ function BoxSection({ draft, set }: { draft: AppSettings; set: SetFn }) {
         </Row>
       </Card>
 
-      <div className="flex flex-wrap items-center gap-2">
-        {box.authMode === 'oAuth' &&
-          (status?.signedIn ? (
-            <Button
-              icon={<LogOut size={16} />}
-              onClick={() =>
-                run('logout', async () => {
-                  await api.boxLogout();
-                  setUser(null);
-                })
-              }
-            >
-              Выйти из Box
-            </Button>
-          ) : (
-            <Button variant="primary" icon={<LogIn size={16} />} loading={busy === 'login'} onClick={login}>
-              Войти через браузер
-            </Button>
-          ))}
-        <Button icon={<ShieldCheck size={16} />} loading={busy === 'test'} onClick={test}>
-          Проверить подключение
-        </Button>
-        {status?.signedIn && box.authMode === 'oAuth' && !msg && <span className="text-[12.5px] text-success">Вход выполнен{user ? `: ${user.name}` : ''}</span>}
-      </div>
-      {busy === 'login' && <p className="mt-2 text-[12.5px] text-muted">Завершите вход в открывшемся браузере…</p>}
-      {msg && <p className={clsx('mt-3 text-[12.5px] whitespace-pre-line', msg.kind === 'error' ? 'text-danger' : 'text-success')}>{msg.text}</p>}
+      <section className="mb-4">
+        <button
+          onClick={() => setAdvanced((a) => !a)}
+          className="mb-2 flex items-center gap-1.5 px-1 text-[12px] font-semibold tracking-wide text-subtle uppercase hover:text-muted"
+        >
+          <ChevronRight size={14} className={clsx('transition-transform', advanced && 'rotate-90')} />
+          Дополнительно
+        </button>
+        {advanced && (
+          <div className="divide-y divide-border rounded-[14px] bg-surface ring-1 ring-inset ring-border">
+            <div className="p-3">
+              <Segmented
+                value={box.authMode}
+                onChange={(v) => setBox({ authMode: v })}
+                options={[
+                  { value: 'oAuth', label: 'Вход через Box' },
+                  { value: 'clientCredentials', label: 'Сервисный аккаунт' },
+                  { value: 'developerToken', label: 'Developer token' },
+                ]}
+              />
+            </div>
+            {box.authMode !== 'developerToken' && (
+              <>
+                <Row
+                  label={oauth ? 'Своё приложение Box (необязательно)' : 'Client ID'}
+                  hint={
+                    oauth
+                      ? 'Только если не подходит встроенное. Тип: User Authentication (OAuth 2.0)'
+                      : 'Приложение «Server Authentication (Client Credentials Grant)», одобренное администратором'
+                  }
+                  stack
+                >
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input value={box.clientId} onChange={(e) => setBox({ clientId: e.target.value.trim() })} placeholder="Client ID" />
+                    <Input
+                      type="password"
+                      value={secret}
+                      onChange={(e) => setSecret(e.target.value)}
+                      placeholder={status?.hasClientSecret ? 'Client Secret (сохранён)' : 'Client Secret'}
+                    />
+                  </div>
+                </Row>
+              </>
+            )}
+            {box.authMode === 'clientCredentials' && (
+              <div className="grid grid-cols-2 divide-x divide-border">
+                <Row label="Enterprise ID" stack>
+                  <Input value={box.enterpriseId} onChange={(e) => setBox({ enterpriseId: e.target.value.trim() })} />
+                </Row>
+                <Row label="User ID (необязательно)" stack>
+                  <Input value={box.userId} onChange={(e) => setBox({ userId: e.target.value.trim() })} />
+                </Row>
+              </div>
+            )}
+            {box.authMode === 'developerToken' && (
+              <Row label="Developer token" hint="Временный токен из консоли разработчика Box (60 минут) — для проверки" stack>
+                <Input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder={status?.hasDeveloperToken ? '•••••••• (сохранён)' : ''} />
+              </Row>
+            )}
+            <Row label="ID папки" hint="Вместо имени папки: число из адреса app.box.com/folder/123456 (0 — корень)">
+              <Input className="w-[160px]" value={box.folderId} placeholder="авто" onChange={(e) => setBox({ folderId: e.target.value.trim() })} />
+            </Row>
+            {oauth && (
+              <Row
+                label="Redirect URI своего приложения"
+                hint="Как в настройках приложения Box. localhost — вход в браузере; любой другой адрес (как у Greenshot) — вход в окне AdvantShoter"
+                stack
+              >
+                <Input className="font-mono" value={box.redirectUri} placeholder={`http://localhost:${box.redirectPort}/callback`} onChange={(e) => setBox({ redirectUri: e.target.value.trim() })} />
+              </Row>
+            )}
+            <div className="flex justify-end p-3">
+              <Button size="sm" icon={<ShieldCheck size={15} />} loading={busy === 'test'} onClick={test}>
+                Сохранить и проверить
+              </Button>
+            </div>
+          </div>
+        )}
+      </section>
     </>
   );
 }

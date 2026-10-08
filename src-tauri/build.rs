@@ -19,5 +19,9 @@ fn main() {
     println!("cargo:rustc-env=SHOTER_BUILD_DATE={date}");
     println!("cargo:rustc-env=SHOTER_COMMIT={commit}");
     println!("cargo:rerun-if-changed=../.git/HEAD");
+    // Built-in Box app (OAuth client) – provided by CI secrets, see README.
+    println!("cargo:rerun-if-env-changed=SHOTER_BOX_CLIENT_ID");
+    println!("cargo:rerun-if-env-changed=SHOTER_BOX_CLIENT_SECRET");
+    println!("cargo:rerun-if-env-changed=SHOTER_BOX_REDIRECT_URI");
     tauri_build::build()
 }

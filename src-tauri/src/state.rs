@@ -84,6 +84,10 @@ pub struct AppState {
     /// Global shortcut id → capture mode.
     pub hotkeys: Mutex<HashMap<u32, CaptureMode>>,
     pub panel_hidden_at: Mutex<Option<Instant>>,
+    /// Serialises Box sign-in flows; `box_login_cancel` aborts a pending one when the
+    /// user starts a new sign-in (e.g. closed the browser tab and clicked again).
+    pub box_login: tokio::sync::Mutex<()>,
+    pub box_login_cancel: tokio::sync::Notify,
     /// Last toast, pulled by the toast page when it loads after the event was sent.
     pub last_toast: Mutex<Option<(crate::ui::Toast, Instant)>>,
     #[cfg(windows)]
@@ -124,6 +128,8 @@ impl AppState {
             hotkeys: Mutex::new(HashMap::new()),
             panel_hidden_at: Mutex::new(None),
             last_toast: Mutex::new(None),
+            box_login: tokio::sync::Mutex::new(()),
+            box_login_cancel: tokio::sync::Notify::new(),
             #[cfg(windows)]
             ui_selector: crate::uiselect::UiSelector::spawn(),
         })
@@ -159,6 +165,25 @@ impl AppState {
         guard.save(&self.paths.secrets_file)
     }
 
+    /// OAuth client of the Box app: the user's own app (advanced settings) or the app
+    /// built into this build (`SHOTER_BOX_CLIENT_ID` / `_SECRET` / `_REDIRECT_URI`).
+    pub fn oauth_app(&self) -> Option<OAuthApp> {
+        let b = self.settings.read().unwrap().box_.clone();
+        let fallback_redirect = if b.redirect_uri.is_empty() { b.default_redirect_uri() } else { b.redirect_uri.clone() };
+        let custom_id = b.client_id.trim().to_string();
+        if !custom_id.is_empty() {
+            let secret = self.secrets.lock().unwrap().box_client_secret.clone();
+            return (!secret.is_empty()).then_some(OAuthApp { client_id: custom_id, client_secret: secret, redirect_uri: fallback_redirect });
+        }
+        let (client_id, client_secret) = builtin_box_app()?;
+        let redirect_uri = option_env!("SHOTER_BOX_REDIRECT_URI")
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or(fallback_redirect);
+        Some(OAuthApp { client_id, client_secret, redirect_uri })
+    }
+
     /// Box client built from the current settings and secrets (cached until reset).
     pub fn box_client(&self, app: &AppHandle) -> Result<Arc<BoxClient>, String> {
         if let Some(c) = self.box_client.lock().unwrap().as_ref() {
@@ -182,11 +207,14 @@ impl AppState {
                     subject_id,
                 }
             }
-            BoxAuthMode::OAuth => Credentials::OAuth {
-                client_id: b.client_id.trim().to_string(),
-                client_secret: secrets.box_client_secret.clone(),
-                tokens: secrets.box_oauth.clone().unwrap_or_default(),
-            },
+            BoxAuthMode::OAuth => {
+                let app = self.oauth_app().unwrap_or_default();
+                Credentials::OAuth {
+                    client_id: app.client_id,
+                    client_secret: app.client_secret,
+                    tokens: secrets.box_oauth.clone().unwrap_or_default(),
+                }
+            }
         };
         let sink: Arc<dyn TokenSink> = Arc::new(SecretsSink(app.clone()));
         let client = Arc::new(BoxClient::new(boxapi::http_client(), boxapi::Endpoints::default(), credentials, Some(sink)));
@@ -196,6 +224,23 @@ impl AppState {
 
     pub fn reset_box_client(&self) {
         *self.box_client.lock().unwrap() = None;
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct OAuthApp {
+    pub client_id: String,
+    pub client_secret: String,
+    pub redirect_uri: String,
+}
+
+/// The Box app compiled into this build, if any.
+pub fn builtin_box_app() -> Option<(String, String)> {
+    match (option_env!("SHOTER_BOX_CLIENT_ID"), option_env!("SHOTER_BOX_CLIENT_SECRET")) {
+        (Some(id), Some(secret)) if !id.trim().is_empty() && !secret.trim().is_empty() => {
+            Some((id.trim().to_string(), secret.trim().to_string()))
+        }
+        _ => None,
     }
 }
 

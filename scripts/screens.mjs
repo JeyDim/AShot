@@ -36,7 +36,9 @@ await shot('overlay-drawing', 'overlay', {
 });
 await shot('editor', 'editor/a1', { w: 1500, h: 900, wait: 1500 });
 await shot('settings-general', 'settings', { w: 900, h: 680 });
-await shot('settings-box', 'settings', { w: 900, h: 680, setup: (p) => p.getByRole('button', { name: 'Box.com' }).click() });
+await shot('settings-box', 'settings/box', { w: 900, h: 680 });
+await shot('settings-box-signin', 'settings/box', { w: 900, h: 680, query: '&signedout' });
+await shot('tray-panel-signin', 'panel', { w: 440, h: 660, wall: true, query: '&signedout&empty' });
 await shot('settings-links', 'settings', { w: 900, h: 680, setup: (p) => p.getByRole('button', { name: 'Ссылки' }).click() });
 await shot('settings-hotkeys', 'settings', { w: 900, h: 680, setup: (p) => p.getByRole('button', { name: 'Горячие клавиши' }).click() });
 await shot('about', 'about', { w: 460, h: 520 });

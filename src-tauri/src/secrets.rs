@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use shoter_core::boxapi::OAuthTokens;
+use shoter_core::boxapi::{BoxUser, OAuthTokens};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -12,6 +12,8 @@ pub struct Secrets {
     pub box_client_secret: String,
     pub box_developer_token: String,
     pub box_oauth: Option<OAuthTokens>,
+    /// Signed-in Box account (shown in the UI).
+    pub box_account: Option<BoxUser>,
 }
 
 impl Secrets {

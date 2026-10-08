@@ -3,13 +3,12 @@
 //! Commands that may create windows are `async`: on Windows a synchronous command runs
 //! inside a WebView2 callback, and creating a web view there would deadlock.
 
-use std::time::Duration;
 
 use serde::Serialize;
-use shoter_core::boxapi::{self, BoxUser};
+use shoter_core::boxapi::BoxUser;
 use shoter_core::history::HistoryItem;
 use shoter_core::settings::{AppSettings, BoxAuthMode};
-use shoter_core::{imaging, links, oauth, Rect};
+use shoter_core::{imaging, links, Rect};
 use tauri::ipc::{InvokeBody, Request};
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use tauri_plugin_autostart::ManagerExt;
@@ -115,7 +114,15 @@ pub async fn settings_set(app: AppHandle, settings: AppSettings) -> CmdResult<Ve
         }
     }
     if before.box_ != after.box_ {
+        if before.box_.client_id.trim() != after.box_.client_id.trim() {
+            // Tokens belong to the previous Box app – sign in again.
+            state.update_secrets(|s| {
+                s.box_oauth = None;
+                s.box_account = None;
+            })?;
+        }
         state.reset_box_client();
+        let _ = app.emit("box:changed", ());
     }
     let _ = app.emit("settings:changed", &after);
     Ok(problems)
@@ -414,9 +421,16 @@ pub fn open_folder(app: AppHandle, which: String) -> CmdResult<()> {
 #[serde(rename_all = "camelCase")]
 pub struct BoxStatus {
     mode: BoxAuthMode,
+    /// Uploads can work right now (signed in / credentials present).
+    ready: bool,
+    signed_in: bool,
+    account: Option<BoxUser>,
+    /// This build has a Box app built in (no Client ID / Secret needed).
+    builtin_app: bool,
+    /// An own Box app is configured in the advanced settings.
+    custom_app: bool,
     has_client_secret: bool,
     has_developer_token: bool,
-    signed_in: bool,
     redirect_uri: String,
 }
 
@@ -424,13 +438,30 @@ pub struct BoxStatus {
 pub fn box_status(app: AppHandle) -> BoxStatus {
     let state = app.state::<AppState>();
     let settings = state.settings();
+    // oauth_app() locks the secrets itself – call it before taking the lock below.
+    let oauth_app = state.oauth_app();
+    let oauth_ready = oauth_app.is_some();
+    let redirect_uri = oauth_app.map(|a| a.redirect_uri).unwrap_or_else(|| settings.box_.default_redirect_uri());
     let secrets = state.secrets.lock().unwrap();
+    let signed_in = secrets.box_oauth.as_ref().is_some_and(|t| !t.refresh_token.is_empty());
+    let b = &settings.box_;
+    let ready = match b.auth_mode {
+        BoxAuthMode::OAuth => signed_in && oauth_ready,
+        BoxAuthMode::ClientCredentials => {
+            !b.client_id.is_empty() && !secrets.box_client_secret.is_empty() && !(b.enterprise_id.is_empty() && b.user_id.is_empty())
+        }
+        BoxAuthMode::DeveloperToken => !secrets.box_developer_token.is_empty(),
+    };
     BoxStatus {
-        mode: settings.box_.auth_mode,
+        mode: b.auth_mode,
+        ready,
+        signed_in,
+        account: secrets.box_account.clone(),
+        builtin_app: crate::state::builtin_box_app().is_some(),
+        custom_app: !b.client_id.trim().is_empty(),
         has_client_secret: !secrets.box_client_secret.is_empty(),
         has_developer_token: !secrets.box_developer_token.is_empty(),
-        signed_in: secrets.box_oauth.as_ref().is_some_and(|t| !t.refresh_token.is_empty()),
-        redirect_uri: settings.box_.redirect_uri(),
+        redirect_uri,
     }
 }
 
@@ -445,6 +476,7 @@ pub fn box_set_secret(app: AppHandle, kind: String, value: String) -> CmdResult<
         _ => {}
     })?;
     state.reset_box_client();
+    let _ = app.emit("box:changed", ());
     Ok(())
 }
 
@@ -456,29 +488,14 @@ pub async fn box_test(app: AppHandle) -> CmdResult<BoxUser> {
     client.current_user().await.map_err(err)
 }
 
-/// OAuth sign-in: opens the browser and waits for the redirect to the local port.
+/// "Sign in with Box": opens the Box site; the user signs in and grants access.
 #[tauri::command]
 pub async fn box_login(app: AppHandle) -> CmdResult<BoxUser> {
-    let state = app.state::<AppState>();
-    let settings = state.settings();
-    let client_id = settings.box_.client_id.trim().to_string();
-    let client_secret = state.secrets.lock().unwrap().box_client_secret.clone();
-    if client_id.is_empty() || client_secret.is_empty() {
-        return Err("укажите Client ID и Client Secret приложения Box".into());
-    }
-    let redirect_uri = settings.box_.redirect_uri();
-    let endpoints = boxapi::Endpoints::default();
-    let listener = oauth::bind(settings.box_.redirect_port).await.map_err(err)?;
-    let st = shoter_core::random_string(24);
-    let url = boxapi::authorize_url(&endpoints, &client_id, &redirect_uri, &st);
-    app.opener().open_url(url, None::<&str>).map_err(err)?;
-    let code = oauth::wait_for_code(listener, &st, Duration::from_secs(300)).await.map_err(err)?;
-    let tokens = boxapi::exchange_code(&boxapi::http_client(), &endpoints, &client_id, &client_secret, &code, &redirect_uri)
-        .await
-        .map_err(err)?;
-    state.update_secrets(|s| s.box_oauth = Some(tokens))?;
-    state.reset_box_client();
-    let user = state.box_client(&app)?.current_user().await.map_err(err)?;
+    let user = actions::box_login(&app).await.inspect_err(|e| {
+        if e != "вход отменён" {
+            ui::toast(&app, Toast::error("Вход в Box не выполнен", e.clone()));
+        }
+    })?;
     // Bring the settings window back after the browser.
     if let Some(w) = app.get_webview_window(ui::SETTINGS) {
         let _ = w.set_focus();
@@ -488,10 +505,7 @@ pub async fn box_login(app: AppHandle) -> CmdResult<BoxUser> {
 
 #[tauri::command]
 pub fn box_logout(app: AppHandle) -> CmdResult<()> {
-    let state = app.state::<AppState>();
-    state.update_secrets(|s| s.box_oauth = None)?;
-    state.reset_box_client();
-    Ok(())
+    actions::box_logout(&app)
 }
 
 /// Preview of the link rewriting for the settings page.
