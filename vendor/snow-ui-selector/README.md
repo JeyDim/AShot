@@ -7,4 +7,6 @@ Source: [mg-chao/snow-shot](https://github.com/mg-chao/snow-shot) → `snow-crat
 commit `9ca44a60f3a49c2c36071d1a06ef721883ba0259`.
 License: Apache-2.0, Copyright (C) 2026 mg-chao — see `LICENSE` and `COPYRIGHT`.
 
-Source files are unmodified; only `Cargo.toml` was adapted for this workspace.
+`Cargo.toml` was adapted for this workspace. Source changes (Apache-2.0 §4b):
+`src/windows/spatial.rs` and `src/windows/uia/cache.rs` pass the search envelope by value,
+as required by rstar 0.13.

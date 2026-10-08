@@ -70,7 +70,7 @@ impl WindowSpatialIndex {
             }
             Self::Tree(tree) => {
                 let point_box = AABB::from_point(point);
-                tree.locate_in_envelope_intersecting(&point_box)
+                tree.locate_in_envelope_intersecting(point_box)
                     .filter(|w| w.contains_point(point))
                     .min_by_key(|w| w.z_order)
             }

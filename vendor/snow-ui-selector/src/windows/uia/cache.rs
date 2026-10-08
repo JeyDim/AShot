@@ -106,7 +106,7 @@ impl ChildIndex {
                 .find(|entry| entry.node < before && contains_point(entry.bounds, point))
                 .map(|entry| entry.node),
             Self::Tree(tree) => tree
-                .locate_in_envelope_intersecting(&AABB::from_point([point.x, point.y]))
+                .locate_in_envelope_intersecting(AABB::from_point([point.x, point.y]))
                 .filter(|entry| entry.node < before && contains_point(entry.bounds, point))
                 .map(|entry| entry.node)
                 .max(),

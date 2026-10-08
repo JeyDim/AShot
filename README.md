@@ -92,8 +92,11 @@
 - `AShot_x.y.z_x64_ru-RU.msi` — MSI для развёртывания;
 - `AShot_x.y.z_x64-portable.exe` — запуск без установки.
 
-Каждый пуш собирается в GitHub Actions (артефакт `AShot-windows-<версия>`). Сборка основной
-ветки после прохождения тестов публикуется как релиз `v0.1.<номер сборки>` — из него программа
+Каждый пуш собирается в GitHub Actions (артефакт `AShot-windows-<версия>`, хранится 14 дней);
+новый пуш отменяет ещё идущую сборку той же ветки, правки только в документации сборку не запускают.
+Сборка основной ветки (или ручной запуск *Actions → Build → Run workflow*) после прохождения
+тестов публикуется как релиз `v0.1.<номер сборки>` с описанием из коммитов; хранятся 20 последних
+релизов. Из релиза программа
 **обновляется сама**: проверяет GitHub через 30 секунд после запуска и раз в 6 часов и, если
 ничего не открыто, ставит новую версию и перезапускается (установщик — тихо поверх, portable —
 заменяет свой exe). Вручную: «Настройки → О программе → Проверить обновления»; там же
@@ -181,7 +184,7 @@ Actions), например `advant.one` → `https://advant.one/{id}`. Можн�
 
 ## Разработка
 
-Стек: **Tauri 2** (Rust) + **React 19 / TypeScript / Tailwind 4** + **Konva** (редактор).
+Стек: **Tauri 2** (Rust 2024) + **React 19 / TypeScript 7 / Tailwind 4 / Vite 8** + **Konva** (редактор).
 
 ```bash
 npm install
@@ -189,7 +192,8 @@ npm run tauri dev        # запуск с hot-reload (Windows)
 npm run tauri build      # установщики в target/release/bundle
 ```
 
-Нужны Rust (stable), Node 22, на Windows — MSVC Build Tools и WebView2.
+Нужны Rust (stable), Node 24, на Windows — MSVC Build Tools и WebView2. Зависимости держит
+свежими Dependabot: раз в месяц по одному PR на npm, Cargo и GitHub Actions.
 
 Без Windows интерфейс можно разрабатывать в браузере на мок-данных:
 `npm run dev` и открыть `http://localhost:1420/?mock#/panel` (маршруты: `panel`, `overlay`,
