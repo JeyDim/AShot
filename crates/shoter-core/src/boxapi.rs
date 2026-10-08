@@ -381,10 +381,22 @@ impl BoxClient {
         unreachable!("loop always returns")
     }
 
-    /// Creates (or updates) the shared link of a file.
+    /// Creates (or updates) the shared link of a file. When the enterprise forbids the
+    /// requested access level (typically "open"), falls back to the enterprise default;
+    /// the returned `effective_access` tells the caller what was actually applied.
     pub async fn create_shared_link(&self, file_id: &str, access: &str) -> Result<SharedLink> {
+        match self.put_shared_link(file_id, Some(access)).await {
+            Err(BoxError::Api { status: 400 | 403, .. }) if !access.is_empty() => self.put_shared_link(file_id, None).await,
+            other => other,
+        }
+    }
+
+    async fn put_shared_link(&self, file_id: &str, access: Option<&str>) -> Result<SharedLink> {
         let url = format!("{}/files/{}?fields=shared_link", self.endpoints.api, file_id);
-        let body = serde_json::json!({ "shared_link": { "access": access } });
+        let body = match access {
+            Some(a) => serde_json::json!({ "shared_link": { "access": a } }),
+            None => serde_json::json!({ "shared_link": {} }),
+        };
         let resp = self.send_authorized(|t| self.http.put(&url).bearer_auth(t).json(&body)).await?;
         if !resp.status().is_success() {
             return Err(api_error(resp).await);
@@ -573,17 +585,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn falls_back_when_open_links_are_forbidden() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(body_string_contains("\"access\":\"open\""))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({ "code": "bad_request", "message": "open shared links are disabled" })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(body_string_contains("\"shared_link\":{}"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "shared_link": { "url": "https://app.box.com/s/abc", "access": "company", "effective_access": "company" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = BoxClient::new(http_client(), endpoints(&server), Credentials::DeveloperToken("T".into()), None);
+        let link = client.create_shared_link("1", "open").await.unwrap();
+        assert_eq!(link.effective_access.as_deref(), Some("company"));
+    }
+
+    #[tokio::test]
     async fn api_errors_are_reported() {
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
-            .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({ "code": "access_denied_insufficient_permissions", "message": "Access denied" })))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({ "code": "not_found", "message": "Not Found" })))
             .mount(&server)
             .await;
         let client = BoxClient::new(http_client(), endpoints(&server), Credentials::DeveloperToken("T".into()), None);
         match client.create_shared_link("1", "open").await {
             Err(BoxError::Api { status, code, .. }) => {
-                assert_eq!(status, 403);
-                assert_eq!(code, "access_denied_insufficient_permissions");
+                assert_eq!(status, 404);
+                assert_eq!(code, "not_found");
             }
             other => panic!("unexpected {other:?}"),
         }
