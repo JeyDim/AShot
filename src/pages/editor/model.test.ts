@@ -1,0 +1,79 @@
+import { describe, expect, it } from 'vitest';
+import {
+  addShape,
+  clampCrop,
+  commit,
+  contrastText,
+  emptyDoc,
+  historyOf,
+  nextStep,
+  normalizeBox,
+  parseDoc,
+  redo,
+  simplify,
+  snapAngle,
+  translate,
+  undo,
+  type Shape,
+} from './model';
+
+describe('editor model', () => {
+  it('undo / redo', () => {
+    let h = historyOf(emptyDoc());
+    const a = addShape(h.present, { id: 'a', type: 'rect', x: 0, y: 0, w: 10, h: 10, color: '#f00', size: 1 });
+    h = commit(h, a);
+    const b = addShape(h.present, { id: 'b', type: 'step', x: 5, y: 5, n: 1, color: '#f00', size: 1 });
+    h = commit(h, b);
+    expect(h.present.shapes).toHaveLength(2);
+    h = undo(h);
+    expect(h.present.shapes).toHaveLength(1);
+    h = undo(h);
+    expect(h.present.shapes).toHaveLength(0);
+    h = undo(h); // no-op
+    expect(h.past).toHaveLength(0);
+    h = redo(h);
+    expect(h.present.shapes).toHaveLength(1);
+    // a new change drops the redo stack
+    h = commit(h, emptyDoc());
+    expect(h.future).toHaveLength(0);
+  });
+
+  it('numbers steps', () => {
+    const shapes: Shape[] = [
+      { id: '1', type: 'step', x: 0, y: 0, n: 1, color: '#f00', size: 1 },
+      { id: '2', type: 'step', x: 0, y: 0, n: 4, color: '#f00', size: 1 },
+    ];
+    expect(nextStep(shapes)).toBe(5);
+    expect(nextStep([])).toBe(1);
+  });
+
+  it('geometry helpers', () => {
+    expect(normalizeBox(50, 50, 10, 20)).toEqual({ x: 10, y: 20, w: 40, h: 30 });
+    expect(normalizeBox(0, 0, 10, 30, true)).toEqual({ x: 0, y: 0, w: 30, h: 30 });
+    const [x, y] = snapAngle(0, 0, 100, 4);
+    expect(Math.round(x)).toBe(100);
+    expect(Math.round(y)).toBe(0);
+    const [dx, dy] = snapAngle(0, 0, 50, 52);
+    expect(Math.round(dx)).toBe(Math.round(dy));
+  });
+
+  it('crop clamping', () => {
+    expect(clampCrop({ x: -5, y: 10, w: 50, h: 1000 }, 100, 100)).toEqual({ x: 0, y: 10, w: 45, h: 90 });
+    expect(clampCrop({ x: 0, y: 0, w: 100, h: 100 }, 100, 100)).toBeNull(); // whole image = no crop
+    expect(clampCrop({ x: 10, y: 10, w: 2, h: 2 }, 100, 100)).toBeNull();
+  });
+
+  it('translates shapes', () => {
+    expect(translate({ id: 'l', type: 'arrow', points: [0, 0, 10, 10], color: '', size: 0 }, 5, 1)).toMatchObject({ points: [5, 1, 15, 11] });
+    expect(translate({ id: 'p', type: 'pen', points: [0, 0, 1, 1], color: '', size: 0 }, 2, 3)).toMatchObject({ points: [2, 3, 3, 4] });
+    expect(translate({ id: 't', type: 'text', x: 1, y: 1, text: 'a', color: '', size: 0 }, 2, 3)).toMatchObject({ x: 3, y: 4 });
+  });
+
+  it('misc', () => {
+    expect(contrastText('#FFCC00')).toBe('#111');
+    expect(contrastText('#0A84FF')).toBe('#fff');
+    expect(parseDoc('garbage').shapes).toEqual([]);
+    expect(parseDoc('{"shapes":[{"id":"x"}],"crop":null}').shapes).toHaveLength(1);
+    expect(simplify([0, 0, 0.5, 0.5, 1, 1, 5, 5, 5.2, 5.2, 9, 9])).toEqual([0, 0, 5, 5, 9, 9]);
+  });
+});

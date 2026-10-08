@@ -1,8 +1,6 @@
 //! Non-Windows stubs. The application currently targets Windows only; these keep the
 //! crate compiling on other platforms (CI checks, UI development).
 
-use shoter_core::Rect;
-
 use super::{CaptureSession, MonitorInfo};
 
 pub fn capture_session(_id: u64, _include_cursor: bool) -> Result<CaptureSession, String> {
@@ -15,8 +13,4 @@ pub fn monitors() -> Vec<MonitorInfo> {
 
 pub fn cursor_position() -> (i32, i32) {
     (0, 0)
-}
-
-pub fn foreground_window_rect() -> Option<Rect> {
-    None
 }

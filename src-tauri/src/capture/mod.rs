@@ -11,12 +11,12 @@ use shoter_core::Rect;
 #[cfg(windows)]
 mod win;
 #[cfg(windows)]
-pub use win::{cursor_position, foreground_window_rect, monitors};
+pub use win::{cursor_position, monitors};
 
 #[cfg(not(windows))]
 mod other;
 #[cfg(not(windows))]
-pub use other::{cursor_position, foreground_window_rect, monitors};
+pub use other::{cursor_position, monitors};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

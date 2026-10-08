@@ -1,0 +1,76 @@
+name: Build
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Tests (core + UI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: core
+      - name: Rust core tests
+        run: cargo test -p shoter-core
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck & unit tests
+        run: |
+          npm run typecheck
+          npm test
+
+  windows:
+    name: Windows build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Rust tests (app)
+        run: cargo test -p advantshoter --lib
+      - name: Build installer (NSIS + MSI)
+        run: npx tauri build
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          $sha = "${{ github.sha }}".Substring(0, 7)
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item target/release/bundle/nsis/*.exe out/
+          Copy-Item target/release/bundle/msi/*.msi out/
+          Copy-Item target/release/AdvantShoter.exe "out/AdvantShoter-portable-$sha.exe"
+          Get-ChildItem out
+      - uses: actions/upload-artifact@v7
+        with:
+          name: AdvantShoter-windows-${{ github.sha }}
+          path: out/*
+          if-no-files-found: error
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: out/*
+          generate_release_notes: true
