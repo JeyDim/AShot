@@ -23,7 +23,6 @@ export const api = {
   appInfo: () => invoke<AppInfo>('app_info'),
 
   settingsGet: () => invoke<SettingsView>('settings_get'),
-  settingsSet: (settings: AppSettings) => invoke<string[]>('settings_set', { settings }),
   /** Changes only the given keys; side effects (hotkeys, autostart, theme…) apply at once. */
   settingsPatch: (patch: Partial<AppSettings> | Record<string, unknown>) => invoke<PatchResult>('settings_patch', { patch }),
   hotkeysSuspend: (suspended: boolean) => invoke<string[]>('hotkeys_suspend', { suspended }),

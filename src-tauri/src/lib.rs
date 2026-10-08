@@ -87,7 +87,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
             commands::settings_get,
-            commands::settings_set,
             commands::settings_patch,
             commands::hotkeys_suspend,
             commands::capture,

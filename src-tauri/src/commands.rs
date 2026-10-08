@@ -79,22 +79,6 @@ pub fn settings_get(app: AppHandle) -> SettingsView {
     }
 }
 
-/// Saves the whole settings object. Returns hotkey registration problems (if any).
-#[tauri::command]
-pub async fn settings_set(app: AppHandle, settings: AppSettings) -> CmdResult<Vec<String>> {
-    let state = app.state::<AppState>();
-    let before = state.settings();
-    let after = state.update_settings(|s| {
-        // Keep values that are not edited in the settings window.
-        let last_region = s.last_region;
-        let welcomed = s.welcomed;
-        *s = settings;
-        s.last_region = last_region;
-        s.welcomed = welcomed;
-    });
-    apply_changes(&app, &before, &after).await
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PatchResult {
@@ -104,16 +88,26 @@ pub struct PatchResult {
 }
 
 /// Changes only the given keys (the settings window saves every change right away; the
-/// editor remembers its color). Unlike `settings_set` it never overwrites values that
-/// another window changed meanwhile.
+/// editor remembers its color), so values changed elsewhere meanwhile are never overwritten.
 #[tauri::command]
 pub async fn settings_patch(app: AppHandle, patch: serde_json::Value) -> CmdResult<PatchResult> {
     let state = app.state::<AppState>();
     let before = state.settings();
-    let mut value = serde_json::to_value(&before).map_err(err)?;
-    merge(&mut value, patch);
-    let merged: AppSettings = serde_json::from_value(value).map_err(err)?;
-    let after = state.update_settings(|s| *s = merged);
+    // Merge under the settings lock, so a concurrent change (e.g. the last region) is kept.
+    let mut invalid = None;
+    let after = state.update_settings(|s| {
+        let merged = serde_json::to_value(&*s).and_then(|mut value| {
+            merge(&mut value, patch);
+            serde_json::from_value::<AppSettings>(value)
+        });
+        match merged {
+            Ok(m) => *s = m,
+            Err(e) => invalid = Some(e),
+        }
+    });
+    if let Some(e) = invalid {
+        return Err(err(e));
+    }
     let problems = apply_changes(&app, &before, &after).await?;
     Ok(PatchResult { settings: after, problems })
 }

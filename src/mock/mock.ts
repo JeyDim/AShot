@@ -131,8 +131,6 @@ export async function installMocks() {
           return { settings, problems: [] };
         case 'pick_folder':
           return 'D:\\Screenshots';
-        case 'settings_set':
-          return [];
         case 'history_list':
           return query.has('empty') ? [] : history;
         case 'history_get':
