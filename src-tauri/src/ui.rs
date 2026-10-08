@@ -322,8 +322,9 @@ pub fn open_settings(app: &AppHandle, section: Option<&str>) {
     let _ = WebviewWindowBuilder::new(app, SETTINGS, url(&route))
         .title("Настройки — AShot")
         .inner_size(840.0, 640.0)
-        .min_inner_size(720.0, 520.0)
-        // Own title bar (drag area, minimize / close) is drawn by the page.
+        // Fixed size; own title bar (drag area, minimize / close) is drawn by the page.
+        .resizable(false)
+        .maximizable(false)
         .decorations(false)
         .center()
         .theme(window_theme(app))
