@@ -20,6 +20,7 @@ mod uiselect;
 mod updater;
 
 use tauri::{AppHandle, Manager, RunEvent};
+use tauri_plugin_autostart::MacosLauncher;
 
 use state::{AppState, CaptureMode};
 use ui::Toast;
@@ -66,6 +67,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(hotkeys::handle).build())
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--autostart"])))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .register_asynchronous_uri_scheme_protocol("shot", protocol::handle)
@@ -128,8 +130,8 @@ pub fn run() {
             let state = handle.state::<AppState>();
             let settings = state.settings();
 
-            // Keep the Startup-folder shortcut in sync with the setting.
-            autostart::sync(settings.autostart);
+            // Keep the OS autostart entry in sync with the setting.
+            autostart::sync(&handle, settings.autostart);
 
             updater::cleanup();
             updater::start(&handle);

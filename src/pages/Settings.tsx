@@ -888,7 +888,7 @@ function About({ s, update }: { s: AppSettings; update: Update }) {
         <div className="flex items-center justify-between gap-4 border-t border-border py-2.5 text-[14px]">
           <span className="flex flex-col">
             Запускать вместе с Windows
-            <span className="text-[12px] text-muted">Ярлык в папке «Автозагрузка», без прав администратора</span>
+            <span className="text-[12px] text-muted">AShot будет в трее сразу после входа в систему</span>
           </span>
           <Switch checked={s.autostart} onChange={(v) => update({ autostart: v })} label="Запускать вместе с Windows" />
         </div>

@@ -133,7 +133,7 @@ async fn apply_changes(app: &AppHandle, before: &AppSettings, after: &AppSetting
         actions::notify_history(app);
     }
     if before.autostart != after.autostart {
-        if let Err(e) = crate::autostart::set(after.autostart) {
+        if let Err(e) = crate::autostart::set(app, after.autostart) {
             problems.push(format!("Автозапуск: {e}"));
         }
     }

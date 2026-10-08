@@ -1,104 +1,56 @@
-//! Autostart: a shortcut in the user's Startup folder (`shell:startup`). Windows lists it
-//! in Settings → Apps → Startup and in Task Manager; no admin rights and no registry `Run`
-//! key (antivirus software flags those).
+//! Autostart through tauri-plugin-autostart (the user's `Run` registry entry "AShot").
 
-/// Command-line flag of the shortcut: start quietly in the tray.
-pub const ARG: &str = "--autostart";
+use tauri::AppHandle;
+use tauri_plugin_autostart::ManagerExt;
 
-/// Creates (or points to the current exe) or removes the shortcut.
-pub fn set(enabled: bool) -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    imp::set(enabled, &exe)
+/// Turns the OS autostart entry on or off.
+pub fn set(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    let launcher = app.autolaunch();
+    if enabled { launcher.enable() } else { launcher.disable() }.map_err(|e| e.to_string())
 }
 
-/// Brings the shortcut in line with the setting at startup (the exe may have moved) and
-/// removes the registry entries that earlier versions created.
-pub fn sync(enabled: bool) {
-    imp::remove_legacy_registry_entries();
-    if let Err(e) = set(enabled) {
-        log::warn!("autostart: {e}");
+/// Brings the entry in line with the setting at startup and removes what other versions
+/// left behind.
+pub fn sync(app: &AppHandle, enabled: bool) {
+    legacy::remove_old_entries();
+    if enabled != app.autolaunch().is_enabled().unwrap_or(false) {
+        if let Err(e) = set(app, enabled) {
+            log::warn!("autostart: {e}");
+        }
     }
 }
 
 #[cfg(windows)]
-mod imp {
-    use std::path::{Path, PathBuf};
+mod legacy {
+    use windows::Win32::System::Com::CoTaskMemFree;
+    use windows::Win32::UI::Shell::{FOLDERID_Startup, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
+    use windows::core::w;
 
-    use windows::Win32::System::Com::{
-        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize,
-        IPersistFile,
-    };
-    use windows::Win32::UI::Shell::{FOLDERID_Startup, IShellLinkW, KF_FLAG_DEFAULT, SHGetKnownFolderPath, ShellLink};
-    use windows::core::{HSTRING, Interface, w};
-
-    const SHORTCUT: &str = "AShot.lnk";
-
-    fn shortcut_path() -> Result<PathBuf, String> {
-        unsafe {
-            let dir = SHGetKnownFolderPath(&FOLDERID_Startup, KF_FLAG_DEFAULT, None).map_err(|e| e.to_string())?;
-            let path = dir.to_string().map_err(|e| e.to_string());
-            CoTaskMemFree(Some(dir.0 as *const _));
-            Ok(PathBuf::from(path?).join(SHORTCUT))
-        }
-    }
-
-    pub fn set(enabled: bool, exe: &Path) -> Result<(), String> {
-        let path = shortcut_path()?;
-        if !enabled {
-            return match std::fs::remove_file(&path) {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
-                _ => Ok(()),
-            };
-        }
-        // COM on a short-lived thread of its own: works from any caller thread.
-        let exe = exe.to_path_buf();
-        std::thread::spawn(move || unsafe {
-            let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
-            let result = create_shortcut(&path, &exe);
-            if initialized {
-                CoUninitialize();
-            }
-            result
-        })
-        .join()
-        .map_err(|_| "сбой при создании ярлыка".to_string())?
-    }
-
-    unsafe fn create_shortcut(path: &Path, exe: &Path) -> Result<(), String> {
-        let e = |e: windows::core::Error| format!("не удалось создать ярлык автозапуска: {e}");
-        unsafe {
-            let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).map_err(e)?;
-            link.SetPath(&HSTRING::from(exe.as_os_str())).map_err(e)?;
-            link.SetArguments(&HSTRING::from(super::ARG)).map_err(e)?;
-            if let Some(dir) = exe.parent() {
-                link.SetWorkingDirectory(&HSTRING::from(dir.as_os_str())).map_err(e)?;
-            }
-            link.SetIconLocation(&HSTRING::from(exe.as_os_str()), 0).map_err(e)?;
-            link.SetDescription(w!("AShot — скриншоты из трея")).map_err(e)?;
-            link.cast::<IPersistFile>().map_err(e)?.Save(&HSTRING::from(path.as_os_str()), true).map_err(e)
-        }
-    }
-
-    /// Earlier versions (tauri-plugin-autostart) used the `Run` registry key, also under the
-    /// old name "AdvantShoter". Only deletes values — nothing is written to the registry.
-    pub fn remove_legacy_registry_entries() {
+    /// * Versions before the rename registered autostart as "AdvantShoter".
+    /// * One build used a shortcut in the Startup folder instead; with it the app would
+    ///   start twice.
+    pub fn remove_old_entries() {
         use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RegDeleteKeyValueW};
         for key in [
             w!(r"Software\Microsoft\Windows\CurrentVersion\Run"),
             w!(r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"),
         ] {
-            for name in [w!("AShot"), w!("AdvantShoter")] {
-                let _ = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key, name) };
-            }
+            let _ = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key, w!("AdvantShoter")) };
+        }
+        let startup = unsafe {
+            SHGetKnownFolderPath(&FOLDERID_Startup, KF_FLAG_DEFAULT, None).ok().map(|dir| {
+                let path = dir.to_string().ok();
+                CoTaskMemFree(Some(dir.0 as *const _));
+                path
+            })
+        };
+        if let Some(dir) = startup.flatten() {
+            let _ = std::fs::remove_file(std::path::Path::new(&dir).join("AShot.lnk"));
         }
     }
 }
 
 #[cfg(not(windows))]
-mod imp {
-    pub fn set(_enabled: bool, _exe: &std::path::Path) -> Result<(), String> {
-        Ok(())
-    }
-
-    pub fn remove_legacy_registry_entries() {}
+mod legacy {
+    pub fn remove_old_entries() {}
 }
