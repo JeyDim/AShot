@@ -2,11 +2,15 @@
 //! each showing the frozen screenshot of its monitor. Windows are created once and
 //! reused (hidden between captures) so the overlay appears instantly.
 
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
 use serde::Serialize;
 use shoter_core::Rect;
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+};
 
 use crate::capture::{CaptureSession, MonitorInfo, WindowInfo};
 use crate::state::{Action, AppState, CaptureMode};
@@ -38,7 +42,7 @@ pub fn label(index: usize) -> String {
 }
 
 fn build(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
-    WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html#/overlay".into()))
+    let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html#/overlay".into()))
         .title("AdvantShoter — выделение")
         .decorations(false)
         .resizable(false)
@@ -48,13 +52,71 @@ fn build(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
         .visible(false)
         .focused(false)
         .inner_size(800.0, 600.0)
-        .build()
+        .build()?;
+    // Moving a window to a monitor with another DPI scale makes Windows/tao resize it to
+    // keep its *logical* size (a 2K overlay would shrink to ~FullHD and show a squeezed,
+    // grainy picture). Whenever that happens, snap it back to the exact monitor bounds.
+    let handle = app.clone();
+    let lbl = label.to_string();
+    window.on_window_event(move |event| {
+        if matches!(event, WindowEvent::ScaleFactorChanged { .. } | WindowEvent::Resized(_) | WindowEvent::Moved(_)) {
+            fit_to_monitor(&handle, &lbl);
+        }
+    });
+    Ok(window)
 }
 
 fn place(window: &WebviewWindow, m: &MonitorInfo) {
     // Position first (may trigger a DPI change), then the physical size.
     let _ = window.set_position(PhysicalPosition::new(m.bounds.x, m.bounds.y));
     let _ = window.set_size(PhysicalSize::new(m.bounds.width, m.bounds.height));
+}
+
+/// Re-placements per overlay since the last capture started (guards against a loop if
+/// Windows keeps refusing the requested bounds).
+static FIT_ATTEMPTS: LazyLock<Mutex<HashMap<String, u32>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn target_monitor(app: &AppHandle, label: &str) -> Option<MonitorInfo> {
+    let index = label.strip_prefix(PREFIX)?.parse::<usize>().ok()?;
+    let session = app.state::<AppState>().session.lock().unwrap().clone();
+    match session {
+        Some(s) => s.monitors.get(index).cloned(),
+        None => crate::capture::monitors().get(index).cloned(),
+    }
+}
+
+/// Puts the overlay exactly over its monitor when its bounds drifted.
+fn fit_to_monitor(app: &AppHandle, label: &str) {
+    let Some(window) = app.get_webview_window(label) else { return };
+    let Some(m) = target_monitor(app, label) else { return };
+    let (Ok(pos), Ok(size)) = (window.outer_position(), window.inner_size()) else { return };
+    let b = m.bounds;
+    if pos.x == b.x && pos.y == b.y && size.width == b.width && size.height == b.height {
+        return;
+    }
+    let attempts = {
+        let mut map = FIT_ATTEMPTS.lock().unwrap();
+        let n = map.entry(label.to_string()).or_insert(0);
+        *n += 1;
+        *n
+    };
+    if attempts > 6 {
+        return;
+    }
+    log::info!(
+        "{label}: window {}x{} at {},{} (scale {:?}) does not match monitor {}x{} at {},{} (scale {}), re-placing",
+        size.width,
+        size.height,
+        pos.x,
+        pos.y,
+        window.scale_factor().ok(),
+        b.width,
+        b.height,
+        b.x,
+        b.y,
+        m.scale
+    );
+    place(&window, &m);
 }
 
 /// Creates overlay windows for the given monitors in advance (called at startup).
@@ -91,6 +153,7 @@ pub fn open(
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
     let settings = state.settings();
+    FIT_ATTEMPTS.lock().unwrap().clear();
 
     // Close overlays of monitors that disappeared.
     for (label, w) in app.webview_windows() {
@@ -190,6 +253,15 @@ pub fn ready(app: &AppHandle, label: &str, session_id: u64) {
     if has_cursor || session.monitors.len() == 1 {
         let _ = window.set_focus();
     }
+    // Showing a window can deliver a late DPI change – check the bounds again shortly after.
+    let app = app.clone();
+    let label = label.to_string();
+    tauri::async_runtime::spawn(async move {
+        for delay in [60, 250, 800] {
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+            fit_to_monitor(&app, &label);
+        }
+    });
 }
 
 pub fn hide_all(app: &AppHandle) {

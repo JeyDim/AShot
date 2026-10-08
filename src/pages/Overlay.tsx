@@ -610,6 +610,19 @@ export default function Overlay() {
     return () => window.removeEventListener('keydown', onKey);
   }, [cancel, finish]);
 
+  // The window can be re-placed after a DPI change: re-layout and redraw.
+  const [, setViewport] = useState(0);
+  useEffect(() => {
+    const onResize = () => {
+      setViewport((v) => v + 1);
+      syncBar();
+      redraw();
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     const t = window.setTimeout(() => setHint(false), 4000);
     return () => window.clearTimeout(t);
@@ -617,6 +630,7 @@ export default function Overlay() {
 
   // ------------------------------------------------------------ render
   const k = typeof window !== 'undefined' ? scale() : 1;
+  const pixelExact = Math.abs(k - (window.devicePixelRatio || 1)) < 0.01;
   const barW = 336;
   const barH = 52;
   const barPos = bar
@@ -634,7 +648,17 @@ export default function Overlay() {
       className="fixed inset-0 overflow-hidden bg-black select-none"
       onMouseEnter={() => getCurrentWindow().setFocus().catch(() => {})}
     >
-      {imageSrc && <img src={imageSrc} alt="" draggable={false} className="pointer-events-none absolute inset-0 h-full w-full [image-rendering:pixelated]" />}
+      {imageSrc && (
+        <img
+          src={imageSrc}
+          alt=""
+          draggable={false}
+          className="pointer-events-none absolute inset-0 h-full w-full"
+          // Nearest-neighbour only when screen pixels map 1:1 (crisp); otherwise smooth
+          // scaling instead of a grainy picture.
+          style={{ imageRendering: pixelExact ? 'pixelated' : 'auto' }}
+        />
+      )}
       <canvas
         ref={canvasRef}
         className="absolute inset-0 h-full w-full"
