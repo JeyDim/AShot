@@ -100,11 +100,52 @@
 новый пуш отменяет ещё идущую сборку той же ветки, правки только в документации сборку не запускают.
 Сборка основной ветки (или ручной запуск *Actions → Build → Run workflow*) после прохождения
 тестов публикуется как релиз `v0.1.<номер сборки>` с описанием из коммитов; хранятся 20 последних
-релизов. Из релиза программа
-**обновляется сама**: проверяет GitHub через 30 секунд после запуска и раз в 6 часов и, если
-ничего не открыто, ставит новую версию и перезапускается (установщик — тихо поверх, portable —
-заменяет свой exe). Вручную: «Настройки → О программе → Проверить обновления»; там же
-автообновление можно выключить — тогда будет только уведомление.
+релизов. В каждом релизе есть манифест `latest.json` (версия, описание, размеры и SHA-256 файлов) —
+по нему программа **обновляется сама**: проверяет его через 30 секунд после запуска и раз в 6 часов
+и, если ничего не открыто, ставит новую версию и перезапускается (установщик — тихо поверх,
+portable — заменяет свой exe; скачанный файл сверяется с SHA-256 из манифеста). Вручную: «Настройки →
+О программе → Проверить обновления»; там же автообновление можно выключить — тогда будет только
+уведомление. Манифест берётся с GitHub или со своего сервера — см. ниже.
+
+### Обновления со своего сервера (IIS)
+
+Программа ходит только на ваш сервер, а сервер сам забирает новые релизы с GitHub (раз в 10 минут,
+скриптом из [`deploy/iis`](deploy/iis)). Входящий доступ к серверу из интернета не нужен; для приватного
+репозитория токен GitHub хранится только на сервере.
+
+1. **IIS.** Папка, например `C:\inetpub\updates\ashot`, опубликованная как сайт или виртуальный каталог
+   (например, `https://updates.company.ru/ashot/`) с анонимным доступом на чтение; HTTPS — с любым
+   сертификатом, которому доверяет Windows (подойдёт и корпоративный CA). Положите в неё
+   [`deploy/iis/web.config`](deploy/iis/web.config): MIME-типы, `latest.json` без кэша.
+2. **Скрипт.** Скопируйте [`deploy/iis/Sync-AShotUpdates.ps1`](deploy/iis/Sync-AShotUpdates.ps1)
+   в `C:\AShot-mirror\` и запустите вручную (PowerShell от администратора):
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File C:\AShot-mirror\Sync-AShotUpdates.ps1 -Target C:\inetpub\updates\ashot
+   ```
+
+   Он скачивает файлы последнего релиза, проверяет SHA-256, выкладывает `latest.json` последним
+   и хранит 3 последние версии; журнал — `C:\AShot-mirror\Sync-AShotUpdates.log`.
+   Проверка: в браузере открывается `https://updates.company.ru/ashot/latest.json`.
+3. **Расписание** — каждые 10 минут от имени SYSTEM:
+
+   ```powershell
+   $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+     -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\AShot-mirror\Sync-AShotUpdates.ps1 -Target C:\inetpub\updates\ashot'
+   $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 10)
+   Register-ScheduledTask -TaskName 'AShot updates mirror' -Action $action -Trigger $trigger -User 'SYSTEM' -RunLevel Highest
+   ```
+4. **Приватный репозиторий.** Создайте fine-grained token (GitHub → Settings → Developer settings →
+   Personal access tokens): только этот репозиторий, *Contents: Read-only*. Сохраните его на сервере:
+   `[Environment]::SetEnvironmentVariable('ASHOT_GITHUB_TOKEN', '<токен>', 'Machine')`.
+   Ссылку «Что нового» программа тогда не показывает — вместо неё описание версии.
+5. **Сборка.** В GitHub → Settings → Secrets → Actions добавьте `UPDATE_URL` =
+   `https://updates.company.ru/ashot/`. Начиная со следующей сборки программа берёт обновления
+   только с этого адреса.
+
+Порядок перехода: сначала настройте сервер и секрет `UPDATE_URL` и дождитесь, пока все обновятся до
+сборки с ним (её видно по журналу IIS — запросы к `latest.json`), и только потом закрывайте репозиторий:
+версии до этого ищут обновления на GitHub.
 
 Сборки пока не подписаны — при первом запуске SmartScreen попросит подтвердить запуск.
 Нужен WebView2 (есть в Windows 10/11; установщик докачает при отсутствии).
@@ -139,6 +180,7 @@
    | `BOX_CLIENT_SECRET` | Client Secret |
    | `BOX_REDIRECT_URI` | необязательно: Redirect URI, указанный у приложения Box |
    | `PROXY_DOMAIN` | необязательно: домен для ссылок, см. [Ссылки](#ссылки-и-домен-прокси) |
+   | `UPDATE_URL` | необязательно: свой сервер обновлений, см. [IIS](#обновления-со-своего-сервера-iis) |
 
    Вход всегда открывается в окне AShot: возврат из Box перехватывается по коду
    проверки (`state`), так что адрес возврата сам может не существовать — приложение Box от
@@ -245,6 +287,7 @@ src/
   mock/                  мок-режим для разработки UI в браузере
 vendor/snow-ui-selector/ модуль Snow Shot (Apache-2.0)
 proxy/cloudflare-worker/ пример домена-прокси для ссылок
+deploy/iis/              зеркало обновлений на IIS (скрипт + web.config)
 ```
 
 ### Ограничения текущей версии

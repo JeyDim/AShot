@@ -933,7 +933,7 @@ function Updates({ autoUpdate, onAutoUpdate }: { autoUpdate: boolean; onAutoUpda
   let action: ReactNode = null;
   switch (st.phase) {
     case 'idle':
-      text = <span className="text-muted">Обновления — из GitHub</span>;
+      text = <span className="text-muted">Проверка новых версий</span>;
       action = (
         <Button variant="outline" icon={<RefreshCw size={15} />} onClick={check}>
           Проверить обновления
@@ -968,9 +968,13 @@ function Updates({ autoUpdate, onAutoUpdate }: { autoUpdate: boolean; onAutoUpda
       text = (
         <span className="flex min-w-0 flex-col">
           <span className="font-medium">Доступна версия {st.version}</span>
-          <button className="self-start text-[12.5px] text-muted underline-offset-2 hover:text-text hover:underline" onClick={() => api.openUrl(st.url)}>
-            Что нового
-          </button>
+          {st.url ? (
+            <button className="self-start text-[12.5px] text-muted underline-offset-2 hover:text-text hover:underline" onClick={() => api.openUrl(st.url)}>
+              Что нового
+            </button>
+          ) : (
+            st.notes && <span className="line-clamp-2 text-[12.5px] whitespace-pre-line text-muted">{st.notes}</span>
+          )}
         </span>
       );
       action = (

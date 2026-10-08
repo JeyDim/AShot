@@ -1,30 +1,36 @@
-//! Self-update from GitHub Releases of the repository this build came from
-//! (`SHOTER_UPDATE_REPO`, set by CI). An installed copy runs the new NSIS installer in
-//! update mode (it closes the app and starts it again); a portable exe is replaced in place.
+//! Self-update from the manifest `latest.json` of the latest release: on an own server
+//! (`SHOTER_UPDATE_URL`, e.g. IIS mirroring the releases) or on GitHub (`SHOTER_UPDATE_REPO`,
+//! set by CI). An installed copy runs the new NSIS installer in update mode (it closes the
+//! app and starts it again); a portable exe is replaced in place.
 
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use shoter_core::updates::{self, InstallKind, Release};
+use shoter_core::updates::{self, InstallKind, Manifest};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::state::AppState;
 use crate::ui::{self, Toast};
-
-/// `owner/name` of the GitHub repository; local builds have none and never update.
-const REPO: Option<&str> = option_env!("SHOTER_UPDATE_REPO");
 
 const FIRST_CHECK: Duration = Duration::from_secs(30);
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
 /// While something is open, an automatic install waits this long between attempts.
 const IDLE_RETRY: Duration = Duration::from_secs(10 * 60);
 
+/// Where `latest.json` comes from: the own server if the build has one, otherwise the
+/// GitHub releases of the repository the build came from. Local builds have neither.
+static MANIFEST_URL: LazyLock<Option<String>> = LazyLock::new(|| {
+    option_env!("SHOTER_UPDATE_URL")
+        .and_then(updates::manifest_url)
+        .or_else(|| option_env!("SHOTER_UPDATE_REPO").filter(|r| !r.trim().is_empty()).map(|r| updates::github_manifest_url(r.trim())))
+});
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "phase", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum UpdateState {
-    /// Local build without a release repository.
+    /// Local build without an update source.
     Disabled,
     Idle,
     Checking,
@@ -36,8 +42,8 @@ pub enum UpdateState {
 }
 
 static STATE: LazyLock<Mutex<UpdateState>> =
-    LazyLock::new(|| Mutex::new(if REPO.is_some() { UpdateState::Idle } else { UpdateState::Disabled }));
-static LATEST: Mutex<Option<Release>> = Mutex::new(None);
+    LazyLock::new(|| Mutex::new(if MANIFEST_URL.is_some() { UpdateState::Idle } else { UpdateState::Disabled }));
+static LATEST: Mutex<Option<Manifest>> = Mutex::new(None);
 static BUSY: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub fn state() -> UpdateState {
@@ -53,24 +59,20 @@ fn current_version(app: &AppHandle) -> String {
     app.package_info().version.to_string()
 }
 
-/// Asks GitHub for the latest release.
+/// Reads the manifest of the latest release.
 pub async fn check(app: &AppHandle) -> UpdateState {
-    let Some(repo) = REPO else { return UpdateState::Disabled };
+    let Some(url) = MANIFEST_URL.as_deref() else { return UpdateState::Disabled };
     let Ok(_busy) = BUSY.try_lock() else { return state() };
     set_state(app, UpdateState::Checking);
-    let next = match updates::latest_release(&shoter_core::boxapi::http_client(), updates::GITHUB_API, repo).await {
-        Ok(release) if updates::is_newer(release.version(), &current_version(app)) => {
-            let s = UpdateState::Available {
-                version: release.version().to_string(),
-                notes: release.body.clone().unwrap_or_default(),
-                url: release.html_url.clone(),
-            };
-            *LATEST.lock().unwrap() = Some(release);
+    let next = match updates::fetch_manifest(&shoter_core::boxapi::http_client(), url).await {
+        Ok(manifest) if updates::is_newer(&manifest.version, &current_version(app)) => {
+            let s = UpdateState::Available { version: manifest.version.clone(), notes: manifest.notes.clone(), url: manifest.url.clone() };
+            *LATEST.lock().unwrap() = Some(manifest);
             s
         }
         Ok(_) | Err(updates::UpdateError::NoReleases) => UpdateState::UpToDate,
         Err(e) => {
-            log::warn!("update check failed: {e}");
+            log::warn!("update check failed ({url}): {e}");
             UpdateState::Error { message: format!("Не удалось проверить обновления: {e}") }
         }
     };
@@ -78,15 +80,15 @@ pub async fn check(app: &AppHandle) -> UpdateState {
     next
 }
 
-/// Downloads and starts installing the release found by [`check`]; the app then exits
+/// Downloads and starts installing the version found by [`check`]; the app then exits
 /// and is started again by the installer (or by the new portable exe).
 pub async fn install(app: &AppHandle) -> Result<(), String> {
     if LATEST.lock().unwrap().is_none() {
         check(app).await;
     }
-    let release = LATEST.lock().unwrap().clone().ok_or("обновлений нет")?;
+    let manifest = LATEST.lock().unwrap().clone().ok_or("обновлений нет")?;
     let _busy = BUSY.lock().await;
-    let result = download_and_run(app, &release).await;
+    let result = download_and_run(app, &manifest).await;
     if let Err(e) = &result {
         log::error!("update failed: {e}");
         set_state(app, UpdateState::Error { message: format!("Не удалось обновить: {e}") });
@@ -94,21 +96,23 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
     result
 }
 
-async fn download_and_run(app: &AppHandle, release: &Release) -> Result<(), String> {
-    let version = release.version().to_string();
+async fn download_and_run(app: &AppHandle, manifest: &Manifest) -> Result<(), String> {
+    let version = manifest.version.clone();
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let kind = install_kind(&exe);
-    let asset = updates::pick_asset(release, kind).ok_or("в релизе нет файла для этой установки")?.clone();
+    let entry = manifest.file(kind).ok_or("в обновлении нет файла для этой установки")?.clone();
     if kind == InstallKind::Portable && !dir_writable(exe.parent().unwrap_or(Path::new("."))) {
-        return Err("нет прав на запись в папку программы — скачайте новую версию со страницы релиза".into());
+        return Err("нет прав на запись в папку программы — скачайте новую версию вручную".into());
     }
+    let url = updates::file_url(MANIFEST_URL.as_deref().unwrap_or_default(), &entry).map_err(|e| e.to_string())?;
+    let name = url.rsplit('/').next().filter(|n| n.to_ascii_lowercase().ends_with(".exe")).unwrap_or("AShot-update.exe");
 
     let dir = std::env::temp_dir().join("AShot-update");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let file = dir.join(&asset.name);
-    set_state(app, UpdateState::Downloading { version: version.clone(), downloaded: 0, total: asset.size });
+    let file = dir.join(name);
+    set_state(app, UpdateState::Downloading { version: version.clone(), downloaded: 0, total: entry.size });
     let mut last_emit = Instant::now();
-    updates::download(&shoter_core::boxapi::http_client(), &asset, &file, |downloaded, total| {
+    updates::download(&shoter_core::boxapi::http_client(), &url, &entry, &file, |downloaded, total| {
         if last_emit.elapsed() > Duration::from_millis(150) || downloaded == total {
             last_emit = Instant::now();
             set_state(app, UpdateState::Downloading { version: version.clone(), downloaded, total });
@@ -118,7 +122,7 @@ async fn download_and_run(app: &AppHandle, release: &Release) -> Result<(), Stri
     .map_err(|e| e.to_string())?;
 
     set_state(app, UpdateState::Installing { version: version.clone() });
-    log::info!("installing update {version} ({kind:?}) from {}", file.display());
+    log::info!("installing update {version} ({kind:?}) from {url}");
     match kind {
         // Passive install over the current one; /R starts the app again afterwards.
         InstallKind::Installer => {
@@ -222,7 +226,7 @@ pub fn start(app: &AppHandle) {
         }
         state.update_settings(|s| s.last_version = version.clone());
     }
-    if REPO.is_none() {
+    if MANIFEST_URL.is_none() {
         return;
     }
     let app = app.clone();
