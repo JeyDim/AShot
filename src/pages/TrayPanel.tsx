@@ -172,7 +172,7 @@ export default function TrayPanel() {
           </FooterButton>
           <FooterButton
             icon={<span className={clsx('h-2 w-2 rounded-full', boxReady ? 'bg-success' : 'bg-warning')} />}
-            onClick={() => api.openSettings()}
+            onClick={() => api.openSettings('box')}
           >
             {boxReady ? 'Box подключён' : 'Подключить Box'}
           </FooterButton>

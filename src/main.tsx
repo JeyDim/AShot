@@ -27,7 +27,7 @@ function App() {
     case 'editor':
       return <Editor id={param} />;
     case 'settings':
-      return <Settings />;
+      return <Settings initial={param} />;
     case 'about':
       return <About />;
     case 'toast':

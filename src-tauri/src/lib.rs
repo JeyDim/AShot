@@ -94,6 +94,7 @@ pub fn run() {
             commands::open_settings,
             commands::open_about,
             commands::panel_hide,
+            commands::toast_current,
             commands::toast_hide,
             commands::quit,
             commands::copy_text,

@@ -84,6 +84,8 @@ pub struct AppState {
     /// Global shortcut id → capture mode.
     pub hotkeys: Mutex<HashMap<u32, CaptureMode>>,
     pub panel_hidden_at: Mutex<Option<Instant>>,
+    /// Last toast, pulled by the toast page when it loads after the event was sent.
+    pub last_toast: Mutex<Option<(crate::ui::Toast, Instant)>>,
     #[cfg(windows)]
     pub ui_selector: crate::uiselect::UiSelector,
 }
@@ -121,6 +123,7 @@ impl AppState {
             box_client: Mutex::new(None),
             hotkeys: Mutex::new(HashMap::new()),
             panel_hidden_at: Mutex::new(None),
+            last_toast: Mutex::new(None),
             #[cfg(windows)]
             ui_selector: crate::uiselect::UiSelector::spawn(),
         })

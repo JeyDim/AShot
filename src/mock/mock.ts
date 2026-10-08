@@ -135,6 +135,8 @@ export async function installMocks() {
           return { mode: 'oAuth', hasClientSecret: true, hasDeveloperToken: false, signedIn: true, redirectUri: 'http://localhost:47615/callback' };
         case 'link_preview':
           return String(a.template).replace('{id}', '3rud4dfakga5r953wt77anhyzo27tm7r');
+        case 'toast_current':
+          return null;
         case 'overlay_pending':
           return overlay;
         case 'overlay_hit_test':

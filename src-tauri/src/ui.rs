@@ -187,6 +187,7 @@ pub fn create_toast(app: &AppHandle) -> tauri::Result<WebviewWindow> {
 /// Shows a notification in the bottom-right corner of the monitor with the cursor.
 /// The toast window is pre-created at startup, so this never builds a window.
 pub fn toast(app: &AppHandle, toast: Toast) {
+    *app.state::<AppState>().last_toast.lock().unwrap() = Some((toast.clone(), Instant::now()));
     let Ok(window) = create_toast(app) else { return };
     let (cx, cy) = capture::cursor_position();
     let (wx, wy, ww, wh, scale) = work_area_at(app, cx, cy);
@@ -199,8 +200,18 @@ pub fn toast(app: &AppHandle, toast: Toast) {
     show_without_focus(&window);
 }
 
+/// The toast that should currently be on screen (for a toast page that just loaded).
+pub fn current_toast(app: &AppHandle) -> Option<Toast> {
+    let state = app.state::<AppState>();
+    let guard = state.last_toast.lock().unwrap();
+    let (toast, at) = guard.as_ref()?;
+    let alive = toast.timeout_ms == 0 || at.elapsed() < Duration::from_millis(toast.timeout_ms);
+    alive.then(|| toast.clone())
+}
+
 /// Hides the toast; returns `true` when it was visible.
 pub fn hide_toast(app: &AppHandle) -> bool {
+    app.state::<AppState>().last_toast.lock().unwrap().take();
     let Some(w) = app.get_webview_window(TOAST) else { return false };
     let visible = w.is_visible().unwrap_or(false);
     if visible {
@@ -263,12 +274,17 @@ fn focus_existing(app: &AppHandle, label: &str) -> bool {
     false
 }
 
-pub fn open_settings(app: &AppHandle) {
+pub fn open_settings(app: &AppHandle, section: Option<&str>) {
     hide_panel(app);
+    let section = section.filter(|s| s.chars().all(|c| c.is_ascii_alphabetic()));
     if focus_existing(app, SETTINGS) {
+        if let Some(sec) = section {
+            let _ = app.emit_to(SETTINGS, "settings:section", sec);
+        }
         return;
     }
-    let _ = WebviewWindowBuilder::new(app, SETTINGS, url("settings"))
+    let route = section.map(|s| format!("settings/{s}")).unwrap_or_else(|| "settings".into());
+    let _ = WebviewWindowBuilder::new(app, SETTINGS, url(&route))
         .title("Настройки — AdvantShoter")
         .inner_size(860.0, 640.0)
         .min_inner_size(720.0, 520.0)

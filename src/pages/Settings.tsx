@@ -4,6 +4,7 @@ import { Cloud, FolderOpen, Keyboard, Link2, LogIn, LogOut, MousePointerClick, S
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Button, Input, Kbd, Logo, Segmented, Select, Switch } from '../components/ui';
 import { acceleratorFromEvent } from '../lib/format';
+import { useTauriEvent } from '../lib/hooks';
 import { api, errorText } from '../lib/ipc';
 import type { AppSettings, BoxStatus, BoxUser, Hotkeys, SettingsView } from '../lib/types';
 
@@ -17,10 +18,13 @@ const SECTIONS: { id: Section; label: string; icon: ReactNode }[] = [
   { id: 'links', label: 'Ссылки', icon: <Link2 size={17} /> },
 ];
 
-export default function Settings() {
+export default function Settings({ initial }: { initial?: string }) {
   const [view, setView] = useState<SettingsView | null>(null);
   const [draft, setDraft] = useState<AppSettings | null>(null);
-  const [section, setSection] = useState<Section>(() => (window.location.hash.split('?')[1] as Section) || 'general');
+  const [section, setSection] = useState<Section>(() => (SECTIONS.some((s) => s.id === initial) ? (initial as Section) : 'general'));
+  useTauriEvent<string>('settings:section', (e) => {
+    if (SECTIONS.some((s) => s.id === e.payload)) setSection(e.payload as Section);
+  });
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
 

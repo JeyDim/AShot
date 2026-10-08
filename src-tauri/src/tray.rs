@@ -44,7 +44,7 @@ pub fn create(app: &App) -> tauri::Result<()> {
             "fullscreen" => flow::start(app, CaptureMode::Fullscreen),
             "last" => flow::start(app, CaptureMode::LastRegion),
             "panel" => ui::show_panel(app, None),
-            "settings" => ui::open_settings(app),
+            "settings" => ui::open_settings(app, None),
             "about" => ui::open_about(app),
             "quit" => app.exit(0),
             _ => {}

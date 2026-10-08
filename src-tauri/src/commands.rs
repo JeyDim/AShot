@@ -340,8 +340,8 @@ pub async fn editor_commit(app: AppHandle, request: Request<'_>) -> CmdResult<Ac
 // ---------------------------------------------------------------- windows & misc
 
 #[tauri::command]
-pub async fn open_settings(app: AppHandle) {
-    ui::open_settings(&app);
+pub async fn open_settings(app: AppHandle, section: Option<String>) {
+    ui::open_settings(&app, section.as_deref());
 }
 
 #[tauri::command]
@@ -352,6 +352,11 @@ pub async fn open_about(app: AppHandle) {
 #[tauri::command]
 pub fn panel_hide(app: AppHandle) {
     ui::hide_panel(&app);
+}
+
+#[tauri::command]
+pub fn toast_current(app: AppHandle) -> Option<ui::Toast> {
+    ui::current_toast(&app)
 }
 
 #[tauri::command]

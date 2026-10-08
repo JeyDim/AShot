@@ -14,11 +14,20 @@ export default function Toast() {
   const [copied, setCopied] = useState(false);
   const timer = useRef<number | undefined>(undefined);
 
-  useTauriEvent<ToastPayload>('toast:show', (e) => {
-    setToast(e.payload);
+  const show = (t: ToastPayload) => {
+    setToast(t);
     setCopied(false);
     setKey((k) => k + 1);
-  });
+  };
+  useTauriEvent<ToastPayload>('toast:show', (e) => show(e.payload));
+
+  // The window may have been shown before this page finished loading.
+  useEffect(() => {
+    api
+      .toastCurrent()
+      .then((t) => (t ? show(t) : api.toastHide()))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     window.clearTimeout(timer.current);

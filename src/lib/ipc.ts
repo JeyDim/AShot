@@ -12,6 +12,7 @@ import type {
   OverlayPrepare,
   Rect,
   SettingsView,
+  ToastPayload,
 } from './types';
 
 export const api = {
@@ -51,9 +52,10 @@ export const api = {
     return invoke<ActionResult>('editor_commit', body, { headers: { 'x-id': id, 'x-action': action } });
   },
 
-  openSettings: () => invoke<void>('open_settings'),
+  openSettings: (section?: 'general' | 'hotkeys' | 'saving' | 'box' | 'links') => invoke<void>('open_settings', { section: section ?? null }),
   openAbout: () => invoke<void>('open_about'),
   panelHide: () => invoke<void>('panel_hide'),
+  toastCurrent: () => invoke<ToastPayload | null>('toast_current'),
   toastHide: () => invoke<void>('toast_hide'),
   quit: () => invoke<void>('quit'),
   copyText: (text: string) => invoke<void>('copy_text', { text }),
