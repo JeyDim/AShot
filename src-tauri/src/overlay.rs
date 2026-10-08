@@ -20,6 +20,9 @@ pub const PREFIX: &str = "overlay-";
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverlayPrepare {
+    /// Window the payload is meant for. Web pages listening for an event receive it
+    /// even when it was emitted to another window, so every overlay checks this.
+    pub label: String,
     pub session_id: u64,
     pub monitor: MonitorInfo,
     /// Path for the `shot` protocol, e.g. `session/3/0.bmp`.
@@ -171,6 +174,7 @@ pub fn open(
             m.bounds.contains(cx, cy).then(|| r.intersect(&m.bounds)).flatten()
         });
         let payload = OverlayPrepare {
+            label: label(m.index),
             session_id: session.id,
             monitor: m.clone(),
             image: format!("session/{}/{}.bmp", session.id, m.index),

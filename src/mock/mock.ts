@@ -86,6 +86,7 @@ export async function installMocks() {
   };
 
   const overlay: OverlayPrepare = {
+    label: 'overlay-0',
     sessionId: 1,
     monitor: { index: 0, name: 'DISPLAY1', bounds: { x: 0, y: 0, width: 1920, height: 1080 }, workArea: { x: 0, y: 0, width: 1920, height: 1040 }, scale: 1, primary: true },
     image: 'session/1/0.bmp',

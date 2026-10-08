@@ -102,6 +102,8 @@ export interface WindowInfo {
 }
 
 export interface OverlayPrepare {
+  /** Overlay window the payload is for (`overlay-<monitor>`). */
+  label: string;
   sessionId: number;
   monitor: MonitorInfo;
   image: string;

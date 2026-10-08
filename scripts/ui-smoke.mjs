@@ -118,6 +118,27 @@ const check = (cond, msg) => {
   await page.close();
 }
 
+// ---------------------------------------------------------------- multi-monitor: foreign payloads
+{
+  const page = await browser.newPage({ viewport: { width: 1440, height: 810 } });
+  await page.goto(`${base}?mock#/overlay`);
+  await page.waitForTimeout(900);
+  // A payload for the overlay of another monitor (with a pre-selected area) must be ignored.
+  await page.evaluate(() =>
+    window.__TAURI_INTERNALS__.invoke('plugin:event|emit', {
+      event: 'overlay:prepare',
+      payload: {
+        label: 'overlay-1', sessionId: 99, image: 'session/99/1.bmp', windows: [], mode: 'region',
+        monitor: { index: 1, name: 'DISPLAY2', bounds: { x: 1920, y: 0, width: 2560, height: 1440 }, workArea: { x: 1920, y: 0, width: 2560, height: 1400 }, scale: 1, primary: false },
+        preselect: { x: 2000, y: 100, width: 500, height: 300 }, autoAction: null, showMagnifier: true, uiElements: false, cursor: [2100, 200],
+      },
+    }),
+  );
+  await page.waitForTimeout(600);
+  check(!(await page.getByRole('toolbar', { name: 'Инструменты' }).isVisible().catch(() => false)), 'overlay ignores the payload of another monitor');
+  await page.close();
+}
+
 // ---------------------------------------------------------------- drawing on the overlay
 {
   const page = await browser.newPage({ viewport: { width: 1440, height: 810 } });

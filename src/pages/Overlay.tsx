@@ -454,6 +454,8 @@ export default function Overlay() {
   const prepare = useCallback(
     async (p: OverlayPrepare) => {
       const st = s.current;
+      // Events reach every overlay window: take only the picture of our own monitor.
+      if (p.label !== getCurrentWindow().label) return;
       if (st.prep?.sessionId === p.sessionId) return;
       finishing.current = false;
       const next = emptyState();
