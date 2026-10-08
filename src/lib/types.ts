@@ -63,6 +63,8 @@ export interface AppSettings {
   editor: EditorPrefs;
   lastRegion: Rect | null;
   welcomed: boolean;
+  autoUpdate: boolean;
+  lastVersion: string;
 }
 
 export interface PatchResult {
@@ -171,3 +173,14 @@ export interface ActionResult {
   shareUrl: string | null;
   savedPath: string | null;
 }
+
+/** Self-update from GitHub Releases (`update:state` event, `update_state` command). */
+export type UpdateState =
+  | { phase: 'disabled' }
+  | { phase: 'idle' }
+  | { phase: 'checking' }
+  | { phase: 'upToDate' }
+  | { phase: 'available'; version: string; notes: string; url: string }
+  | { phase: 'downloading'; version: string; downloaded: number; total: number }
+  | { phase: 'installing'; version: string }
+  | { phase: 'error'; message: string };

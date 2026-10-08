@@ -3,7 +3,6 @@ name: Build
 on:
   push:
     branches: ['**']
-    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -47,6 +46,8 @@ jobs:
   windows:
     name: Windows build
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -58,31 +59,70 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Version (major.minor from Cargo.toml, patch = run number)
+        id: version
+        shell: pwsh
+        run: |
+          $m = (Select-String -Path Cargo.toml -Pattern '^version = "(\d+)\.(\d+)\.\d+"' | Select-Object -First 1).Matches[0]
+          $v = "$($m.Groups[1].Value).$($m.Groups[2].Value).${{ github.run_number }}"
+          Set-Content -Path "${{ runner.temp }}/version.json" -Value ('{"version":"' + $v + '"}') -Encoding utf8NoBOM
+          "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "Version $v"
       - name: Build installer (NSIS + MSI)
-        run: npx tauri build
+        run: npx tauri build --config "${{ runner.temp }}/version.json"
         env:
           # Built-in Box app: users only press "Sign in with Box" (see README).
           # Empty when the secrets are not set – then the app asks for an own Box app.
           SHOTER_BOX_CLIENT_ID: ${{ secrets.BOX_CLIENT_ID }}
           SHOTER_BOX_CLIENT_SECRET: ${{ secrets.BOX_CLIENT_SECRET }}
           SHOTER_BOX_REDIRECT_URI: ${{ secrets.BOX_REDIRECT_URI }}
+          # Links: https://<PROXY_DOMAIN>/{id}; empty – Box embed links.
+          SHOTER_PROXY_DOMAIN: ${{ secrets.PROXY_DOMAIN }}
+          # The app updates itself from the releases of this repository.
+          SHOTER_UPDATE_REPO: ${{ github.repository }}
       - name: Collect artifacts
         shell: pwsh
         run: |
-          $sha = "${{ github.sha }}".Substring(0, 7)
+          $v = "${{ steps.version.outputs.version }}"
+          $exeVersion = (Get-Item target/release/AShot.exe).VersionInfo.ProductVersion
+          if (-not $exeVersion.StartsWith($v)) { throw "AShot.exe has version $exeVersion, expected $v" }
           New-Item -ItemType Directory -Force out | Out-Null
           Copy-Item target/release/bundle/nsis/*.exe out/
           Copy-Item target/release/bundle/msi/*.msi out/
-          Copy-Item target/release/AShot.exe "out/AShot-portable-$sha.exe"
+          Copy-Item target/release/AShot.exe "out/AShot_${v}_x64-portable.exe"
           Get-ChildItem out
       - uses: actions/upload-artifact@v7
         with:
-          name: AShot-windows-${{ github.sha }}
+          name: AShot-windows-${{ steps.version.outputs.version }}
           path: out/*
           if-no-files-found: error
-      - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v3
-        with:
-          files: out/*
-          generate_release_notes: true
+      # Builds of the default branch become releases (published after the tests pass).
+      - name: Draft release
+        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ github.event.head_commit.message }}
+        run: |
+          $v = "${{ steps.version.outputs.version }}"
+          $files = (Get-ChildItem out).FullName
+          # Release notes: the commit message without trailers.
+          $notes = ($env:NOTES -split "`n" | Where-Object { $_ -notmatch '^(Co-Authored-By|Claude-Session|Signed-off-by):' }) -join "`n"
+          gh release view "v$v" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload "v$v" $files --clobber
+          } else {
+            gh release create "v$v" $files --draft --target "${{ github.sha }}" --title "AShot $v" --notes "$notes"
+          }
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+  release:
+    name: Publish release
+    needs: [checks, windows]
+    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish (installed apps update to it)
+        run: gh release edit "v${{ needs.windows.outputs.version }}" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+        env:
+          GH_TOKEN: ${{ github.token }}

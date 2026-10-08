@@ -586,3 +586,21 @@ pub fn link_preview(template: String) -> String {
     let template = if template.trim().is_empty() { crate::state::default_link_template() } else { template };
     links::rewrite("https://app.box.com/s/3rud4dfakga5r953wt77anhyzo27tm7r", &template, Some("Screenshot.png"))
 }
+
+// ---------------------------------------------------------------- updates
+
+#[tauri::command]
+pub fn update_state() -> crate::updater::UpdateState {
+    crate::updater::state()
+}
+
+#[tauri::command]
+pub async fn update_check(app: AppHandle) -> crate::updater::UpdateState {
+    crate::updater::check(&app).await
+}
+
+/// Downloads and installs the new version; the app restarts.
+#[tauri::command]
+pub async fn update_install(app: AppHandle) -> CmdResult<()> {
+    crate::updater::install(&app).await
+}

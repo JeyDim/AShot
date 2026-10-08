@@ -16,6 +16,7 @@ mod tray;
 mod ui;
 #[cfg(windows)]
 mod uiselect;
+mod updater;
 
 use tauri::{AppHandle, Manager, RunEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
@@ -69,6 +70,8 @@ fn remove_legacy_autostart() {
 fn remove_legacy_autostart() {}
 
 pub fn run() {
+    // After a portable self-update the new exe starts before the old one has exited.
+    updater::wait_for_previous_instance(&std::env::args().collect::<Vec<_>>());
     tauri::Builder::default()
         // Must be the first plugin.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| handle_args(app, &argv, true)))
@@ -124,6 +127,9 @@ pub fn run() {
             commands::box_login,
             commands::box_logout,
             commands::link_preview,
+            commands::update_state,
+            commands::update_check,
+            commands::update_install,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -146,6 +152,9 @@ pub fn run() {
             if settings.autostart != launcher.is_enabled().unwrap_or(false) {
                 let _ = if settings.autostart { launcher.enable() } else { launcher.disable() };
             }
+
+            updater::cleanup();
+            updater::start(&handle);
 
             if !problems.is_empty() {
                 ui::toast(

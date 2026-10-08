@@ -7,12 +7,13 @@ import {
   ChevronRight,
   Cloud,
   Copy,
-  ExternalLink,
+  Download,
   FileText,
   FolderOpen,
   Info,
   Keyboard,
   Monitor,
+  RefreshCw,
   RotateCcw,
   Save,
   Scan,
@@ -25,7 +26,7 @@ import { Button, IconButton, Input, Logo, Range, Segmented, Select, Spinner, Swi
 import { acceleratorFromEvent, hotkeyLabel } from '../lib/format';
 import { useTauriEvent } from '../lib/hooks';
 import { api, errorText, type SettingsSection } from '../lib/ipc';
-import type { AppInfo, AppSettings, BoxStatus, Hotkeys, SettingsView } from '../lib/types';
+import type { AppInfo, AppSettings, BoxStatus, Hotkeys, SettingsView, UpdateState } from '../lib/types';
 
 type Section = Exclude<SettingsSection, 'links'>;
 
@@ -186,7 +187,7 @@ export default function Settings({ initial }: { initial?: string }) {
             {section === 'hotkeys' && <HotkeysSection value={settings.hotkeys} onChange={(h) => update({ hotkeys: h })} />}
             {section === 'saving' && <Saving s={settings} update={update} view={view} />}
             {section === 'box' && <BoxSection s={settings} update={update} flush={flush} defaultTemplate={view.defaultLinkTemplate} />}
-            {section === 'about' && <About />}
+            {section === 'about' && <About s={settings} update={update} />}
           </div>
         </div>
       </main>
@@ -802,7 +803,7 @@ function BoxSection({ s, update, flush, defaultTemplate }: { s: AppSettings; upd
 
 // ---------------------------------------------------------------- О программе
 
-function About() {
+function About({ s, update }: { s: AppSettings; update: Update }) {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -820,7 +821,7 @@ function About() {
       <Logo size={72} radius={284} />
       <div className="flex flex-col items-center gap-1.5 text-center">
         <h1 className="font-display text-[22px] font-normal">AShot</h1>
-        <div className="text-[14px] text-muted">Скриншоты с редактором и ссылками advant.one</div>
+        <div className="text-[14px] text-muted">Скриншоты с редактором и ссылками Box</div>
       </div>
       <div className="w-full max-w-[440px] rounded-[14px] bg-surface-2 px-4 py-1.5">
         {rows.map(([k, v]) => (
@@ -830,24 +831,20 @@ function About() {
           </div>
         ))}
       </div>
-      <div className="flex gap-2">
-        <Button
-          variant="primary"
-          size="lg"
-          icon={copied ? <Check size={16} /> : <Copy size={16} />}
-          disabled={!info}
-          onClick={async () => {
-            await api.copyText(versionLine);
-            setCopied(true);
-            window.setTimeout(() => setCopied(false), 1500);
-          }}
-        >
-          {copied ? 'Скопировано' : 'Скопировать версию'}
-        </Button>
-        <Button variant="secondary" size="lg" icon={<ExternalLink size={16} />} onClick={() => api.openUrl('https://advant.one')}>
-          advant.one
-        </Button>
-      </div>
+      <Updates autoUpdate={s.autoUpdate} onAutoUpdate={(v) => update({ autoUpdate: v })} />
+      <Button
+        variant="secondary"
+        size="lg"
+        icon={copied ? <Check size={16} /> : <Copy size={16} />}
+        disabled={!info}
+        onClick={async () => {
+          await api.copyText(versionLine);
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1500);
+        }}
+      >
+        {copied ? 'Скопировано' : 'Скопировать версию'}
+      </Button>
       <div className="flex gap-5 text-[13px]">
         <button className="flex items-center gap-1.5 transition-colors hover:text-muted" onClick={() => api.openFolder('logs')}>
           <FileText size={16} className="text-muted" />
@@ -860,6 +857,120 @@ function About() {
       </div>
       <div className="max-w-[440px] text-center text-[12px] leading-normal text-muted">
         Используются: Tauri, React, Konva, иконки Lucide (ISC), snow-ui-selector из Snow Shot (Apache-2.0), шрифты Roboto и Roboto Mono (OFL).
+      </div>
+    </div>
+  );
+}
+
+/** Update check / install from GitHub Releases. */
+function Updates({ autoUpdate, onAutoUpdate }: { autoUpdate: boolean; onAutoUpdate: (v: boolean) => void }) {
+  const [st, setSt] = useState<UpdateState>({ phase: 'idle' });
+  useEffect(() => {
+    api.updateState().then(setSt).catch(() => {});
+  }, []);
+  useTauriEvent<UpdateState>('update:state', (e) => setSt(e.payload));
+
+  const check = () => api.updateCheck().then(setSt).catch((e) => setSt({ phase: 'error', message: errorText(e) }));
+  // The app restarts on success; errors also arrive as `update:state`.
+  const install = () => api.updateInstall().catch((e) => setSt({ phase: 'error', message: errorText(e) }));
+
+  if (st.phase === 'disabled') {
+    return <div className="text-[12.5px] text-muted">Обновления недоступны в локальной сборке</div>;
+  }
+
+  let text: ReactNode;
+  let action: ReactNode = null;
+  switch (st.phase) {
+    case 'idle':
+      text = <span className="text-muted">Обновления — из GitHub</span>;
+      action = (
+        <Button variant="outline" icon={<RefreshCw size={15} />} onClick={check}>
+          Проверить обновления
+        </Button>
+      );
+      break;
+    case 'checking':
+      text = (
+        <span className="flex items-center gap-2 text-muted">
+          <Spinner size={15} /> Проверяю…
+        </span>
+      );
+      action = (
+        <Button variant="outline" icon={<RefreshCw size={15} />} disabled>
+          Проверить обновления
+        </Button>
+      );
+      break;
+    case 'upToDate':
+      text = (
+        <span className="flex items-center gap-2">
+          <Check size={16} className="text-success" /> Установлена последняя версия
+        </span>
+      );
+      action = (
+        <Button variant="outline" icon={<RefreshCw size={15} />} onClick={check}>
+          Проверить снова
+        </Button>
+      );
+      break;
+    case 'available':
+      text = (
+        <span className="flex min-w-0 flex-col">
+          <span className="font-medium">Доступна версия {st.version}</span>
+          <button className="self-start text-[12.5px] text-muted underline-offset-2 hover:text-text hover:underline" onClick={() => api.openUrl(st.url)}>
+            Что нового
+          </button>
+        </span>
+      );
+      action = (
+        <Button variant="primary" icon={<Download size={15} />} onClick={install}>
+          Обновить
+        </Button>
+      );
+      break;
+    case 'downloading': {
+      const pct = st.total ? Math.min(100, Math.round((st.downloaded / st.total) * 100)) : 0;
+      text = (
+        <span className="flex w-full flex-col gap-2">
+          <span className="text-muted">
+            Скачиваю {st.version} — {pct}%
+          </span>
+          <span className="h-1.5 overflow-hidden rounded-full bg-surface-3">
+            <span className="block h-full rounded-full bg-primary transition-[width]" style={{ width: `${pct}%` }} />
+          </span>
+        </span>
+      );
+      break;
+    }
+    case 'installing':
+      text = (
+        <span className="flex items-center gap-2 text-muted">
+          <Spinner size={15} /> Устанавливаю {st.version} — AShot перезапустится
+        </span>
+      );
+      break;
+    case 'error':
+      text = <span className="text-danger">{st.message}</span>;
+      action = (
+        <Button variant="outline" icon={<RefreshCw size={15} />} onClick={check}>
+          Повторить
+        </Button>
+      );
+      break;
+  }
+
+  return (
+    <div className="w-full max-w-[440px] rounded-[14px] bg-surface-2 px-4 py-1.5">
+      <div className="flex min-h-[52px] items-center justify-between gap-3 py-2 text-[14px]">
+        <div className="flex min-w-0 flex-1">{text}</div>
+        {action && <div className="shrink-0">{action}</div>}
+      </div>
+      <div className="flex items-center justify-between gap-4 border-t border-border py-2.5 text-[14px]">
+        <span className="flex flex-col">
+          Обновлять автоматически
+          <span className="text-[12px] text-muted">Когда ничего не открыто; AShot перезапустится сам</span>
+        </span>
+        <Switch checked={autoUpdate} onChange={onAutoUpdate} label="Обновлять автоматически" />
       </div>
     </div>
   );

@@ -188,6 +188,10 @@ pub struct AppSettings {
     pub last_region: Option<Rect>,
     /// Set after the welcome notification has been shown once.
     pub welcomed: bool,
+    /// Install new versions from GitHub Releases automatically (when nothing is open).
+    pub auto_update: bool,
+    /// Version that ran last time ("updated to …" notification).
+    pub last_version: String,
 }
 
 impl Default for AppSettings {
@@ -210,6 +214,8 @@ impl Default for AppSettings {
             editor: EditorPrefs::default(),
             last_region: None,
             welcomed: false,
+            auto_update: true,
+            last_version: String::new(),
         }
     }
 }
@@ -317,6 +323,7 @@ mod tests {
         assert!(!s.show_cursor, "cursor must be hidden by default");
         assert_eq!(s.history_limit, 10);
         assert!(s.links.template.is_empty(), "link template comes from the build");
+        assert!(s.auto_update);
         assert!(s.links.rewrite);
         assert_eq!(s.hotkeys.region, "Control+PrintScreen");
         assert!(s.hotkeys.window.is_empty() && s.hotkeys.fullscreen.is_empty() && s.hotkeys.last_region.is_empty());

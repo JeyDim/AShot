@@ -12,6 +12,7 @@ pub mod imaging;
 pub mod links;
 pub mod oauth;
 pub mod settings;
+pub mod updates;
 
 pub use geometry::Rect;
 

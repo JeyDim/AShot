@@ -26,6 +26,8 @@ const settings: AppSettings = {
   editor: { color: '#FF3B30', size: 1 },
   lastRegion: { x: 200, y: 120, width: 1280, height: 720 },
   welcomed: true,
+  autoUpdate: true,
+  lastVersion: '0.1.57',
 };
 
 const now = Date.now();
@@ -151,6 +153,24 @@ export async function installMocks() {
                 hasDeveloperToken: false,
                 redirectUri: 'https://www.box.com/home/',
               };
+        case 'update_state': {
+          // ?update=available|downloading|upToDate|error|disabled — states of «О программе».
+          const phase = query.get('update') ?? 'idle';
+          if (phase === 'available') return { phase, version: '0.1.58', notes: 'Новый дизайн', url: 'https://github.com/' };
+          if (phase === 'downloading') return { phase, version: '0.1.58', downloaded: 6_200_000, total: 9_800_000 };
+          if (phase === 'error') return { phase, message: 'Не удалось проверить обновления: сеть: connection refused' };
+          return { phase };
+        }
+        case 'update_check':
+          await new Promise((r) => setTimeout(r, 400));
+          return { phase: 'available', version: '0.1.58', notes: 'Новый дизайн', url: 'https://github.com/' };
+        case 'update_install':
+          for (let i = 0; i <= 10; i++) {
+            await emit('update:state', { phase: 'downloading', version: '0.1.58', downloaded: i * 980_000, total: 9_800_000 });
+            await new Promise((r) => setTimeout(r, 80));
+          }
+          await emit('update:state', { phase: 'installing', version: '0.1.58' });
+          return null;
         case 'link_preview':
           return String(a.template || 'https://app.box.com/embed/s/{id}').replace('{id}', '3rud4dfakga5r953wt77anhyzo27tm7r');
         case 'toast_current':

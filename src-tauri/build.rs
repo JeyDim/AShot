@@ -25,5 +25,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SHOTER_BOX_REDIRECT_URI");
     // Proxy domain for links (CI secret PROXY_DOMAIN); empty = Box embed links.
     println!("cargo:rerun-if-env-changed=SHOTER_PROXY_DOMAIN");
+    // GitHub repository with releases for self-update (set by CI).
+    println!("cargo:rerun-if-env-changed=SHOTER_UPDATE_REPO");
     tauri_build::build()
 }

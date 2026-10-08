@@ -1,20 +1,6 @@
 // Typed wrappers around the Rust commands.
 import { invoke } from '@tauri-apps/api/core';
-import type {
-  Action,
-  ActionResult,
-  AppInfo,
-  AppSettings,
-  BoxStatus,
-  BoxUser,
-  CaptureMode,
-  HistoryItem,
-  OverlayPrepare,
-  PatchResult,
-  Rect,
-  SettingsView,
-  ToastPayload,
-} from './types';
+import type { Action, ActionResult, AppInfo, AppSettings, BoxStatus, BoxUser, CaptureMode, HistoryItem, OverlayPrepare, PatchResult, Rect, SettingsView, ToastPayload, UpdateState } from './types';
 
 /** Sections of the settings window (`links` is an alias of `box`). */
 export type SettingsSection = 'general' | 'hotkeys' | 'saving' | 'box' | 'links' | 'about';
@@ -85,6 +71,10 @@ export const api = {
   boxLogin: () => invoke<BoxUser>('box_login'),
   boxLogout: () => invoke<void>('box_logout'),
   linkPreview: (template: string) => invoke<string>('link_preview', { template }),
+
+  updateState: () => invoke<UpdateState>('update_state'),
+  updateCheck: () => invoke<UpdateState>('update_check'),
+  updateInstall: () => invoke<void>('update_install'),
 };
 
 /** URL of a resource served by the Rust `shot` protocol. */
