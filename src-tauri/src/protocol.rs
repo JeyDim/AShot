@@ -13,7 +13,7 @@ use crate::state::AppState;
 
 pub fn handle<R: Runtime>(ctx: UriSchemeContext<'_, R>, request: Request<Vec<u8>>, responder: UriSchemeResponder) {
     let app = ctx.app_handle().clone();
-    let path = percent_decode(request.uri().path());
+    let path = shoter_core::percent_decode(request.uri().path());
     tauri::async_runtime::spawn_blocking(move || {
         let response = serve(&app, &path).unwrap_or_else(|status| {
             Response::builder()
@@ -64,33 +64,5 @@ fn serve<R: Runtime>(app: &AppHandle<R>, path: &str) -> Result<Response<Vec<u8>>
             Ok(ok(bytes, mime))
         }
         _ => Err(StatusCode::NOT_FOUND),
-    }
-}
-
-fn percent_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(v);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn decodes() {
-        assert_eq!(super::percent_decode("/session%2F1%2F0.bmp"), "/session/1/0.bmp");
-        assert_eq!(super::percent_decode("/a%2"), "/a%2");
-        assert_eq!(super::percent_decode("/plain"), "/plain");
     }
 }

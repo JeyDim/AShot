@@ -52,9 +52,11 @@ async fn run(app: &AppHandle, mode: CaptureMode) -> Result<(), String> {
     let state = app.state::<AppState>();
     // Let the tray panel / toast disappear before freezing the screen.
     let panel_was_visible = ui::hide_panel(app);
-    ui::hide_toast(app);
+    let toast_was_visible = ui::hide_toast(app);
     if panel_was_visible {
         tokio::time::sleep(Duration::from_millis(220)).await;
+    } else if toast_was_visible {
+        tokio::time::sleep(Duration::from_millis(90)).await;
     }
 
     let settings = state.settings();

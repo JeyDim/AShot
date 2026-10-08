@@ -81,7 +81,7 @@ pub fn show_panel(app: &AppHandle, anchor: Option<(i32, i32)>) {
     let y = if anchor.is_some() && cy < wy + wh / 2 { wy + margin } else { wy + wh - ph - margin };
     let _ = window.set_position(PhysicalPosition::new(x, y));
     let _ = window.set_size(PhysicalSize::new(pw as u32, ph as u32));
-    let _ = window.emit("panel:shown", ());
+    let _ = app.emit_to(PANEL, "panel:shown", ());
     let _ = window.show();
     let _ = window.set_focus();
 }
@@ -195,14 +195,60 @@ pub fn toast(app: &AppHandle, toast: Toast) {
     let margin = (8.0 * scale) as i32;
     let _ = window.set_position(PhysicalPosition::new(wx + ww - tw - margin, wy + wh - th - margin));
     let _ = window.set_size(PhysicalSize::new(tw as u32, th as u32));
-    let _ = window.emit("toast:show", &toast);
+    let _ = app.emit_to(TOAST, "toast:show", &toast);
+    show_without_focus(&window);
+}
+
+/// Hides the toast; returns `true` when it was visible.
+pub fn hide_toast(app: &AppHandle) -> bool {
+    let Some(w) = app.get_webview_window(TOAST) else { return false };
+    let visible = w.is_visible().unwrap_or(false);
+    if visible {
+        hide_native(&w);
+    }
+    visible
+}
+
+/// Shows a window without activating it, so the user's application keeps keyboard
+/// focus (e.g. Ctrl+V right after "copied to clipboard").
+#[cfg(windows)]
+fn show_without_focus(window: &WebviewWindow) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_SHOWNOACTIVATE,
+    };
+    let Ok(hwnd) = window.hwnd() else {
+        let _ = window.show();
+        return;
+    };
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE);
+    }
+}
+
+#[cfg(not(windows))]
+fn show_without_focus(window: &WebviewWindow) {
     let _ = window.show();
 }
 
-pub fn hide_toast(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window(TOAST) {
-        let _ = w.hide();
+/// Counterpart of [`show_without_focus`]: the window was shown natively, so hide it
+/// natively too (the windowing library does not know it is visible).
+#[cfg(windows)]
+fn hide_native(window: &WebviewWindow) {
+    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+    match window.hwnd() {
+        Ok(hwnd) => unsafe {
+            let _ = ShowWindow(hwnd, SW_HIDE);
+        },
+        Err(_) => {
+            let _ = window.hide();
+        }
     }
+}
+
+#[cfg(not(windows))]
+fn hide_native(window: &WebviewWindow) {
+    let _ = window.hide();
 }
 
 // ---------------------------------------------------------------- regular windows

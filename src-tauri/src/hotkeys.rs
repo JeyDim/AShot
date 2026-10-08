@@ -11,9 +11,11 @@ pub fn apply(app: &AppHandle) -> Vec<String> {
     let state = app.state::<AppState>();
     let hk = state.settings().hotkeys;
     let gs = app.global_shortcut();
+    // Registration runs on the main thread and blocks this one, so never hold the
+    // `hotkeys` lock here (the hotkey handler on the main thread takes it).
+    state.hotkeys.lock().unwrap().clear();
     let _ = gs.unregister_all();
-    let mut map = state.hotkeys.lock().unwrap();
-    map.clear();
+    let mut map = std::collections::HashMap::new();
     let mut errors = Vec::new();
     let entries = [
         (CaptureMode::Region, hk.region, "Снимок области"),
@@ -42,6 +44,7 @@ pub fn apply(app: &AppHandle) -> Vec<String> {
             Err(e) => errors.push(format!("{title}: не удалось разобрать «{accel}» ({e})")),
         }
     }
+    *state.hotkeys.lock().unwrap() = map;
     for e in &errors {
         log::warn!("hotkey: {e}");
     }
@@ -49,8 +52,8 @@ pub fn apply(app: &AppHandle) -> Vec<String> {
 }
 
 pub fn suspend(app: &AppHandle) {
-    let _ = app.global_shortcut().unregister_all();
     app.state::<AppState>().hotkeys.lock().unwrap().clear();
+    let _ = app.global_shortcut().unregister_all();
 }
 
 pub fn handle(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {

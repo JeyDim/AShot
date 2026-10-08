@@ -375,7 +375,9 @@ export default function Overlay() {
       setImageSrc(img.src);
       draw();
       syncBar();
-      requestAnimationFrame(() => requestAnimationFrame(() => api.overlayReady(p.sessionId)));
+      // No requestAnimationFrame here: the window is still hidden and hidden pages may not
+      // get animation frames. The picture is decoded and drawn, so it can be shown now.
+      api.overlayReady(p.sessionId);
       queryElements();
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -403,8 +405,9 @@ export default function Overlay() {
     if (sel.width < 2 || sel.height < 2) return;
     finishing.current = true;
     const b = st.prep.monitor.bounds;
+    const target = { x: Math.round(sel.x + b.x), y: Math.round(sel.y + b.y), width: Math.round(sel.width), height: Math.round(sel.height) };
     try {
-      await api.overlayFinish({ x: sel.x + b.x, y: sel.y + b.y, width: sel.width, height: sel.height }, action);
+      await api.overlayFinish(target, action);
     } catch (e) {
       finishing.current = false;
       console.error(e);

@@ -44,3 +44,40 @@ pub fn random_string(len: usize) -> String {
     }
     out
 }
+
+/// Decodes `%XX` escapes (invalid sequences are kept as-is).
+pub fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn random_strings() {
+        let a = super::random_string(12);
+        assert_eq!(a.len(), 12);
+        assert_ne!(a, super::random_string(12));
+    }
+
+    #[test]
+    fn percent_decoding() {
+        assert_eq!(super::percent_decode("/session%2F1%2F0.bmp"), "/session/1/0.bmp");
+        assert_eq!(super::percent_decode("/a%2"), "/a%2");
+        assert_eq!(super::percent_decode("/%D0%B9"), "/й");
+        assert_eq!(super::percent_decode("/plain"), "/plain");
+    }
+}

@@ -203,6 +203,8 @@ export default function Editor({ id }: { id: string }) {
 
   // ------------------------------------------------------------ doc helpers
   const apply = (next: Doc) => setHist((h) => commit(h, next));
+  /** Update based on the latest document (safe inside event handlers with stale closures). */
+  const applyFn = (fn: (d: Doc) => Doc) => setHist((h) => commit(h, fn(h.present)));
   const live = (next: Doc) => setHist((h) => ({ ...h, present: next }));
   const beginGesture = () => {
     gestureStart.current = hist.present;
@@ -250,14 +252,20 @@ export default function Editor({ id }: { id: string }) {
   };
 
   // ------------------------------------------------------------ text editing
+  const textRef = useRef<TextEdit | null>(null);
+  textRef.current = textEdit;
   const commitText = () => {
-    if (!textEdit) return;
-    const value = textEdit.text.replace(/\s+$/, '');
-    if (textEdit.id) {
-      apply(value ? updateShape(doc, textEdit.id, { text: value, color: textEdit.color, size: textEdit.size, fontSize: textEdit.fontSize }) : removeShape(doc, textEdit.id));
+    // Called from blur *and* mousedown — the ref guarantees a single commit.
+    const te = textRef.current;
+    if (!te) return;
+    textRef.current = null;
+    const value = te.text.replace(/\s+$/, '');
+    if (te.id) {
+      const id = te.id;
+      applyFn((d) => (value ? updateShape(d, id, { text: value, color: te.color, size: te.size, fontSize: te.fontSize }) : removeShape(d, id)));
     } else if (value) {
-      const shape: TextShape = { id: newId(), type: 'text', x: textEdit.x, y: textEdit.y, text: value, color: textEdit.color, size: textEdit.size };
-      apply(addShape(doc, shape));
+      const shape: TextShape = { id: newId(), type: 'text', x: te.x, y: te.y, text: value, color: te.color, size: te.size };
+      applyFn((d) => addShape(d, shape));
       setSelectedId(shape.id);
     }
     setTextEdit(null);
@@ -289,7 +297,7 @@ export default function Editor({ id }: { id: string }) {
     }
     const target = e.target;
     const onTransformer = target.getParent()?.className === 'Transformer';
-    if (onTransformer) return;
+    if (onTransformer || target.hasName('anchor')) return;
     const hitId = shapeIdOf(target);
     const p = imagePoint();
 
@@ -305,6 +313,8 @@ export default function Editor({ id }: { id: string }) {
     }
     if (hitId && hitId === selectedId) return; // drag the selected shape
     if (tool === 'text') {
+      // Keep the browser from moving focus away from the textarea we are about to show.
+      e.evt.preventDefault();
       const hit = doc.shapes.find((s) => s.id === hitId);
       if (hit?.type === 'text') return startTextEdit(hit);
       setSelectedId(null);
@@ -765,6 +775,7 @@ export default function Editor({ id }: { id: string }) {
                 [0, 1].map((i) => (
                   <KCircle
                     key={i}
+                    name="anchor"
                     x={lineSel.points[i * 2]}
                     y={lineSel.points[i * 2 + 1]}
                     radius={anchorR}
@@ -825,6 +836,9 @@ export default function Editor({ id }: { id: string }) {
         {textEdit && textBox && (
           <textarea
             autoFocus
+            ref={(el) => {
+              if (el && document.activeElement !== el) requestAnimationFrame(() => el.focus());
+            }}
             value={textEdit.text}
             placeholder="Текст"
             onChange={(e) => setTextEdit({ ...textEdit, text: e.target.value })}

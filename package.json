@@ -10,7 +10,8 @@
     "test": "vitest run",
     "tauri": "tauri",
     "icons": "node scripts/render-logo.mjs && tauri icon assets/logo-1024.png",
-    "screens": "node scripts/screens.mjs"
+    "screens": "node scripts/screens.mjs",
+    "smoke": "node scripts/ui-smoke.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.1",

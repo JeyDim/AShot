@@ -91,8 +91,6 @@ pub fn open(
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
     let settings = state.settings();
-    let mut pending = state.overlay_pending.lock().unwrap();
-    pending.clear();
 
     // Close overlays of monitors that disappeared.
     for (label, w) in app.webview_windows() {
@@ -103,13 +101,8 @@ pub fn open(
         }
     }
 
+    let mut payloads = Vec::with_capacity(session.monitors.len());
     for m in &session.monitors {
-        let label = label(m.index);
-        let window = match app.get_webview_window(&label) {
-            Some(w) => w,
-            None => build(app, &label).map_err(|e| e.to_string())?,
-        };
-        place(&window, m);
         let preselect_here = preselect.and_then(|r| {
             let (cx, cy) = r.center();
             m.bounds.contains(cx, cy).then(|| r.intersect(&m.bounds)).flatten()
@@ -126,11 +119,27 @@ pub fn open(
             ui_elements: cfg!(windows),
             cursor: session.cursor,
         };
-        let value = serde_json::to_value(&payload).map_err(|e| e.to_string())?;
-        pending.insert(label.clone(), value.clone());
-        let _ = window.emit("overlay:prepare", value);
+        payloads.push((m, label(m.index), serde_json::to_value(&payload).map_err(|e| e.to_string())?));
     }
-    drop(pending);
+    // Publish the payloads first (short lock): freshly created overlays pull them via
+    // `overlay_pending`, which runs on the main thread — never hold the lock while
+    // creating windows, that needs the main thread too.
+    {
+        let mut pending = state.overlay_pending.lock().unwrap();
+        pending.clear();
+        for (_, label, value) in &payloads {
+            pending.insert(label.clone(), value.clone());
+        }
+    }
+    for (m, label, value) in payloads {
+        let window = match app.get_webview_window(&label) {
+            Some(w) => w,
+            None => build(app, &label).map_err(|e| e.to_string())?,
+        };
+        place(&window, m);
+        // Targeted: every overlay must get only the picture of its own monitor.
+        let _ = app.emit_to(label.as_str(), "overlay:prepare", value);
+    }
 
     // Watchdog: if no overlay reported "ready" (web view crashed, etc.) give the user
     // their screen back instead of leaving the app stuck in "capturing" state.
@@ -188,7 +197,7 @@ pub fn hide_all(app: &AppHandle) {
     for (label, w) in app.webview_windows() {
         if label.starts_with(PREFIX) {
             let _ = w.hide();
-            let _ = w.emit("overlay:reset", ());
+            let _ = app.emit_to(label.as_str(), "overlay:reset", ());
         }
     }
 }

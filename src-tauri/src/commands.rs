@@ -94,7 +94,14 @@ pub async fn settings_set(app: AppHandle, settings: AppSettings) -> CmdResult<Ve
     });
     let mut problems = Vec::new();
     if before.hotkeys != after.hotkeys {
-        problems = hotkeys::apply(&app);
+        // Register on the main thread (the plugin would otherwise block this thread on it).
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let handle = app.clone();
+        app.run_on_main_thread(move || {
+            let _ = tx.send(hotkeys::apply(&handle));
+        })
+        .map_err(err)?;
+        problems = rx.await.unwrap_or_default();
     }
     if before.history_limit != after.history_limit {
         state.history.set_limit(after.history_limit as usize).map_err(err)?;
@@ -349,7 +356,7 @@ pub fn panel_hide(app: AppHandle) {
 
 #[tauri::command]
 pub fn toast_hide(app: AppHandle) {
-    ui::hide_toast(&app);
+    let _ = ui::hide_toast(&app);
 }
 
 #[tauri::command]

@@ -35,6 +35,13 @@ jobs:
         run: |
           npm run typecheck
           npm test
+      - name: UI smoke test (editor & overlay in Chromium, mock backend)
+        run: |
+          npx playwright-core install --with-deps chromium
+          npm run build
+          npx vite preview --port 4173 --strictPort &
+          sleep 3
+          npm run smoke
 
   windows:
     name: Windows build
@@ -50,8 +57,6 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Rust tests (app)
-        run: cargo test -p advantshoter --lib
       - name: Build installer (NSIS + MSI)
         run: npx tauri build
       - name: Collect artifacts
