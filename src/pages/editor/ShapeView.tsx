@@ -9,8 +9,11 @@ import {
   stepRadius,
   strokeWidth,
   textFontSize,
+  watermarkTile,
   type BoxShape,
   type Shape,
+  type StampShape,
+  type WatermarkShape,
 } from './model';
 import { pixelateCanvas, type PixelSource } from './pixelate';
 
@@ -189,7 +192,57 @@ export function ShapeView({ shape, k, source, ev }: { shape: Shape; k: number; s
     }
     case 'pixelate':
       return <PixelateView shape={shape} k={k} source={source} common={common} />;
+    case 'stamp':
+      return <StampView shape={shape} common={common} />;
+    case 'watermark':
+      return <WatermarkView shape={shape} />;
   }
+}
+
+/** The picture of a data URL, once decoded. */
+function useLoadedImage(src: string | undefined): HTMLImageElement | null {
+  const [img, setImg] = useState<HTMLImageElement | null>(null);
+  useEffect(() => {
+    if (!src) return setImg(null);
+    let alive = true;
+    const image = new Image();
+    image.onload = () => alive && setImg(image);
+    image.src = src;
+    return () => {
+      alive = false;
+    };
+  }, [src]);
+  return img;
+}
+
+/** Shadow that keeps a text readable on any background: dark under light colors. */
+const halo = (color: string) => (contrastText(color) === '#111' ? '#000' : '#fff');
+
+/** Copyright: a text with a soft contrasting shadow, or the chosen picture. */
+function StampView({ shape, common }: { shape: StampShape; common: Record<string, unknown> }) {
+  const img = useLoadedImage(shape.src);
+  if (shape.src) {
+    if (!img) return null;
+    return <KImage {...common} image={img} x={shape.x} y={shape.y} width={shape.w ?? img.naturalWidth} height={shape.h ?? img.naturalHeight} opacity={shape.opacity} />;
+  }
+  const fs = shape.fontSize ?? 24;
+  return (
+    <Text
+      {...common}
+      x={shape.x}
+      y={shape.y}
+      text={shape.text ?? ''}
+      fontSize={fs}
+      fontFamily={FONT_FAMILY}
+      fontStyle="600"
+      fill={shape.color}
+      opacity={shape.opacity}
+      shadowColor={halo(shape.color)}
+      shadowOpacity={0.55}
+      shadowBlur={Math.max(2, fs * 0.18)}
+      shadowOffsetY={Math.max(1, fs * 0.04)}
+    />
+  );
 }
 
 function PixelateView({
@@ -224,6 +277,66 @@ function PixelateView({
         const n = e.target;
         requestAnimationFrame(() => setPos({ x: Math.round(n.x()), y: Math.round(n.y()) }));
       }}
+    />
+  );
+}
+
+/** Watermark: one pattern tile (the brick layout of `watermarkTile`) repeated over the whole
+ *  picture and turned by the angle; it never takes clicks. */
+function WatermarkView({ shape }: { shape: WatermarkShape }) {
+  const img = useLoadedImage(shape.src);
+  const tile = useMemo(() => {
+    const c = document.createElement('canvas');
+    const ctx = c.getContext('2d');
+    if (!ctx) return null;
+    const fs = shape.fontSize ?? 48;
+    const font = `600 ${fs}px ${FONT_FAMILY}`;
+    let w: number;
+    let h: number;
+    if (shape.src) {
+      if (!img) return null;
+      w = shape.itemW ?? img.naturalWidth;
+      h = shape.itemH ?? img.naturalHeight;
+    } else {
+      if (!shape.text) return null;
+      ctx.font = font;
+      w = ctx.measureText(shape.text).width;
+      h = fs;
+    }
+    const { tw, th, centers } = watermarkTile(w, h, shape.spacing);
+    c.width = tw;
+    c.height = th;
+    for (const [cx, cy] of centers) {
+      if (img && shape.src) {
+        ctx.drawImage(img, cx - w / 2, cy - h / 2, w, h);
+      } else {
+        ctx.font = font;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.shadowColor = halo(shape.color);
+        ctx.shadowBlur = Math.max(2, fs * 0.12);
+        ctx.fillStyle = shape.color;
+        ctx.fillText(shape.text!, cx, cy);
+      }
+    }
+    return c;
+  }, [img, shape.src, shape.text, shape.fontSize, shape.itemW, shape.itemH, shape.color, shape.spacing]);
+  if (!tile) return null;
+  return (
+    <Rect
+      id={shape.id}
+      name="watermark"
+      listening={false}
+      perfectDrawEnabled={false}
+      x={shape.x}
+      y={shape.y}
+      width={shape.w}
+      height={shape.h}
+      // A canvas works as a pattern image too.
+      fillPatternImage={tile as unknown as HTMLImageElement}
+      fillPatternRepeat="repeat"
+      fillPatternRotation={-shape.angle}
+      opacity={shape.opacity}
     />
   );
 }

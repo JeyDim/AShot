@@ -4,7 +4,7 @@
 // text, steps, marker, pixelation — and copy / save / get a link without opening the editor.
 //
 // Mouse: drag — free region; click — the highlighted window / UI element; wheel — bigger /
-// smaller UI element; handles — resize; drag inside the selection (Move tool) — move;
+// smaller UI element (window mode: whole windows only, no free region); handles — resize; drag inside the selection (Move tool) — move;
 // with a drawing tool — draw inside the selection (text tool dragged — an arrow to the press
 // point with the text at its tail); double click — editor;
 // right click — reset selection / cancel.
@@ -19,13 +19,12 @@ import { Copy, Download, Link2, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Group, Layer, Stage } from 'react-konva';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { IconButton } from '../components/ui';
 import { useTauriEvent } from '../lib/hooks';
 import { api, shotUrl } from '../lib/ipc';
 import type { Action, AppSettings, OverlayPrepare, Rect, ResizeSettings } from '../lib/types';
 import { DEFAULT_RESIZE, emptyDoc, historyOf, imageScaleFor, outputSize, thickenFactor, translate, type History, type Tool } from './editor/model';
 import type { PixelSource } from './editor/pixelate';
-import { ColorPicker, ResizePicker, SizePicker, StepPicker, TOOLS } from './editor/Toolbar';
+import { ColorPicker, ResizePicker, SizePicker, StepPicker, ToolButtons, TOOLS } from './editor/Toolbar';
 import { isHandle, shapeIdOf, useAnnotator } from './editor/useAnnotator';
 import {
   actionBarPosition,
@@ -134,6 +133,12 @@ export default function Overlay() {
   const [hist, setHist] = useState<History>(historyOf(emptyDoc()));
   const [source, setSource] = useState<PixelSource | null>(null);
   const [selectionRev, setSelectionRev] = useState(0);
+
+  /** Window mode: only whole windows are highlighted and picked (no UI elements, no free region). */
+  const windowsOnly = () => {
+    const m = s.current.prep?.mode;
+    return m === 'windowPick' || m === 'window';
+  };
 
   /** Physical pixels per CSS pixel. */
   const scale = () => {
@@ -252,7 +257,8 @@ export default function Overlay() {
     const k = scale();
     ctx.clearRect(0, 0, W, H);
 
-    const focus = st.selection ?? (st.phase === 'idle' ? st.hover : null);
+    // The hovered window / element stays highlighted while the button is down (a click takes it).
+    const focus = st.selection ?? (st.phase === 'idle' || st.phase === 'pending' ? st.hover : null);
     // Dim everything except the focused area.
     ctx.fillStyle = 'rgba(8, 10, 16, 0.5)';
     if (focus) {
@@ -264,8 +270,8 @@ export default function Overlay() {
       ctx.fillRect(0, 0, W, H);
     }
 
-    // Crosshair while choosing.
-    if (st.phase === 'idle' || st.phase === 'drawing' || st.phase === 'pending') {
+    // Crosshair while choosing a region.
+    if ((st.phase === 'idle' || st.phase === 'drawing' || st.phase === 'pending') && !windowsOnly()) {
       ctx.save();
       ctx.strokeStyle = 'rgba(255,255,255,0.28)';
       ctx.lineWidth = 1;
@@ -323,7 +329,8 @@ export default function Overlay() {
       }
     }
 
-    if (st.prep?.showMagnifier && st.phase !== 'selected' && st.phase !== 'moving' && st.mouse.x >= 0) {
+    // The magnifier is for precise region edges — not needed to pick a window.
+    if (st.prep?.showMagnifier && !windowsOnly() && st.phase !== 'selected' && st.phase !== 'moving' && st.mouse.x >= 0) {
       drawMagnifier(ctx, st, k, W, H);
     }
 
@@ -428,7 +435,7 @@ export default function Overlay() {
 
   function updateHover() {
     const st = s.current;
-    if (st.phase !== 'idle') return;
+    if (st.phase !== 'idle' && st.phase !== 'pending') return;
     const { x, y } = st.mouse;
     const pathRect = st.path.length ? st.path[Math.min(st.level, st.path.length - 1)] : null;
     if (pathRect && contains(pathRect, x, y)) {
@@ -651,11 +658,16 @@ export default function Overlay() {
       case 'idle':
         updateHover();
         if (Math.abs(p.x - st.lastQuery.x) + Math.abs(p.y - st.lastQuery.y) > 2) queryElements();
-        setCursor('crosshair');
+        setCursor(windowsOnly() ? 'default' : 'crosshair');
         break;
       case 'pending':
       case 'drawing':
         if (st.phase === 'pending') {
+          // Window mode: no free region — the release takes the window under the cursor.
+          if (windowsOnly()) {
+            updateHover();
+            break;
+          }
           if (Math.abs(p.x - st.start.x) <= 4 * k && Math.abs(p.y - st.start.y) <= 4 * k) break;
           st.phase = 'drawing';
           setHint(false);
@@ -965,13 +977,17 @@ export default function Overlay() {
 
       {hint && imageSrc && (
         <div className="animate-fade-in pointer-events-none absolute top-6 left-1/2 flex -translate-x-1/2 items-center gap-3 rounded-full bg-surface/95 px-5 py-2.5 text-[13px] text-text shadow-(--shadow-pop)">
-          <span className="font-medium">{mode === 'windowPick' ? 'Кликните по окну или элементу' : 'Выделите область или кликните по окну'}</span>
+          <span className="font-medium">{mode === 'windowPick' || mode === 'window' ? 'Кликните по окну' : 'Выделите область или кликните по окну'}</span>
           <span className="text-subtle">·</span>
-          <span className="text-muted">колесо — уровень элемента</span>
-          <span className="text-subtle">·</span>
-          <span className="kbd">C</span>
-          <span className="text-muted">цвет</span>
-          <span className="text-subtle">·</span>
+          {mode === 'region' && (
+            <>
+              <span className="text-muted">колесо — уровень элемента</span>
+              <span className="text-subtle">·</span>
+              <span className="kbd">C</span>
+              <span className="text-muted">цвет</span>
+              <span className="text-subtle">·</span>
+            </>
+          )}
           <span className="kbd">Esc</span>
           <span className="text-muted">отмена</span>
         </div>
@@ -991,11 +1007,7 @@ export default function Overlay() {
           onMouseDown={(e) => e.stopPropagation()}
         >
           <div className="flex items-center" role="toolbar" aria-label="Инструменты">
-            {OVERLAY_TOOLS.map((t) => (
-              <IconButton key={t.id} tip={`${t.label} · ${t.key}`} tipPos="top" active={tool === t.id} size={34} onClick={() => setTool(t.id)}>
-                {t.icon}
-              </IconButton>
-            ))}
+            <ToolButtons tools={OVERLAY_TOOLS} tool={tool} setTool={setTool} size={34} up={barUp} tipsUp />
           </div>
           <BarDivider />
           <ColorPicker color={color} setColor={changeColor} compact up={barUp} />

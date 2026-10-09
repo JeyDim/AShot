@@ -25,7 +25,7 @@ use tauri_plugin_autostart::MacosLauncher;
 use state::{AppState, CaptureMode};
 use ui::Toast;
 
-/// Command line: `--capture region|window|fullscreen|last`, `--panel`, `--autostart`.
+/// Command line: `--capture region|window|fullscreen`, `--panel`, `--autostart`.
 fn handle_args(app: &AppHandle, args: &[String], from_second_instance: bool) {
     let mut iter = args.iter().skip(1);
     while let Some(arg) = iter.next() {
@@ -34,7 +34,6 @@ fn handle_args(app: &AppHandle, args: &[String], from_second_instance: bool) {
                 let mode = match iter.next().map(String::as_str) {
                     Some("window") => CaptureMode::Window,
                     Some("fullscreen") => CaptureMode::Fullscreen,
-                    Some("last") => CaptureMode::LastRegion,
                     _ => CaptureMode::Region,
                 };
                 flow::start(app, mode);
@@ -96,7 +95,10 @@ pub fn run() {
             commands::history_save_as,
             commands::history_upload,
             commands::editor_commit,
+            commands::watermark_pick,
+            commands::watermark_clear,
             commands::open_settings,
+            commands::ui_zoom,
             commands::panel_hide,
             commands::toast_current,
             commands::toast_hide,
@@ -143,8 +145,13 @@ pub fn run() {
                     Toast::error("Горячие клавиши не назначены", problems.join("\n")).timeout(15000),
                 );
             } else if !settings.welcomed {
-                let hk = shoter_core::settings::hotkey_label(&settings.hotkeys.region);
-                let first = if hk.is_empty() { String::new() } else { format!("{hk} — снимок области. ") };
+                let hk = &settings.hotkeys;
+                let keys: Vec<String> = [(&hk.region, "область"), (&hk.window, "окно"), (&hk.fullscreen, "экран")]
+                    .into_iter()
+                    .filter(|(accel, _)| !accel.trim().is_empty())
+                    .map(|(accel, what)| format!("{} — {what}", shoter_core::settings::hotkey_label(accel)))
+                    .collect();
+                let first = if keys.is_empty() { String::new() } else { format!("{}. ", keys.join(", ")) };
                 ui::toast(
                     &handle,
                     Toast::info("AShot работает в трее")

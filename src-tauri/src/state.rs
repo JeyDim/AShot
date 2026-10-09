@@ -25,7 +25,6 @@ pub enum CaptureMode {
     /// Interactive selection with the "click a window" hint (tray button).
     WindowPick,
     Fullscreen,
-    LastRegion,
 }
 
 impl CaptureMode {
@@ -34,7 +33,6 @@ impl CaptureMode {
             CaptureMode::Region => "region",
             CaptureMode::Window | CaptureMode::WindowPick => "window",
             CaptureMode::Fullscreen => "fullscreen",
-            CaptureMode::LastRegion => "lastRegion",
         }
     }
 }
@@ -55,6 +53,8 @@ pub enum Action {
 pub struct Paths {
     pub settings_file: PathBuf,
     pub secrets_file: PathBuf,
+    /// Picture of the watermark (PNG), when one was chosen.
+    pub watermark_file: PathBuf,
     pub history_dir: PathBuf,
     pub default_save_dir: PathBuf,
     pub config_dir: PathBuf,
@@ -114,6 +114,7 @@ impl AppState {
         let paths = Paths {
             settings_file: config_dir.join("settings.json"),
             secrets_file: config_dir.join("secrets.dat"),
+            watermark_file: config_dir.join("watermark.png"),
             history_dir: data_dir.join("history"),
             default_save_dir,
             config_dir,

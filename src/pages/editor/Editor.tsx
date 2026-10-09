@@ -1,5 +1,5 @@
-// Screenshot editor: annotate (shapes, arrows, text, steps, marker, pixelation), crop,
-// then copy / save / upload. The document is stored with the history item, so
+// Screenshot editor: annotate (shapes, arrows, text, steps, marker, pixelation, watermark or
+// copyright), crop, then copy / save / upload. The document is stored with the history item, so
 // annotations remain editable when the screenshot is opened again.
 // Drawing itself lives in `useAnnotator` (shared with the capture overlay).
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -11,16 +11,21 @@ import { Image as KImage, Group, Layer, Rect, Stage, Transformer } from 'react-k
 import { Button, IconButton, Spinner } from '../../components/ui';
 import { sizeLabel } from '../../lib/format';
 import { useTauriEvent } from '../../lib/hooks';
-import { api, errorText, shotUrl } from '../../lib/ipc';
-import type { Action, AppSettings, HistoryItem, ResizeSettings } from '../../lib/types';
+import { api, errorText, loadWatermarkLogo, shotUrl } from '../../lib/ipc';
+import type { Action, AppSettings, HistoryItem, ResizeSettings, WatermarkSettings } from '../../lib/types';
+import { buildMark, logoFrom, WatermarkPicker, type Logo } from './Watermark';
 import {
   clampCrop,
   DEFAULT_RESIZE,
+  DEFAULT_WATERMARK,
   emptyDoc,
   historyOf,
   imageScaleFor,
+  isMark,
+  newId,
   outputSize,
   parseDoc,
+  removeShape,
   thickenFactor,
   visibleArea,
   type Crop,
@@ -59,6 +64,8 @@ export default function Editor({ id }: { id: string }) {
   const [color, setColorState] = useState('#FF3B30');
   const [size, setSizeState] = useState(1);
   const [resize, setResizeState] = useState<ResizeSettings>(DEFAULT_RESIZE);
+  const [watermark, setWatermarkState] = useState<WatermarkSettings>(DEFAULT_WATERMARK);
+  const [logo, setLogo] = useState<Logo | null>(null);
   const [cropDraft, setCropDraft] = useState<Crop | null>(null);
   const [view, setView] = useState<View>({ zoom: 1, x: 0, y: 0 });
   const [stageSize, setStageSize] = useState({ w: 800, h: 600 });
@@ -92,6 +99,9 @@ export default function Editor({ id }: { id: string }) {
       try {
         const [it, annotations, settings] = await Promise.all([api.historyGet(id), api.historyAnnotations(id), api.settingsGet()]);
         if (cancelled) return;
+        loadWatermarkLogo()
+          .then(logoFrom)
+          .then((l) => !cancelled && setLogo(l));
         setItem(it);
         applyPrefs(settings.settings);
         const image = new Image();
@@ -119,6 +129,7 @@ export default function Editor({ id }: { id: string }) {
     setColorState(s.editor.color || '#FF3B30');
     setSizeState(s.editor.size ?? 1);
     if (s.resize) setResizeState(s.resize);
+    if (s.watermark) setWatermarkState(s.watermark);
   };
 
   // The overlay and other editors share the "downscale to" setting. Echoes of our own
@@ -205,6 +216,73 @@ export default function Editor({ id }: { id: string }) {
     setSizeState(s);
     savePrefs(color, s);
     ann.setStyle({ size: s });
+  };
+
+  // ------------------------------------------------------------ watermark & copyright
+  const mark = doc.shapes.find(isMark) ?? null;
+  const saveWatermark = useRef<number | undefined>(undefined);
+
+  /** The document with the watermark / copyright built from `ws` (replacing the one there);
+   *  `null` when there is nothing to put (empty text, no picture). A watermark goes under the
+   *  drawings, a copyright on top. */
+  const withMark = (d: Doc, ws: WatermarkSettings, lg: Logo | null): Doc | null => {
+    const old = d.shapes.find(isMark);
+    const a = visibleArea(d, W, H);
+    const next = buildMark(ws, a, { x: 0, y: 0, w: W, h: H }, lg, thickenFactor(resize, a.w, a.h), old?.id ?? newId());
+    if (!next) return null;
+    const rest = d.shapes.filter((s) => !isMark(s));
+    if (next.type === 'watermark') return { ...d, shapes: [next, ...rest] };
+    // A copyright keeps its place among the shapes when only its settings change.
+    if (old?.type === 'stamp') return { ...d, shapes: d.shapes.map((s) => (s.id === old.id ? next : s)) };
+    return { ...d, shapes: [...rest, next] };
+  };
+
+  /** Settings changed in the drop-down: remembered, and the mark is put / updated at once. */
+  const changeWatermark = (ws: WatermarkSettings, typing = false, lg = logo) => {
+    setWatermarkState(ws);
+    window.clearTimeout(saveWatermark.current);
+    saveWatermark.current = window.setTimeout(() => api.settingsPatch({ watermark: ws }).catch(() => {}), typing ? 500 : 0);
+    if (!img) return;
+    const next = withMark(doc, ws, lg) ?? (mark ? removeShape(doc, mark.id) : null);
+    if (!next) return;
+    // While typing the text the mark follows without an undo step per letter.
+    if (typing) ann.live(next);
+    else ann.apply(next);
+  };
+
+  const pickLogo = async () => {
+    try {
+      if (!(await api.watermarkPick())) return;
+      const lg = await logoFrom(await loadWatermarkLogo());
+      setLogo(lg);
+      if (lg) changeWatermark({ ...watermark, kind: 'image' }, false, lg);
+    } catch (e) {
+      setStatus({ kind: 'error', text: errorText(e) });
+    }
+  };
+
+  const clearLogo = async () => {
+    await api.watermarkClear().catch(() => {});
+    setLogo(null);
+    if (mark?.src) ann.apply(removeShape(doc, mark.id));
+  };
+
+  /** The button: puts the watermark / copyright, or removes it. */
+  const toggleMark = () => {
+    if (!img) return;
+    ann.commitText();
+    if (mark) {
+      ann.setSelectedId(null);
+      ann.apply(removeShape(doc, mark.id));
+      return;
+    }
+    if (watermark.kind === 'image' && !logo) {
+      pickLogo();
+      return;
+    }
+    const next = withMark(doc, watermark, logo);
+    if (next) ann.apply(next);
+    else setStatus({ kind: 'error', text: 'Впишите текст водяного знака (стрелка рядом с кнопкой)' });
   };
 
   // ------------------------------------------------------------ pointer
@@ -450,6 +528,20 @@ export default function Editor({ id }: { id: string }) {
         redo={ann.redo}
         busy={busy}
         act={act}
+        extra={
+          <WatermarkPicker
+            value={watermark}
+            onChange={changeWatermark}
+            logo={logo}
+            onPickLogo={pickLogo}
+            onClearLogo={clearLogo}
+            placed={!!mark}
+            onToggle={toggleMark}
+            onTextFocus={ann.beginGesture}
+            onTextBlur={ann.endGesture}
+            size={window.innerWidth < 1180 ? 33 : 38}
+          />
+        }
       />
 
       <div

@@ -22,7 +22,6 @@ pub fn apply(app: &AppHandle) -> Vec<String> {
         (CaptureMode::Region, hk.region, "Снимок области"),
         (CaptureMode::Window, hk.window, "Снимок окна"),
         (CaptureMode::Fullscreen, hk.fullscreen, "Весь экран"),
-        (CaptureMode::LastRegion, hk.last_region, "Последняя область"),
     ];
     for (mode, accel, title) in entries {
         let accel = accel.trim();

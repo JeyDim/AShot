@@ -7,8 +7,6 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::geometry::Rect;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum AfterCapture {
@@ -84,17 +82,34 @@ pub struct Hotkeys {
     pub region: String,
     pub window: String,
     pub fullscreen: String,
-    pub last_region: String,
 }
 
-/// Only the region capture has a hotkey by default; the rest are opt-in.
+/// Every capture has a hotkey by default (like Greenshot: Alt — window, Shift — screen).
 impl Default for Hotkeys {
     fn default() -> Self {
         Self {
             region: "Control+PrintScreen".into(),
-            window: String::new(),
-            fullscreen: String::new(),
-            last_region: String::new(),
+            window: "Alt+PrintScreen".into(),
+            fullscreen: "Shift+PrintScreen".into(),
+        }
+    }
+}
+
+impl Hotkeys {
+    /// Gives empty hotkeys their defaults, unless the combination is already used.
+    fn fill_defaults(&mut self) {
+        let d = Hotkeys::default();
+        for (value, default) in [(&mut self.region, d.region), (&mut self.window, d.window), (&mut self.fullscreen, d.fullscreen)] {
+            if value.trim().is_empty() {
+                *value = default;
+            }
+        }
+        // Never two captures on one combination: the later one gives its default up.
+        if self.window == self.region {
+            self.window.clear();
+        }
+        if self.fullscreen == self.region || self.fullscreen == self.window {
+            self.fullscreen.clear();
         }
     }
 }
@@ -184,6 +199,80 @@ impl Default for EditorPrefs {
     }
 }
 
+/// What the watermark in the editor is made of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum WatermarkKind {
+    #[default]
+    Text,
+    /// The picture chosen by the user (`watermark.png` in the config folder).
+    Image,
+}
+
+/// How the watermark covers the picture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum WatermarkLayout {
+    /// Repeated over the whole picture in slanted rows.
+    #[default]
+    Tile,
+    /// Once, at `position` (a copyright).
+    Corner,
+}
+
+/// Where a single (corner) watermark goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum WatermarkPosition {
+    TopLeft,
+    Top,
+    TopRight,
+    Left,
+    Center,
+    Right,
+    BottomLeft,
+    Bottom,
+    #[default]
+    BottomRight,
+}
+
+/// Watermark / copyright of the editor: one button puts it on the screenshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WatermarkSettings {
+    pub kind: WatermarkKind,
+    pub layout: WatermarkLayout,
+    pub text: String,
+    /// Text color.
+    pub color: String,
+    /// Size preset: 0 – small, 1 – medium, 2 – large.
+    pub size: u8,
+    /// Opacity, percent.
+    pub opacity: u8,
+    /// Tile: slope of the rows, degrees (0 – horizontal).
+    pub angle: u8,
+    /// Tile: gaps between the repeats, 0 – dense, 1 – medium, 2 – sparse.
+    pub spacing: u8,
+    /// Corner: where it goes.
+    pub position: WatermarkPosition,
+}
+
+impl Default for WatermarkSettings {
+    fn default() -> Self {
+        Self {
+            kind: WatermarkKind::Text,
+            layout: WatermarkLayout::Tile,
+            text: "© Advant".into(),
+            color: "#FFFFFF".into(),
+            size: 1,
+            opacity: 25,
+            angle: 30,
+            spacing: 1,
+            position: WatermarkPosition::BottomRight,
+        }
+    }
+}
+
 /// Which side of the picture the "downscale to" limit applies to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -235,15 +324,23 @@ impl ResizeSettings {
     }
 }
 
+/// Version of the settings file written by this build (see [`AppSettings::migrate`]).
+pub const SETTINGS_VERSION: u32 = 2;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {
+    /// Settings file version; files written before versions existed read as 0.
+    #[serde(default)]
+    pub version: u32,
     /// Draw the mouse cursor into screenshots. Off by default.
     pub show_cursor: bool,
     pub show_magnifier: bool,
     pub after_capture: AfterCapture,
     pub fullscreen_mode: FullscreenMode,
     pub theme: Theme,
+    /// Size of the app's own UI (panel, editor, settings, toolbars), percent.
+    pub ui_scale: u32,
     pub autostart: bool,
     /// How many recent screenshots are kept in the temporary history.
     pub history_limit: u32,
@@ -258,7 +355,7 @@ pub struct AppSettings {
     pub links: LinkSettings,
     pub editor: EditorPrefs,
     pub resize: ResizeSettings,
-    pub last_region: Option<Rect>,
+    pub watermark: WatermarkSettings,
     /// Set after the welcome notification has been shown once.
     pub welcomed: bool,
     /// Install new versions from GitHub Releases automatically (when nothing is open).
@@ -272,11 +369,13 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            version: SETTINGS_VERSION,
             show_cursor: false,
             show_magnifier: true,
             after_capture: AfterCapture::Ask,
             fullscreen_mode: FullscreenMode::CurrentMonitor,
             theme: Theme::System,
+            ui_scale: 100,
             autostart: false,
             history_limit: 10,
             save_folder: String::new(),
@@ -288,7 +387,7 @@ impl Default for AppSettings {
             links: LinkSettings::default(),
             editor: EditorPrefs::default(),
             resize: ResizeSettings::default(),
-            last_region: None,
+            watermark: WatermarkSettings::default(),
             welcomed: false,
             auto_update: true,
             last_version: String::new(),
@@ -298,6 +397,8 @@ impl Default for AppSettings {
 }
 
 pub const MAX_HISTORY_LIMIT: u32 = 100;
+pub const MIN_UI_SCALE: u32 = 50;
+pub const MAX_UI_SCALE: u32 = 200;
 pub const DEFAULT_BOX_FOLDER: &str = "AShot";
 
 impl AppSettings {
@@ -305,8 +406,14 @@ impl AppSettings {
     pub fn sanitized(mut self) -> Self {
         self.history_limit = self.history_limit.clamp(1, MAX_HISTORY_LIMIT);
         self.jpeg_quality = self.jpeg_quality.clamp(10, 100);
+        self.ui_scale = self.ui_scale.clamp(MIN_UI_SCALE, MAX_UI_SCALE);
         self.editor.size = self.editor.size.min(2);
         self.resize.size = self.resize.size.clamp(MIN_RESIZE, MAX_RESIZE);
+        self.watermark.size = self.watermark.size.min(2);
+        self.watermark.opacity = self.watermark.opacity.clamp(5, 100);
+        self.watermark.angle = self.watermark.angle.min(90);
+        self.watermark.spacing = self.watermark.spacing.min(2);
+        self.watermark.text = self.watermark.text.chars().take(200).collect();
         self.box_.folder_id = self.box_.folder_id.trim().to_string();
         self.box_.redirect_uri = self.box_.redirect_uri.trim().to_string();
         self.box_.folder_name = if self.box_.folder_name.trim().is_empty() {
@@ -321,6 +428,16 @@ impl AppSettings {
         self
     }
 
+    /// One-time updates of files written by older versions.
+    fn migrate(mut self) -> Self {
+        if self.version < 2 {
+            // Only the region capture used to have a hotkey; now every capture has one.
+            self.hotkeys.fill_defaults();
+        }
+        self.version = SETTINGS_VERSION;
+        self
+    }
+
     /// Loads settings, falling back to defaults when the file is missing or corrupt
     /// (a corrupt file is kept next to it as `.bak` for diagnostics).
     pub fn load(path: &Path) -> Self {
@@ -331,7 +448,7 @@ impl AppSettings {
                     if s.links.template == crate::links::LEGACY_DEFAULT_TEMPLATE {
                         s.links.template.clear();
                     }
-                    s.sanitized()
+                    s.migrate().sanitized()
                 }
                 Err(err) => {
                     log::warn!("settings file is corrupt ({err}), using defaults");
@@ -413,13 +530,19 @@ mod tests {
         assert!(s.auto_update);
         assert!(s.links.rewrite);
         assert_eq!(s.hotkeys.region, "Control+PrintScreen");
-        assert!(s.hotkeys.window.is_empty() && s.hotkeys.fullscreen.is_empty() && s.hotkeys.last_region.is_empty());
+        assert_eq!(s.hotkeys.window, "Alt+PrintScreen");
+        assert_eq!(s.hotkeys.fullscreen, "Shift+PrintScreen");
+        assert_eq!(s.version, SETTINGS_VERSION);
         assert_eq!(s.box_.shared_link_access, "open");
         // No folder id needed: the "AShot" folder is created automatically.
         assert!(s.box_.folder_id.is_empty());
         assert_eq!(s.box_.folder_name, "AShot");
         assert!(s.box_.client_id.is_empty(), "built-in Box app by default");
         assert_eq!(s.theme, Theme::System);
+        assert_eq!(s.ui_scale, 100);
+        assert_eq!((s.watermark.kind, s.watermark.layout, s.watermark.opacity), (WatermarkKind::Text, WatermarkLayout::Tile, 25));
+        assert_eq!(serde_json::to_value(WatermarkKind::Image).unwrap(), "image");
+        assert_eq!(serde_json::to_value(WatermarkPosition::BottomRight).unwrap(), "bottomRight");
     }
 
     #[test]
@@ -442,6 +565,33 @@ mod tests {
 
         std::fs::write(&path, br#"{"theme":"dark"}"#).unwrap();
         assert_eq!(AppSettings::load(&path).theme, Theme::Dark);
+
+        // Keys of removed features ("repeat last region") are ignored, not an error.
+        std::fs::write(&path, br#"{"showCursor":true,"lastRegion":{"x":1,"y":2,"width":3,"height":4},"hotkeys":{"region":"F9","lastRegion":"F10"}}"#).unwrap();
+        let loaded = AppSettings::load(&path);
+        assert!(loaded.show_cursor);
+        assert_eq!(loaded.hotkeys.region, "F9");
+        assert!(!dir.path().join("settings.json.bak").exists());
+    }
+
+    #[test]
+    fn old_files_get_the_new_default_hotkeys_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        // Written before versions: only the region hotkey was set by default.
+        std::fs::write(&path, br#"{"hotkeys":{"region":"Control+PrintScreen","window":"","fullscreen":""}}"#).unwrap();
+        let s = AppSettings::load(&path);
+        assert_eq!((s.hotkeys.window.as_str(), s.hotkeys.fullscreen.as_str()), ("Alt+PrintScreen", "Shift+PrintScreen"));
+        assert_eq!(s.version, SETTINGS_VERSION);
+        // A combination the user already gave to the region capture is not taken twice.
+        std::fs::write(&path, br#"{"hotkeys":{"region":"Alt+PrintScreen","window":"","fullscreen":"F8"}}"#).unwrap();
+        let s = AppSettings::load(&path);
+        assert_eq!((s.hotkeys.region.as_str(), s.hotkeys.window.as_str(), s.hotkeys.fullscreen.as_str()), ("Alt+PrintScreen", "", "F8"));
+        // After the migration a cleared hotkey stays cleared.
+        let mut s = AppSettings::default();
+        s.hotkeys.window.clear();
+        s.save(&path).unwrap();
+        assert!(AppSettings::load(&path).hotkeys.window.is_empty());
     }
 
     #[test]
@@ -460,7 +610,13 @@ mod tests {
         s.box_.shared_link_access = "public".into();
         s.links.template = "advant.one".into();
         s.box_.folder_name = "  ".into();
+        s.ui_scale = 10;
+        s.watermark.opacity = 0;
+        s.watermark.size = 7;
+        s.watermark.angle = 200;
         let s = s.sanitized();
+        assert_eq!(s.ui_scale, MIN_UI_SCALE);
+        assert_eq!((s.watermark.opacity, s.watermark.size, s.watermark.angle), (5, 2, 90));
         assert_eq!(s.box_.folder_name, "AShot");
         assert_eq!(s.history_limit, 1);
         assert_eq!(s.box_.shared_link_access, "open");

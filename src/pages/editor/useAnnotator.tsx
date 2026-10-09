@@ -33,7 +33,9 @@ import {
 import type { PixelSource } from './pixelate';
 import { FONT_FAMILY, ShapeView } from './ShapeView';
 
-const TRANSFORMABLE = new Set(['rect', 'ellipse', 'pixelate', 'text', 'pen', 'marker']);
+const TRANSFORMABLE = new Set(['rect', 'ellipse', 'pixelate', 'text', 'pen', 'marker', 'stamp']);
+/** Resized from the corners only, keeping proportions. */
+const KEEP_RATIO = new Set(['text', 'stamp']);
 
 export interface TextEdit {
   id: string | null;
@@ -198,7 +200,8 @@ export function useAnnotator(o: AnnotatorOptions) {
     if (cur) {
       const p: Partial<Shape> = {};
       if (patch.color !== undefined) p.color = patch.color;
-      if (patch.size !== undefined) Object.assign(p, cur.type === 'text' ? { size: patch.size, fontSize: undefined } : { size: patch.size });
+      // A stamp keeps its own size (set in its drop-down or with the handles).
+      if (patch.size !== undefined && cur.type !== 'stamp') Object.assign(p, cur.type === 'text' ? { size: patch.size, fontSize: undefined } : { size: patch.size });
       applyFn((d) => updateShape(d, cur.id, p));
     }
     if (textEdit) setTextEdit({ ...textEdit, ...(patch.color !== undefined ? { color: patch.color } : {}), ...(patch.size !== undefined ? { size: patch.size, fontSize: undefined } : {}) });
@@ -428,6 +431,11 @@ export function useAnnotator(o: AnnotatorOptions) {
       case 'text':
         next = { ...s, x: node.x(), y: node.y(), fontSize: Math.max(6, textFontSize(s, k) * sy) };
         break;
+      case 'stamp':
+        next = s.src
+          ? { ...s, x: node.x(), y: node.y(), w: Math.max(4, node.width() * sx), h: Math.max(4, node.height() * sy) }
+          : { ...s, x: node.x(), y: node.y(), fontSize: Math.max(6, (s.fontSize ?? 24) * sy) };
+        break;
       case 'pen':
       case 'marker': {
         const nx = node.x();
@@ -478,8 +486,8 @@ export function useAnnotator(o: AnnotatorOptions) {
         ref={trRef}
         rotateEnabled={false}
         ignoreStroke
-        keepRatio={selected?.type === 'text'}
-        enabledAnchors={selected?.type === 'text' ? ['top-left', 'top-right', 'bottom-left', 'bottom-right'] : undefined}
+        keepRatio={!!selected && KEEP_RATIO.has(selected.type)}
+        enabledAnchors={selected && KEEP_RATIO.has(selected.type) ? ['top-left', 'top-right', 'bottom-left', 'bottom-right'] : undefined}
         anchorSize={9}
         anchorCornerRadius={5}
         anchorStroke="#1E1E20"
@@ -604,6 +612,10 @@ export function useAnnotator(o: AnnotatorOptions) {
     undo,
     redo,
     apply,
+    /** Changes without an undo step of their own — wrap them in begin/endGesture. */
+    live,
+    beginGesture,
+    endGesture,
     onMouseDown,
     onMouseMove,
     onMouseUp,

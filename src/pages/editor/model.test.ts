@@ -14,11 +14,17 @@ import {
   thickenFactor,
   DEFAULT_RESIZE,
   parseDoc,
+  placeStamp,
   redo,
   simplify,
   snapAngle,
+  stampFontSize,
+  stampImageSize,
+  stampMargin,
   translate,
   undo,
+  watermarkFontSize,
+  watermarkTile,
   type Shape,
 } from './model';
 
@@ -110,5 +116,51 @@ describe('editor model', () => {
     expect(parseDoc('garbage').shapes).toEqual([]);
     expect(parseDoc('{"shapes":[{"id":"x"}],"crop":null}').shapes).toHaveLength(1);
     expect(simplify([0, 0, 0.5, 0.5, 1, 1, 5, 5, 5.2, 5.2, 9, 9])).toEqual([0, 0, 5, 5, 9, 9]);
+  });
+
+  it('places the copyright stamp inside the visible area', () => {
+    const area = { x: 100, y: 50, w: 1000, h: 400 };
+    const m = stampMargin(area);
+    expect(m).toBe(10);
+    expect(placeStamp(area, 200, 30, 'bottomRight')).toEqual({ x: 100 + 1000 - 10 - 200, y: 50 + 400 - 10 - 30 });
+    expect(placeStamp(area, 200, 30, 'topLeft')).toEqual({ x: 110, y: 60 });
+    expect(placeStamp(area, 200, 30, 'center')).toEqual({ x: 500, y: 235 });
+    expect(placeStamp(area, 200, 30, 'top')).toEqual({ x: 500, y: 60 });
+    expect(placeStamp(area, 200, 30, 'left')).toEqual({ x: 110, y: 235 });
+  });
+
+  it('sizes the copyright stamp with the picture', () => {
+    const big = { x: 0, y: 0, w: 1920, h: 1080 };
+    expect(stampFontSize(big, 1)).toBe(32);
+    expect(stampFontSize(big, 0)).toBeLessThan(stampFontSize(big, 2));
+    expect(stampFontSize({ x: 0, y: 0, w: 200, h: 100 }, 0)).toBe(12); // readable on tiny crops
+    // A wide logo is limited to 40% of the picture width, proportions kept.
+    const wide = stampImageSize({ x: 0, y: 0, w: 400, h: 300 }, 2, 1000, 100);
+    expect(wide.w).toBe(160);
+    expect(wide.h).toBe(16);
+    const logo = stampImageSize(big, 1, 300, 100);
+    expect(logo.h).toBe(97);
+    expect(Math.abs(logo.w / logo.h - 3)).toBeLessThan(0.05);
+    expect(stampImageSize(big, 1, 300, 100, 2).h).toBe(194); // thicker for "downscale to"
+  });
+
+  it('lays the watermark out as a seamless brick pattern', () => {
+    const big = { x: 0, y: 0, w: 1920, h: 1080 };
+    expect(watermarkFontSize(big, 1)).toBe(54);
+    expect(watermarkFontSize({ x: 0, y: 0, w: 300, h: 200 }, 0)).toBe(14);
+    const dense = watermarkTile(200, 50, 0);
+    const sparse = watermarkTile(200, 50, 2);
+    expect(sparse.tw).toBeGreaterThan(dense.tw);
+    expect(sparse.th).toBeGreaterThan(dense.th);
+    // Every other row is shifted by half a tile; the shifted repeat is drawn at both edges.
+    const { tw, th, centers } = dense;
+    expect(centers).toEqual([
+      [tw / 2, th / 4],
+      [0, (3 * th) / 4],
+      [tw, (3 * th) / 4],
+    ]);
+    // Repeats never touch: the gaps are at least the repeat's height.
+    expect(tw - 200).toBeGreaterThanOrEqual(50);
+    expect(th / 2 - 50).toBeGreaterThanOrEqual(50);
   });
 });

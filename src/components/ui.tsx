@@ -124,13 +124,13 @@ export function Switch({
       onClick={() => onChange(!checked)}
       className={clsx(
         'relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors duration-150 disabled:opacity-40',
-        checked ? 'bg-primary' : 'bg-toggle-off',
+        checked ? 'bg-lime' : 'bg-toggle-off',
       )}
     >
       <span
         className={clsx(
           'absolute top-0.5 left-0.5 h-4 w-4 rounded-full transition-transform duration-150',
-          checked ? 'translate-x-4 bg-on-primary' : 'bg-knob shadow-sm',
+          checked ? 'translate-x-4 bg-on-lime' : 'bg-knob shadow-sm',
         )}
       />
     </button>
@@ -151,16 +151,19 @@ export function Kbd({ keys, className }: { keys: string; className?: string }) {
   );
 }
 
+/** `accent` — the selected option in the lime accent (settings). */
 export function Segmented<T extends string | number>({
   value,
   options,
   onChange,
   className,
+  accent,
 }: {
   value: T;
   options: { value: T; label: ReactNode; tip?: string }[];
   onChange: (v: T) => void;
   className?: string;
+  accent?: boolean;
 }) {
   return (
     <div role="radiogroup" className={clsx('inline-flex shrink-0 rounded-full bg-surface-2 p-[3px] text-[12px]', className)}>
@@ -174,7 +177,7 @@ export function Segmented<T extends string | number>({
           onClick={() => onChange(o.value)}
           className={clsx(
             'inline-flex items-center justify-center gap-1.5 rounded-full px-3 py-1.5 whitespace-nowrap transition-colors',
-            value === o.value ? 'bg-primary text-on-primary' : 'text-muted hover:text-text',
+            value === o.value ? (accent ? 'bg-lime font-medium text-on-lime' : 'bg-primary text-on-primary') : 'text-muted hover:text-text',
           )}
         >
           {o.label}
@@ -185,7 +188,7 @@ export function Segmented<T extends string | number>({
 }
 
 const fieldClass =
-  'h-9 rounded-(--radius-control) bg-surface-2 px-3 text-[13px] text-text outline-none ring-1 ring-inset ring-transparent transition-shadow placeholder:text-subtle focus:ring-border-strong disabled:opacity-50';
+  'h-9 rounded-(--radius-control) bg-surface-2 px-3 text-[13px] text-text outline-none ring-1 ring-inset ring-transparent transition-shadow placeholder:text-subtle focus:ring-2 focus:ring-lime disabled:opacity-50';
 
 /** Text field; give it a width via `className`. */
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(function Input({ className, ...rest }, ref) {

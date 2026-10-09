@@ -1,6 +1,7 @@
 //! `shot://` protocol serving images to the web views:
 //! * `session/<session id>/<monitor>.bmp` – frozen monitor picture for the overlay
 //! * `history/<id>/<file>` – history files (`current.png` = edited image or original)
+//! * `watermark.png` – picture of the watermark (404 when none was chosen)
 //!
 //! On Windows the web view sees it as `http://shot.localhost/...`.
 
@@ -62,6 +63,10 @@ fn serve<R: Runtime>(app: &AppHandle<R>, path: &str) -> Result<Response<Vec<u8>>
             let bytes = std::fs::read(&file_path).map_err(|_| StatusCode::NOT_FOUND)?;
             let mime = if file.ends_with(".json") { "application/json" } else { "image/png" };
             Ok(ok(bytes, mime))
+        }
+        ["watermark.png"] => {
+            let bytes = std::fs::read(&state.paths.watermark_file).map_err(|_| StatusCode::NOT_FOUND)?;
+            Ok(ok(bytes, "image/png"))
         }
         _ => Err(StatusCode::NOT_FOUND),
     }

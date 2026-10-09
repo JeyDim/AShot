@@ -69,39 +69,47 @@ async fn run(app: &AppHandle, mode: CaptureMode) -> Result<(), String> {
     let session = Arc::new(session);
     *state.session.lock().unwrap() = Some(session.clone());
 
-    #[cfg(windows)]
-    state.ui_selector.refresh(overlay::own_hwnds(app));
-
     let virtual_screen = session.virtual_bounds();
     let monitor_under_cursor = session
         .monitor_at(session.cursor.0, session.cursor.1)
         .or_else(|| session.monitors.first())
         .map(|m| m.bounds);
-
-    let target: Option<Rect> = match mode {
-        CaptureMode::Region | CaptureMode::WindowPick => None,
-        CaptureMode::Window => session.foreground.or(monitor_under_cursor),
-        CaptureMode::Fullscreen => match settings.fullscreen_mode {
-            FullscreenMode::CurrentMonitor => monitor_under_cursor,
-            FullscreenMode::AllMonitors => Some(virtual_screen),
-        },
-        CaptureMode::LastRegion => settings.last_region.and_then(|r| r.intersect(&virtual_screen)),
-    }
-    .and_then(|r| r.intersect(&virtual_screen));
-
     let auto = action_for(settings.after_capture);
-    match target {
-        Some(rect) => {
-            let fits_one_monitor = session.monitors.iter().any(|m| m.bounds.intersect(&rect) == Some(rect));
-            match auto {
-                // Show the overlay with a pre-selected area so it can be adjusted.
-                None if fits_one_monitor => overlay::open(app, &session, mode, Some(rect), None),
-                // The area spans several monitors – the overlay works per monitor, go to the editor.
-                None => complete(app, rect, Action::Edit).await,
-                Some(action) => complete(app, rect, action).await,
+
+    match mode {
+        // Nothing to choose on a whole screen: straight to the editor (or the action chosen
+        // in the settings), for one monitor as for all of them.
+        CaptureMode::Fullscreen => {
+            let rect = match settings.fullscreen_mode {
+                FullscreenMode::CurrentMonitor => monitor_under_cursor,
+                FullscreenMode::AllMonitors => Some(virtual_screen),
             }
+            .and_then(|r| r.intersect(&virtual_screen))
+            .ok_or("не найден монитор")?;
+            complete(app, rect, auto.unwrap_or(Action::Edit)).await
         }
-        None => overlay::open(app, &session, mode, None, auto),
+        // The active window, pre-selected on the overlay so it can be adjusted.
+        CaptureMode::Window => match session.foreground.or(monitor_under_cursor).and_then(|r| r.intersect(&virtual_screen)) {
+            Some(rect) => {
+                let fits_one_monitor = session.monitors.iter().any(|m| m.bounds.intersect(&rect) == Some(rect));
+                match auto {
+                    None if fits_one_monitor => overlay::open(app, &session, mode, Some(rect), None),
+                    // The window spans several monitors – the overlay works per monitor, go to the editor.
+                    None => complete(app, rect, Action::Edit).await,
+                    Some(action) => complete(app, rect, action).await,
+                }
+            }
+            None => overlay::open(app, &session, mode, None, auto),
+        },
+        CaptureMode::Region | CaptureMode::WindowPick => {
+            // UI elements (buttons, panels…) are highlighted only in the region mode; the window
+            // mode highlights whole windows.
+            #[cfg(windows)]
+            if mode == CaptureMode::Region {
+                state.ui_selector.refresh(overlay::own_hwnds(app));
+            }
+            overlay::open(app, &session, mode, None, auto)
+        }
     }
 }
 
@@ -130,7 +138,6 @@ pub async fn complete_with(
     let image = tauri::async_runtime::spawn_blocking(move || imaging::crop_virtual(&shots, rect).map_err(|e| e.to_string()))
         .await
         .map_err(|e| e.to_string())??;
-    state.update_settings(|s| s.last_region = Some(rect));
     let source = mode.map(|m| m.source()).unwrap_or("region");
     actions::process_capture(app, image, source, action, annotated, save_to).await
 }

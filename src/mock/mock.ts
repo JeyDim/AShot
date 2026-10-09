@@ -2,7 +2,7 @@
 // http://localhost:1420/?mock#/panel. Used for UI development and screenshots.
 import { emit } from '@tauri-apps/api/event';
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
-import type { AppSettings, HistoryItem, OverlayPrepare, ToastPayload } from '../lib/types';
+import type { AppSettings, CaptureMode, HistoryItem, OverlayPrepare, ToastPayload } from '../lib/types';
 import { fakeDesktop, fakeThumb } from './fakeImages';
 
 const query = new URLSearchParams(location.search);
@@ -14,18 +14,19 @@ const settings: AppSettings = {
   fullscreenMode: 'currentMonitor',
   // `&theme=light|dark` for screenshots of both themes.
   theme: (query.get('theme') as AppSettings['theme']) ?? 'system',
+  uiScale: 100,
   autostart: true,
   historyLimit: 10,
   saveFolder: '',
   fileNamePattern: 'Screenshot {date} {time}',
   imageFormat: 'png',
   jpegQuality: 90,
-  hotkeys: { region: 'Control+PrintScreen', window: '', fullscreen: '', lastRegion: '' },
+  hotkeys: { region: 'Control+PrintScreen', window: 'Alt+PrintScreen', fullscreen: 'Shift+PrintScreen' },
   box: { authMode: 'oAuth', clientId: 'k2x8v1n0q9example', enterpriseId: '', userId: '', folderId: '', folderName: 'AShot', sharedLinkAccess: 'open', redirectUri: '' },
   links: { rewrite: true, template: '', copyAfterUpload: true, openAfterUpload: false },
   editor: { color: '#FF3B30', size: 1 },
   resize: { enabled: false, side: 'width', size: 740, thicken: true },
-  lastRegion: { x: 200, y: 120, width: 1280, height: 720 },
+  watermark: { kind: 'text', layout: 'tile', text: '© Advant', color: '#FFFFFF', size: 1, opacity: 25, angle: 30, spacing: 1, position: 'bottomRight' },
   welcomed: true,
   autoUpdate: true,
   lastVersion: '0.1.57',
@@ -86,13 +87,18 @@ export async function installMocks() {
   const desktop = await fakeDesktop(1920, 1080);
   const thumbs: Record<string, string> = {};
   for (const [i, id] of ids.entries()) thumbs[id] = await fakeThumb(i);
+  // Copyright picture: none until "picked" (`watermark_pick`); `&logo` — one from the start.
+  let logo: string | null = query.has('logo') ? fakeLogo() : null;
   (window as unknown as { __SHOT_MOCK__: (p: string) => string }).__SHOT_MOCK__ = (p: string) => {
     if (p.startsWith('session/')) return desktop;
+    if (p.startsWith('watermark.png')) return logo ?? 'data:,';
     const m = /^history\/([^/]+)\/(\w+)/.exec(p);
     if (m && m[2] === 'thumb') return thumbs[m[1]] ?? thumbs.a1;
     return desktop;
   };
 
+  // `&mode=windowPick` — the window mode (whole windows only).
+  const mode = (query.get('mode') as CaptureMode | null) ?? 'region';
   const overlay: OverlayPrepare = {
     label: 'overlay-0',
     sessionId: 1,
@@ -103,11 +109,11 @@ export async function installMocks() {
       { title: 'Explorer', bounds: { x: 120, y: 80, width: 760, height: 520 } },
       { title: 'Taskbar', bounds: { x: 0, y: 1032, width: 1920, height: 48 } },
     ],
-    mode: 'region',
+    mode,
     preselect: new URLSearchParams(location.search).has('selected') ? { x: 560, y: 120, width: 1100, height: 700 } : null,
     autoAction: null,
     showMagnifier: true,
-    uiElements: true,
+    uiElements: mode === 'region',
     cursor: [1250, 560],
   };
 
@@ -136,6 +142,12 @@ export async function installMocks() {
           return { settings: structuredClone(settings), problems: [] };
         case 'pick_folder':
           return 'D:\\Screenshots';
+        case 'watermark_pick':
+          logo = fakeLogo();
+          return true;
+        case 'watermark_clear':
+          logo = null;
+          return null;
         case 'history_list':
           return query.has('empty') ? [] : history;
         case 'history_get':
@@ -199,7 +211,19 @@ export async function installMocks() {
           const png = body.slice(4 + len);
           const dv = new DataView(png.buffer, png.byteOffset);
           const w = window as unknown as { __commits?: unknown[] };
-          (w.__commits ??= []).push({ cmd, shapes: doc.shapes.length, crop: doc.crop, width: dv.getUint32(16), height: dv.getUint32(20), bytes: png.length });
+          // Watermark / copyright: how many, the first one and whether it lies under the drawings.
+          const marks = doc.shapes.filter((s: { type: string }) => s.type === 'stamp' || s.type === 'watermark');
+          (w.__commits ??= []).push({
+            cmd,
+            shapes: doc.shapes.length,
+            marks: marks.length,
+            mark: marks[0] ?? null,
+            firstType: doc.shapes[0]?.type ?? null,
+            crop: doc.crop,
+            width: dv.getUint32(16),
+            height: dv.getUint32(20),
+            bytes: png.length,
+          });
           return { shareUrl: 'https://advant.one/3rud4dfakga5r953wt77anhyzo27tm7r', savedPath: null };
         }
         default:
@@ -216,11 +240,37 @@ export async function installMocks() {
       success: { ...base, kind: 'success', title: 'Ссылка скопирована', link: 'https://advant.one/3rud4dfakga5r953wt77anhyzo27tm7r' },
       progress: { ...base, kind: 'progress', title: 'Загрузка в Box…', message: 'Ссылка скопируется автоматически' },
       error: { ...base, kind: 'error', title: 'Не удалось загрузить в Box', message: 'Нет соединения с Box. Снимок сохранён в истории.', retryUpload: true },
-      info: { ...base, kind: 'info', title: 'AShot работает в трее', message: 'PrtSc — снимок области. Клик по иконке в трее — меню и последние снимки.', historyId: null },
+      info: {
+        ...base,
+        kind: 'info',
+        title: 'AShot работает в трее',
+        message: 'Ctrl+PrtSc — область, Alt+PrtSc — окно, Shift+PrtSc — экран. Клик по иконке в трее — меню и последние снимки.',
+        historyId: null,
+      },
       saved: { ...base, kind: 'success', title: 'Сохранено', message: 'Screenshot 2026-10-08 14-21-07.png', path: 'C:\\x.png' },
     };
     setTimeout(() => emit('toast:show', payloads[kind] ?? payloads.success), 1000);
   }
+}
+
+/** A wordmark with a transparent background, like a company logo. */
+function fakeLogo(): string {
+  const c = document.createElement('canvas');
+  c.width = 360;
+  c.height = 96;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#B5F000';
+  ctx.beginPath();
+  ctx.roundRect(4, 8, 80, 80, 20);
+  ctx.fill();
+  ctx.fillStyle = '#1E1E20';
+  ctx.font = 'bold 56px sans-serif';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('A', 26, 50);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = 'bold 54px sans-serif';
+  ctx.fillText('ADVANT', 100, 50);
+  return c.toDataURL('image/png');
 }
 
 function deepAssign(target: Record<string, unknown>, patch: Record<string, unknown>) {

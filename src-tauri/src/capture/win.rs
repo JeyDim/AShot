@@ -170,8 +170,17 @@ fn windows_list(virtual_screen: Rect) -> Vec<WindowInfo> {
     out
 }
 
+/// The mouse cursor to draw into the captures: its picture and where it is.
+struct Cursor {
+    info: CURSORINFO,
+    /// Physical virtual-screen position (`GetCursorPos`), the coordinate space of the monitor
+    /// bounds. `CURSORINFO::ptScreenPos` is not: with monitors of different DPI scale it is off
+    /// on every monitor but the primary one, and the cursor ended up outside the picture.
+    at: (i32, i32),
+}
+
 /// Captures one monitor rectangle with BitBlt and optionally draws the cursor.
-fn capture_rect(rect: Rect, cursor: Option<&CURSORINFO>) -> Result<RgbaImage, String> {
+fn capture_rect(rect: Rect, cursor: Option<&Cursor>) -> Result<RgbaImage, String> {
     let (w, h) = (rect.width as i32, rect.height as i32);
     unsafe {
         let screen = GetDC(None);
@@ -185,8 +194,8 @@ fn capture_rect(rect: Rect, cursor: Option<&CURSORINFO>) -> Result<RgbaImage, St
         let result = (|| {
             BitBlt(mem, 0, 0, w, h, Some(screen), rect.x, rect.y, SRCCOPY | CAPTUREBLT)
                 .map_err(|e| format!("BitBlt: {e}"))?;
-            if let Some(ci) = cursor {
-                draw_cursor(mem, ci, rect);
+            if let Some(c) = cursor {
+                draw_cursor(mem, c, rect);
             }
             let mut bmi = BITMAPINFO {
                 bmiHeader: BITMAPINFOHEADER {
@@ -221,15 +230,15 @@ fn capture_rect(rect: Rect, cursor: Option<&CURSORINFO>) -> Result<RgbaImage, St
     }
 }
 
-unsafe fn draw_cursor(mem: HDC, ci: &CURSORINFO, rect: Rect) {
+unsafe fn draw_cursor(mem: HDC, cursor: &Cursor, rect: Rect) {
     let mut info = ICONINFO::default();
     unsafe {
-        let icon = windows::Win32::UI::WindowsAndMessaging::HICON(ci.hCursor.0);
+        let icon = windows::Win32::UI::WindowsAndMessaging::HICON(cursor.info.hCursor.0);
         if GetIconInfo(icon, &mut info).is_err() {
             return;
         }
-        let x = ci.ptScreenPos.x - info.xHotspot as i32 - rect.x;
-        let y = ci.ptScreenPos.y - info.yHotspot as i32 - rect.y;
+        let x = cursor.at.0 - info.xHotspot as i32 - rect.x;
+        let y = cursor.at.1 - info.yHotspot as i32 - rect.y;
         let _ = DrawIconEx(mem, x, y, icon, 0, 0, 0, None, DI_NORMAL);
         if !info.hbmMask.is_invalid() {
             let _ = DeleteObject(HGDIOBJ(info.hbmMask.0));
@@ -245,23 +254,31 @@ pub fn capture_session(id: u64, include_cursor: bool) -> Result<CaptureSession, 
     if monitors.is_empty() {
         return Err("не найдено ни одного монитора".into());
     }
-    let cursor_info = include_cursor
+    let at = cursor_position();
+    let cursor = include_cursor
         .then(|| unsafe {
             let mut ci = CURSORINFO { cbSize: std::mem::size_of::<CURSORINFO>() as u32, ..Default::default() };
             (GetCursorInfo(&mut ci).is_ok() && ci.flags == CURSOR_SHOWING).then_some(ci)
         })
-        .flatten();
+        .flatten()
+        .map(|info| {
+            let reported = (info.ptScreenPos.x, info.ptScreenPos.y);
+            if reported != at {
+                log::info!("cursor: GetCursorInfo reports {reported:?}, GetCursorPos {at:?} — drawing at the latter");
+            }
+            Cursor { info, at }
+        });
 
     let mut shots = Vec::with_capacity(monitors.len());
     for m in &monitors {
-        let cursor = cursor_info.as_ref().filter(|ci| {
+        let cursor = cursor.as_ref().filter(|c| {
             // DrawIconEx clips by itself, but skip monitors the cursor is far away from.
-            let (cx, cy) = (ci.ptScreenPos.x, ci.ptScreenPos.y);
+            let (cx, cy) = c.at;
             cx >= m.bounds.x - 64 && cy >= m.bounds.y - 64 && cx < m.bounds.right() + 64 && cy < m.bounds.bottom() + 64
         });
         shots.push(MonitorShot { bounds: m.bounds, image: capture_rect(m.bounds, cursor)? });
     }
     let virtual_screen = shoter_core::imaging::virtual_bounds(&shots);
     let windows = windows_list(virtual_screen);
-    Ok(CaptureSession::new(id, monitors, shots, windows, cursor_position(), foreground_window_rect()))
+    Ok(CaptureSession::new(id, monitors, shots, windows, at, foreground_window_rect()))
 }

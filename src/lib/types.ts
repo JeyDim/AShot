@@ -5,7 +5,7 @@ export type FullscreenMode = 'currentMonitor' | 'allMonitors';
 export type ThemeSetting = 'system' | 'light' | 'dark';
 export type ImageFormat = 'png' | 'jpeg' | 'webp';
 export type BoxAuthMode = 'oAuth' | 'clientCredentials' | 'developerToken';
-export type CaptureMode = 'region' | 'window' | 'windowPick' | 'fullscreen' | 'lastRegion';
+export type CaptureMode = 'region' | 'window' | 'windowPick' | 'fullscreen';
 export type Action = 'edit' | 'copy' | 'save' | 'saveAs' | 'upload' | 'store';
 
 export interface Rect {
@@ -19,7 +19,6 @@ export interface Hotkeys {
   region: string;
   window: string;
   fullscreen: string;
-  lastRegion: string;
 }
 
 export interface BoxSettings {
@@ -45,6 +44,27 @@ export interface EditorPrefs {
   size: number;
 }
 
+export type WatermarkPosition = 'topLeft' | 'top' | 'topRight' | 'left' | 'center' | 'right' | 'bottomLeft' | 'bottom' | 'bottomRight';
+
+/** Watermark / copyright of the editor (its picture is `watermark.png` of the `shot` protocol). */
+export interface WatermarkSettings {
+  kind: 'text' | 'image';
+  /** `tile` — repeated over the whole picture (watermark), `corner` — once (copyright). */
+  layout: 'tile' | 'corner';
+  text: string;
+  color: string;
+  /** 0 – small, 1 – medium, 2 – large. */
+  size: number;
+  /** Percent. */
+  opacity: number;
+  /** Tile: slope of the rows, degrees. */
+  angle: number;
+  /** Tile: 0 – dense, 1 – medium, 2 – sparse. */
+  spacing: number;
+  /** Corner: where it goes. */
+  position: WatermarkPosition;
+}
+
 export type ResizeSide = 'width' | 'height' | 'longest';
 
 /** "Downscale to N px": applies to everything that leaves the app; history keeps the full size. */
@@ -62,6 +82,8 @@ export interface AppSettings {
   afterCapture: AfterCapture;
   fullscreenMode: FullscreenMode;
   theme: ThemeSetting;
+  /** Size of the app's UI (panel, editor, settings, toolbars), percent. */
+  uiScale: number;
   autostart: boolean;
   historyLimit: number;
   saveFolder: string;
@@ -73,7 +95,7 @@ export interface AppSettings {
   links: LinkSettings;
   editor: EditorPrefs;
   resize: ResizeSettings;
-  lastRegion: Rect | null;
+  watermark: WatermarkSettings;
   welcomed: boolean;
   autoUpdate: boolean;
   lastVersion: string;

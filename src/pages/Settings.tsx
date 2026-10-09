@@ -16,7 +16,6 @@ import {
   Monitor,
   Power,
   RefreshCw,
-  RotateCcw,
   Save,
   Scan,
   ShieldCheck,
@@ -156,7 +155,7 @@ export default function Settings({ initial }: { initial?: string }) {
               aria-current={section === s.id ? 'page' : undefined}
               className={clsx(
                 'flex h-[38px] items-center gap-2.5 rounded-full px-3 text-[14px] transition-colors',
-                section === s.id ? 'bg-primary text-on-primary' : 'text-text hover:bg-text/6',
+                section === s.id ? 'bg-lime font-medium text-on-lime' : 'text-text hover:bg-text/6',
               )}
             >
               {s.icon}
@@ -305,6 +304,7 @@ function General({ s, update }: { s: AppSettings; update: Update }) {
         </Row>
         <Row label="«Весь экран» снимает">
           <Segmented
+            accent
             value={s.fullscreenMode}
             onChange={(v) => update({ fullscreenMode: v })}
             options={[
@@ -331,15 +331,14 @@ function General({ s, update }: { s: AppSettings; update: Update }) {
 
 // ---------------------------------------------------------------- Горячие клавиши
 
-// Only the region capture has a hotkey by default; the rest are opt-in.
-const DEFAULT_HOTKEYS: Hotkeys = { region: 'Control+PrintScreen', window: '', fullscreen: '', lastRegion: '' };
+// Every capture has a hotkey by default (same as `Hotkeys::default` in Rust).
+const DEFAULT_HOTKEYS: Hotkeys = { region: 'Control+PrintScreen', window: 'Alt+PrintScreen', fullscreen: 'Shift+PrintScreen' };
 
 function HotkeysSection({ value, onChange }: { value: Hotkeys; onChange: (h: Hotkeys) => void }) {
   const rows: { key: keyof Hotkeys; label: string; hint: string; icon: ReactNode }[] = [
     { key: 'region', label: 'Снимок области', hint: 'Выделение мышью, клик — окно или элемент', icon: <Scan size={20} /> },
     { key: 'window', label: 'Снимок активного окна', hint: 'Окно в фокусе сразу выделено, можно подправить', icon: <AppWindow size={20} /> },
-    { key: 'fullscreen', label: 'Весь экран', hint: 'Монитор под курсором или все мониторы', icon: <Monitor size={20} /> },
-    { key: 'lastRegion', label: 'Повторить последнюю область', hint: 'Та же область, что и в прошлый раз', icon: <RotateCcw size={20} /> },
+    { key: 'fullscreen', label: 'Весь экран', hint: 'Сразу в редактор: монитор под курсором или все мониторы', icon: <Monitor size={20} /> },
   ];
   const isDefault = (Object.keys(DEFAULT_HOTKEYS) as (keyof Hotkeys)[]).every((k) => value[k] === DEFAULT_HOTKEYS[k]);
   return (
@@ -403,7 +402,7 @@ function HotkeyInput({ value, onChange }: { value: string; onChange: (v: string)
         }}
         className={clsx(
           'flex h-9 w-[190px] items-center justify-center rounded-[10px] bg-surface-2 px-3 font-mono text-[12px] ring-1 ring-inset transition-shadow outline-none',
-          recording ? 'text-muted ring-text' : 'ring-transparent hover:ring-border-strong',
+          recording ? 'text-muted ring-2 ring-lime' : 'ring-transparent hover:ring-border-strong',
         )}
       >
         {recording ? 'Нажмите сочетание…' : value ? hotkeyLabel(value) : <span className="font-sans text-muted">Не назначено</span>}
@@ -512,6 +511,7 @@ function Saving({ s, update, view }: { s: AppSettings; update: Update; view: Set
         </Row>
         <Row label="Формат" hint="Используется и для загрузки в Box">
           <Segmented
+            accent
             value={s.imageFormat}
             onChange={(v) => update({ imageFormat: v })}
             options={[
@@ -639,7 +639,7 @@ function BoxSection({ s, update, flush, defaultTemplate }: { s: AppSettings; upd
         <div className="flex items-center gap-3 rounded-[14px] bg-surface-2 p-3.5">
           {oauth && status?.signedIn ? (
             <>
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-text text-[14px] font-medium text-surface">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-lime text-[14px] font-medium text-on-lime">
                 {(account?.name || account?.login || 'B').slice(0, 1).toUpperCase()}
               </div>
               <div className="min-w-0 flex-1 text-[14px] font-medium">
@@ -666,7 +666,7 @@ function BoxSection({ s, update, flush, defaultTemplate }: { s: AppSettings; upd
                   Отмена
                 </Button>
               ) : (
-                <Button variant="primary" size="sm" className="h-8" disabled={!!noApp} onClick={login}>
+                <Button variant="accent" size="sm" className="h-8" disabled={!!noApp} onClick={login}>
                   Войти через Box
                 </Button>
               )}
@@ -748,6 +748,7 @@ function BoxSection({ s, update, flush, defaultTemplate }: { s: AppSettings; upd
           <>
             <Row label="Способ входа">
               <Segmented
+                accent
                 value={box.authMode}
                 onChange={(v) => update({ box: { authMode: v } })}
                 options={[
@@ -829,6 +830,8 @@ function BoxSection({ s, update, flush, defaultTemplate }: { s: AppSettings; upd
 
 // ---------------------------------------------------------------- О программе
 
+const UI_SCALES = [80, 90, 100, 110, 125, 150];
+
 function About({ s, update }: { s: AppSettings; update: Update }) {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [copied, setCopied] = useState(false);
@@ -876,6 +879,7 @@ function About({ s, update }: { s: AppSettings; update: Update }) {
         <div className="flex items-center justify-between gap-4 py-2 text-[14px]">
           Тема
           <Segmented
+            accent
             value={s.theme}
             onChange={(v) => update({ theme: v })}
             options={[
@@ -883,6 +887,19 @@ function About({ s, update }: { s: AppSettings; update: Update }) {
               { value: 'light', label: 'Светлая' },
               { value: 'dark', label: 'Тёмная' },
             ]}
+          />
+        </div>
+        <div className="flex flex-col gap-2 border-t border-border py-2.5 text-[14px]">
+          <span className="flex flex-col">
+            Масштаб интерфейса
+            <span className="text-[12px] text-muted">Панель в трее, редактор, панели на экране выделения и настройки</span>
+          </span>
+          <Segmented
+            accent
+            value={s.uiScale}
+            onChange={(v) => update({ uiScale: v })}
+            options={UI_SCALES.map((v) => ({ value: v, label: `${v}%` }))}
+            className="self-start"
           />
         </div>
         <div className="flex items-center justify-between gap-4 border-t border-border py-2.5 text-[14px]">
@@ -978,7 +995,7 @@ function Updates({ autoUpdate, onAutoUpdate }: { autoUpdate: boolean; onAutoUpda
         </span>
       );
       action = (
-        <Button variant="primary" icon={<Download size={15} />} onClick={install}>
+        <Button variant="accent" icon={<Download size={15} />} onClick={install}>
           Обновить
         </Button>
       );
@@ -991,7 +1008,7 @@ function Updates({ autoUpdate, onAutoUpdate }: { autoUpdate: boolean; onAutoUpda
             Скачиваю {st.version} — {pct}%
           </span>
           <span className="h-1.5 overflow-hidden rounded-full bg-surface-3">
-            <span className="block h-full rounded-full bg-primary transition-[width]" style={{ width: `${pct}%` }} />
+            <span className="block h-full rounded-full bg-lime transition-[width]" style={{ width: `${pct}%` }} />
           </span>
         </span>
       );

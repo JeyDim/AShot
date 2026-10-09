@@ -73,4 +73,11 @@ await shot('overlay-annotate', 'overlay', {
 await shot('editor', 'editor/a1', { w: 1500, h: 900, wait: 1500 });
 await shot('editor-dark', 'editor/a1', { w: 1500, h: 900, wait: 1500, theme: 'dark' });
 await shot('editor-compact', 'editor/a1', { w: 1024, h: 700, wait: 1500 });
+await shot('editor-watermark', 'editor/a1', {
+  w: 1500, h: 900, wait: 1500,
+  setup: async (p) => {
+    await p.getByRole('button', { name: 'Поставить водяной знак' }).click();
+    await p.getByRole('button', { name: 'Водяной знак или копирайт' }).click();
+  },
+});
 await browser.close();

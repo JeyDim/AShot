@@ -47,6 +47,122 @@ export const TOOLS: { id: Tool; label: string; key: string; icon: ReactNode }[] 
   { id: 'crop', label: 'Обрезка', key: 'C', icon: <Crop size={19} /> },
 ];
 
+/** Tools sharing one toolbar button with a drop-down; the first one is the default. The
+ *  button shows the variant picked last (remembered), the keys still pick each tool. */
+export const TOOL_GROUPS: { tools: Tool[]; label: string }[] = [
+  { tools: ['rect', 'ellipse'], label: 'Прямоугольник или эллипс' },
+  { tools: ['pen', 'marker'], label: 'Карандаш или маркер' },
+];
+
+const groupStorageKey = (tools: Tool[]) => `tools.group.${tools.join('-')}`;
+
+function storedVariant(tools: Tool[]): Tool {
+  try {
+    const t = localStorage.getItem(groupStorageKey(tools)) as Tool | null;
+    return t && tools.includes(t) ? t : tools[0];
+  } catch {
+    return tools[0];
+  }
+}
+
+type ToolDef = (typeof TOOLS)[number];
+
+/** Tool buttons of the editor and the capture overlay: single tools as icon buttons, groups
+ *  (rectangle / ellipse, pen / marker) as an icon button plus a narrow drop-down arrow. */
+export function ToolButtons({
+  tools,
+  tool,
+  setTool,
+  size,
+  up,
+  tipsUp,
+}: {
+  tools: ToolDef[];
+  tool: Tool;
+  setTool: (t: Tool) => void;
+  size: number;
+  /** Drop-downs open upwards (the overlay bar near the bottom of the screen). */
+  up?: boolean;
+  /** Tips above the buttons. */
+  tipsUp?: boolean;
+}) {
+  const [variants, setVariants] = useState<Record<string, Tool>>(() =>
+    Object.fromEntries(TOOL_GROUPS.map((g) => [groupStorageKey(g.tools), storedVariant(g.tools)])),
+  );
+  // Whatever picked a grouped tool (button, drop-down, key), the group shows it from now on.
+  useEffect(() => {
+    const g = TOOL_GROUPS.find((x) => x.tools.includes(tool));
+    if (!g) return;
+    const key = groupStorageKey(g.tools);
+    setVariants((v) => (v[key] === tool ? v : { ...v, [key]: tool }));
+    try {
+      localStorage.setItem(key, tool);
+    } catch {
+      /* storage unavailable */
+    }
+  }, [tool]);
+
+  const tipPos = tipsUp ? 'top' : undefined;
+  const items: ReactNode[] = [];
+  for (const t of tools) {
+    const g = TOOL_GROUPS.find((x) => x.tools.includes(t.id));
+    if (!g) {
+      items.push(
+        <IconButton key={t.id} tip={`${t.label} · ${t.key}`} tipPos={tipPos} active={tool === t.id} size={size} onClick={() => setTool(t.id)}>
+          {t.icon}
+        </IconButton>,
+      );
+      continue;
+    }
+    // The group takes the place of its first tool.
+    if (g.tools[0] !== t.id) continue;
+    const members = g.tools.map((id) => tools.find((x) => x.id === id)).filter((x): x is ToolDef => !!x);
+    const activeIn = g.tools.includes(tool);
+    const shown = members.find((m) => m.id === (activeIn ? tool : variants[groupStorageKey(g.tools)])) ?? members[0];
+    items.push(
+      <Dropdown
+        key={t.id}
+        tip={g.label}
+        up={up}
+        face={null}
+        panelClassName="rounded-[14px] p-1"
+        toggleClassName="flex w-[15px] items-center justify-center self-stretch rounded-full text-muted transition-colors hover:bg-text/6 hover:text-text"
+        chevronSize={12}
+        before={
+          <IconButton tip={`${shown.label} · ${shown.key}`} tipPos={tipPos} active={activeIn} size={size} onClick={() => setTool(shown.id)}>
+            {shown.icon}
+          </IconButton>
+        }
+      >
+        {(close) => (
+          <div className="flex min-w-[196px] flex-col gap-0.5" role="menu" aria-label={g.label}>
+            {members.map((m) => (
+              <button
+                key={m.id}
+                role="menuitemradio"
+                aria-checked={tool === m.id}
+                onClick={() => {
+                  setTool(m.id);
+                  close();
+                }}
+                className={clsx(
+                  'flex h-9 items-center gap-2.5 rounded-[10px] px-2.5 text-[13px] transition-colors',
+                  tool === m.id ? 'bg-primary text-on-primary' : 'text-text hover:bg-text/6',
+                )}
+              >
+                {m.icon}
+                <span className="flex-1 text-left">{m.label}</span>
+                <span className="font-mono text-[11px] opacity-60">{m.key}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </Dropdown>,
+    );
+  }
+  return <>{items}</>;
+}
+
 export function Toolbar(props: {
   tool: Tool;
   setTool: (t: Tool) => void;
@@ -66,17 +182,21 @@ export function Toolbar(props: {
   redo: () => void;
   busy: Action | null;
   act: (a: Action) => void;
+  /** Extra control at the end of the tools (watermark / copyright). */
+  extra?: ReactNode;
 }) {
   const { tool, setTool, color, setColor, size, setSize, busy, act } = props;
   const width = useWindowWidth();
   return (
     <div className={clsx('flex h-[58px] shrink-0 items-center overflow-x-auto border-b border-border bg-surface px-3', width < 1180 ? 'gap-1.5' : 'gap-2')} data-tauri-drag-region>
-      <div className="flex items-center gap-0.5 rounded-full bg-surface-2 p-1">
-        {TOOLS.map((t) => (
-          <IconButton key={t.id} tip={`${t.label} · ${t.key}`} active={tool === t.id} size={width < 1180 ? 33 : 38} onClick={() => setTool(t.id)}>
-            {t.icon}
-          </IconButton>
-        ))}
+      <div className="flex items-center gap-0.5 rounded-full bg-surface-2 p-1" role="toolbar" aria-label="Инструменты">
+        <ToolButtons tools={TOOLS} tool={tool} setTool={setTool} size={width < 1180 ? 33 : 38} />
+        {props.extra && (
+          <>
+            <div className="mx-0.5 h-5 w-px shrink-0 bg-border-strong" />
+            {props.extra}
+          </>
+        )}
       </div>
 
       <Divider />
@@ -134,7 +254,7 @@ function useWindowWidth() {
   return w;
 }
 
-function Swatches({ color, setColor }: { color: string; setColor: (c: string) => void }) {
+export function Swatches({ color, setColor }: { color: string; setColor: (c: string) => void }) {
   const custom = !PALETTE.includes(color.toUpperCase());
   return (
     <>
@@ -169,12 +289,14 @@ function Swatches({ color, setColor }: { color: string; setColor: (c: string) =>
  *  lives in <body>, so neither a scrolling toolbar nor a blurred bar clips or shifts it;
  *  it stays on screen and prefers to open above the button when `up`. `before` — a control
  *  in front of the button (the downscaling check box). */
-function Dropdown({
+export function Dropdown({
   tip,
   face,
   up,
   before,
   panelClassName = 'flex items-center gap-2 rounded-full p-2',
+  toggleClassName,
+  chevronSize = 14,
   children,
 }: {
   tip: string;
@@ -182,6 +304,9 @@ function Dropdown({
   up?: boolean;
   before?: ReactNode;
   panelClassName?: string;
+  /** Replaces the classes of the button that opens the panel. */
+  toggleClassName?: string;
+  chevronSize?: number;
   children: (close: () => void) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -228,10 +353,10 @@ function Dropdown({
         data-tip={open ? undefined : tip}
         data-tip-pos={up ? 'top' : undefined}
         onClick={() => setOpen((o) => !o)}
-        className={clsx('flex h-9 items-center gap-1 rounded-full pr-1.5 transition-colors hover:bg-text/6', before ? 'pl-1.5' : 'pl-2')}
+        className={toggleClassName ?? clsx('flex h-9 items-center gap-1 rounded-full pr-1.5 transition-colors hover:bg-text/6', before ? 'pl-1.5' : 'pl-2')}
       >
         {face}
-        <ChevronDown size={14} className={clsx('text-muted transition-transform', open && 'rotate-180')} />
+        <ChevronDown size={chevronSize} className={clsx('transition-transform', !toggleClassName && 'text-muted', open && 'rotate-180')} />
       </button>
       {open &&
         createPortal(

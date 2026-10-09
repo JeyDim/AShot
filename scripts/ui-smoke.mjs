@@ -74,6 +74,48 @@ const check = (cond, msg) => {
   check(c[0]?.shapes === 7 + 5, `document has all shapes (got ${c[0]?.shapes}, want 12)`);
   check(c[0]?.width === 1920 && c[0]?.height === 1080, `export is full resolution (${c[0]?.width}×${c[0]?.height})`);
 
+  // tool groups: the drop-down picks the marker, the group button shows it; keys still work
+  await page.getByRole('button', { name: 'Карандаш или маркер' }).click();
+  await page.getByRole('menuitemradio', { name: /Маркер/ }).click();
+  check(await page.getByRole('button', { name: 'Маркер · M' }).isVisible(), 'pen / marker group shows the picked marker');
+  await page.keyboard.press('p');
+  check(await page.getByRole('button', { name: 'Карандаш · P' }).isVisible(), 'the P key switches the group to the pen');
+  check(await page.getByRole('button', { name: 'Прямоугольник · R' }).isVisible(), 'rectangle is the default of its group');
+
+  // watermark (default): the button repeats the text over the whole picture, under the drawings
+  await page.getByRole('button', { name: 'Поставить водяной знак' }).click();
+  await page.keyboard.press('Control+c');
+  await commitCount(page, 2);
+  c = await commits();
+  let st = c[c.length - 1];
+  check(st?.marks === 1 && st.mark?.type === 'watermark' && st.firstType === 'watermark', `watermark under the drawings (${JSON.stringify(st?.mark)})`);
+  check(st?.mark?.w === 1920 && st.mark.h === 1080 && st.mark.opacity === 0.25, 'watermark covers the whole picture, faint');
+  // the same drop-down makes it a copyright: once, in the chosen corner
+  await page.getByRole('button', { name: 'Водяной знак или копирайт' }).click();
+  await page.getByRole('radio', { name: 'Копирайт' }).click();
+  await page.getByRole('textbox', { name: 'Текст водяного знака' }).fill('© Test');
+  await page.getByRole('radio', { name: 'Слева вверху' }).click();
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Control+c');
+  await commitCount(page, 3);
+  c = await commits();
+  st = c[c.length - 1];
+  check(st?.marks === 1 && st?.shapes === 13, `one mark in the document (marks ${st?.marks}, shapes ${st?.shapes})`);
+  check(st?.mark?.type === 'stamp' && st.mark.text === '© Test' && st.mark.x < 100 && st.mark.y < 100, `copyright follows the drop-down (${JSON.stringify(st?.mark)})`);
+  // typing is one undo step: two undos — back to the default text, bottom-right
+  await page.keyboard.press('Control+z');
+  await page.keyboard.press('Control+z');
+  await page.keyboard.press('Control+c');
+  await commitCount(page, 4);
+  c = await commits();
+  st = c[c.length - 1];
+  check(st?.mark?.text === '© Advant' && st.mark.x > 1000 && st.mark.y > 900, `undo restores it step by step (${JSON.stringify(st?.mark)})`);
+  await page.getByRole('button', { name: 'Убрать копирайт' }).click();
+  await page.keyboard.press('Control+c');
+  await commitCount(page, 5);
+  c = await commits();
+  check(c[c.length - 1]?.marks === 0, 'the button removes it');
+
   // crop
   await page.keyboard.press('c');
   await page.waitForTimeout(100);
@@ -84,7 +126,7 @@ const check = (cond, msg) => {
   await page.keyboard.press('Enter');
   await page.waitForTimeout(200);
   await page.keyboard.press('Control+c');
-  await commitCount(page, 2);
+  await commitCount(page, 6);
   c = await commits();
   const last = c[c.length - 1];
   check(!!last?.crop, 'crop stored in the document');
@@ -127,6 +169,36 @@ const check = (cond, msg) => {
   check(!!fin, 'Ctrl+U finishes the capture');
   check(fin?.args.action === 'upload', 'action is upload');
   check(fin && Math.abs(fin.args.rect.x - Math.round(100 * k) - 1) <= 1 && Math.abs(fin.args.rect.width - Math.round(300 * k)) <= 1, `rect is in physical pixels ${JSON.stringify(fin?.args.rect)}`);
+  check(errors.length === 0, `no page errors ${errors.join('; ')}`);
+  await page.close();
+}
+
+// ---------------------------------------------------------------- window mode: whole windows only
+{
+  const page = await browser.newPage({ viewport: { width: 1440, height: 810 } });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const calls = [];
+  await page.exposeFunction('__record', (c) => calls.push(c));
+  await page.goto(`${base}?mock&mode=windowPick#/overlay`);
+  await page.waitForTimeout(900);
+  await page.evaluate(() => {
+    const { __TAURI_INTERNALS__: t } = window;
+    const orig = t.invoke;
+    t.invoke = (cmd, args, opts) => {
+      if (cmd === 'overlay_finish') window.__record({ cmd, args });
+      return orig(cmd, args, opts);
+    };
+  });
+  // A drag makes no free region here: the release takes the window under the cursor.
+  await page.mouse.move(150, 150);
+  await page.mouse.down();
+  await page.mouse.move(300, 300, { steps: 8 });
+  await page.mouse.up();
+  await page.keyboard.press('Control+c');
+  for (let i = 0; i < 100 && !calls.length; i++) await page.waitForTimeout(100);
+  const rect = calls[0]?.args.rect;
+  check(JSON.stringify(rect) === JSON.stringify({ x: 120, y: 80, width: 760, height: 520 }), `window mode selects the whole window (${JSON.stringify(rect)})`);
   check(errors.length === 0, `no page errors ${errors.join('; ')}`);
   await page.close();
 }

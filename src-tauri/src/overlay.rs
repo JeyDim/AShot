@@ -36,6 +36,7 @@ pub struct OverlayPrepare {
     /// instead of showing the action bar.
     pub auto_action: Option<Action>,
     pub show_magnifier: bool,
+    /// Highlight UI elements inside windows (region mode); otherwise only whole windows.
     pub ui_elements: bool,
     pub cursor: (i32, i32),
 }
@@ -56,6 +57,8 @@ fn build(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
         .focused(false)
         .inner_size(800.0, 600.0)
         .build()?;
+    // The toolbars and hints follow the UI scale; the picture is laid out in physical pixels.
+    let _ = window.set_zoom(crate::ui::ui_scale(app));
     // Moving a window to a monitor with another DPI scale makes Windows/tao resize it to
     // keep its *logical* size (a 2K overlay would shrink to ~FullHD and show a squeezed,
     // grainy picture). Whenever that happens, snap it back to the exact monitor bounds.
@@ -183,7 +186,8 @@ pub fn open(
             preselect: preselect_here,
             auto_action,
             show_magnifier: settings.show_magnifier,
-            ui_elements: cfg!(windows),
+            // The window mode highlights whole windows only.
+            ui_elements: cfg!(windows) && mode == CaptureMode::Region,
             cursor: session.cursor,
         };
         payloads.push((m, label(m.index), serde_json::to_value(&payload).map_err(|e| e.to_string())?));

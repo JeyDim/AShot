@@ -153,6 +153,9 @@ async fn apply_changes(app: &AppHandle, before: &AppSettings, after: &AppSetting
     if before.theme != after.theme {
         ui::apply_theme(app);
     }
+    if before.ui_scale != after.ui_scale {
+        ui::apply_ui_scale(app);
+    }
     let _ = app.emit("settings:changed", after);
     Ok(problems)
 }
@@ -404,11 +407,60 @@ pub async fn editor_commit(app: AppHandle, request: Request<'_>) -> CmdResult<Ac
     Ok(result)
 }
 
+// ---------------------------------------------------------------- watermark
+
+/// Longest side of a stored watermark picture.
+const WATERMARK_MAX: u32 = 800;
+
+/// Picks the watermark picture: it is converted to PNG and kept in the config folder
+/// (served as `watermark.png`). `false` — cancelled.
+#[tauri::command]
+pub async fn watermark_pick(window: WebviewWindow) -> CmdResult<bool> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    window
+        .dialog()
+        .file()
+        .set_title("Картинка для водяного знака")
+        .add_filter("Картинки", &["png", "jpg", "jpeg", "webp", "bmp"])
+        .set_parent(&window)
+        .pick_file(move |path| {
+            let _ = tx.send(path);
+        });
+    let Some(path) = rx.await.ok().flatten() else { return Ok(false) };
+    let path = path.into_path().map_err(err)?;
+    let bytes = std::fs::read(&path).map_err(|e| format!("не удалось прочитать {}: {e}", path.display()))?;
+    let png = tauri::async_runtime::spawn_blocking(move || -> CmdResult<Vec<u8>> {
+        let logo = imaging::prepare_logo(&bytes, WATERMARK_MAX).map_err(|_| "это не картинка (нужен PNG, JPG, WebP или BMP)".to_string())?;
+        imaging::encode_png(&logo).map_err(err)
+    })
+    .await
+    .map_err(err)??;
+    let state = window.state::<AppState>();
+    shoter_core::settings::write_atomic(&state.paths.watermark_file, &png).map_err(err)?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn watermark_clear(app: AppHandle) -> CmdResult<()> {
+    match std::fs::remove_file(&app.state::<AppState>().paths.watermark_file) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(err(e)),
+        _ => Ok(()),
+    }
+}
+
 // ---------------------------------------------------------------- windows & misc
 
 #[tauri::command]
 pub async fn open_settings(app: AppHandle, section: Option<String>) {
     ui::open_settings(&app, section.as_deref());
+}
+
+/// Called by every page before its first render: applies the UI scale to its window (a
+/// zoom set while the window was being created may not survive the page load). Async, so
+/// the web view is never changed from inside its own message callback.
+#[tauri::command]
+pub async fn ui_zoom(window: WebviewWindow) {
+    ui::apply_zoom(window.app_handle(), &window);
 }
 
 #[tauri::command]

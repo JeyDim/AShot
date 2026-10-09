@@ -14,7 +14,6 @@ import {
   Monitor,
   MoreHorizontal,
   Pencil,
-  RotateCcw,
   Save,
   Scan,
   Settings as SettingsIcon,
@@ -117,17 +116,16 @@ export default function TrayPanel() {
             <Hero item={latest} busy={latest ? busy[latest.id] : undefined} run={run} onMenu={openMenu} hotkey={hk?.region ?? ''} />
 
             {/* Capture modes */}
-            <div className="grid grid-cols-4 gap-2 p-4">
+            <div className="grid grid-cols-3 gap-2 p-4">
               <ModeTile icon={<Scan size={22} />} label="Область" keys={hk?.region} onClick={() => api.capture('region')} main />
-              <ModeTile icon={<AppWindow size={22} />} label="Окно" keys={hk?.window} onClick={() => capture('windowPick')} />
-              <ModeTile icon={<Monitor size={22} />} label="Экран" keys={hk?.fullscreen} onClick={() => capture('fullscreen')} />
+              <ModeTile icon={<AppWindow size={22} />} label="Окно" keys={hk?.window} onClick={() => capture('windowPick')} tip="Кликните по окну" />
               <ModeTile
-                icon={<RotateCcw size={21} />}
-                label="Повтор"
-                keys={hk?.lastRegion}
-                onClick={() => capture('lastRegion')}
-                disabled={!settings?.lastRegion}
-                tip={settings?.lastRegion ? 'Снять ту же область ещё раз' : 'Сначала сделайте снимок области'}
+                icon={<Monitor size={22} />}
+                label="Экран"
+                keys={hk?.fullscreen}
+                onClick={() => capture('fullscreen')}
+                tip={settings?.fullscreenMode === 'allMonitors' ? 'Все мониторы — сразу в редактор' : 'Весь экран — сразу в редактор'}
+                tipPos="top-left"
               />
             </div>
           </>
@@ -325,6 +323,7 @@ function ModeTile({
   main,
   disabled,
   tip,
+  tipPos,
 }: {
   icon: ReactNode;
   label: string;
@@ -333,12 +332,14 @@ function ModeTile({
   main?: boolean;
   disabled?: boolean;
   tip?: string;
+  tipPos?: 'top' | 'top-left';
 }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
       data-tip={tip}
+      data-tip-pos={tipPos ?? 'top'}
       className={clsx(
         'flex h-[68px] flex-col items-center justify-center gap-1 rounded-[14px] px-1.5 transition-[background,filter,opacity] duration-100 disabled:opacity-40',
         main ? 'bg-lime text-on-lime hover:brightness-105 active:brightness-95' : 'bg-surface-2 text-text hover:bg-surface-3',
