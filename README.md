@@ -352,11 +352,14 @@ npm run tauri build      # установщики в target/release/bundle
 Шрифты встроены в сборку: заголовки — Rare (variable, [`src/assets/fonts`](src/assets/fonts)),
 текст — Roboto, моноширинный — Roboto Mono. Логотип — [`assets/logo-black.svg`](assets/logo-black.svg) /
 [`logo-white.svg`](assets/logo-white.svg) (одноцветный знак для документов и презентаций, в самой
-программе не используется); иконка приложения (вариант 9h «Пунктир вокруг A»: буква A в лаймовой
-пунктирной рамке и белый курсор на тёмной плитке) — [`assets/logo.svg`](assets/logo.svg), одна и та же у
-AShot и AShot Dev (`npm run icons` пересобирает все размеры в `src-tauri/icons`); логотип в панели и
-настройках — тот же рисунок в компоненте `Logo`: тёмная плитка в обеих темах (в тёмной — с тонкой светлой
-каймой). Иконки меню трея (линия 2 на сетке 24) — в [`scripts/render-menu-icons.mjs`](scripts/render-menu-icons.mjs):
+программе не используется); иконка приложения (вариант 1b «Лаймовая плашка»: тёмная буква A в четырёх
+уголках кадрирования на лаймовой плитке), одна и та же у AShot и AShot Dev, нарисована в двух мастерах —
+прогрессивная шкала: от 24 px — [`assets/logo.svg`](assets/logo.svg), 16–20 px (трей, заголовок окна,
+мелкие значки Проводника) — пиксельный [`assets/logo-16.svg`](assets/logo-16.svg) без уголков, только
+крупная A. `npm run icons` пересобирает все размеры в `src-tauri/icons` (ICO — каждый размер из своего
+мастера, `tray/` — иконка трея под каждый масштаб экрана: 16 px при 100 % … 48 px при 300 %; нужен
+Chromium — или путь к Chrome в `CHROMIUM_PATH`); логотип в панели и настройках — тот же рисунок в
+компоненте `Logo`. Иконки меню трея (линия 2 на сетке 24) — в [`scripts/render-menu-icons.mjs`](scripts/render-menu-icons.mjs):
 `npm run menu-icons` рисует их маски 16 px в `src-tauri/icons/menu`, программа красит их в цвет текста
 меню — светлого или тёмного, как режим Windows (меню перестраивается, когда он меняется).
 

@@ -177,6 +177,11 @@ pub fn run() {
             RunEvent::ExitRequested { code: None, api, .. } => api.prevent_exit(),
             // Windows switched dark / light (the overlays, always there, follow it).
             RunEvent::WindowEvent { event: WindowEvent::ThemeChanged(_), .. } => tray::theme_changed(app),
+            // A display's scale changed (or the window moved to another one): icons for the new size.
+            RunEvent::WindowEvent { label, event: WindowEvent::ScaleFactorChanged { .. }, .. } => {
+                tray::scale_changed(app);
+                ui::title_bar_icon(app, &label);
+            }
             _ => {}
         });
 }

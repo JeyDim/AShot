@@ -492,7 +492,54 @@ pub fn open_editor(app: &AppHandle, id: &str) {
     if let Ok(window) = built {
         let _ = window.set_zoom(zoom);
         let _ = window.set_focus();
+        title_bar_icon(app, &label);
     }
+}
+
+/// The icon in the title bar of a window with the system frame (the editor, the Box sign-in),
+/// at its exact size from the exe's icon (16–20 px — the pixel master, `npm run icons`): Tauri
+/// gives every window its 256 px drawing, which Windows shrinks into a blur.
+pub fn title_bar_icon(app: &AppHandle, label: &str) {
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::{LPARAM, WPARAM};
+        use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+        use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            ICON_SMALL, IMAGE_ICON, LR_DEFAULTCOLOR, LoadImageW, SM_CXSMICON, SendMessageW, WM_SETICON,
+        };
+        use windows::core::PCWSTR;
+
+        /// The exe's icon resource (tauri-build: `WINDOWS_APP_ICON_RESOURCE_ID`).
+        const APP_ICON: usize = 32512;
+        /// Loaded once per size and kept for the app's lifetime (a few at most).
+        static LOADED: std::sync::Mutex<Vec<(i32, isize)>> = std::sync::Mutex::new(Vec::new());
+
+        if !(label.starts_with("editor-") || label == BOX_LOGIN) {
+            return;
+        }
+        let Some(hwnd) = app.get_webview_window(label).and_then(|w| w.hwnd().ok()) else { return };
+        let size = unsafe { GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForWindow(hwnd)) };
+        let mut loaded = LOADED.lock().unwrap();
+        let icon = match loaded.iter().find(|(s, _)| *s == size) {
+            Some(&(_, icon)) => icon,
+            None => {
+                let icon = unsafe {
+                    let Ok(module) = GetModuleHandleW(None) else { return };
+                    let Ok(icon) = LoadImageW(Some(module.into()), PCWSTR(APP_ICON as *const u16), IMAGE_ICON, size, size, LR_DEFAULTCOLOR)
+                    else {
+                        return;
+                    };
+                    icon.0 as isize
+                };
+                loaded.push((size, icon));
+                icon
+            }
+        };
+        unsafe { SendMessageW(hwnd, WM_SETICON, Some(WPARAM(ICON_SMALL as usize)), Some(LPARAM(icon))) };
+    }
+    #[cfg(not(windows))]
+    let _ = (app, label);
 }
 
 // ---------------------------------------------------------------- Box sign-in window
@@ -570,6 +617,7 @@ pub async fn box_login_window(app: &AppHandle, attempts: &[String], state: &str)
         })
         .build()
         .map_err(|e| e.to_string())?;
+    title_bar_icon(app, BOX_LOGIN);
     window.on_window_event(move |event| {
         if let WindowEvent::Destroyed = event {
             let _ = tx.send(LoginEvent::Closed);

@@ -137,10 +137,6 @@
 }
 
 @layer components {
-  /* The logo's rim shows only on a dark background. */
-  :root:not([data-theme="dark"]) .logo-rim {
-    display: none;
-  }
   .card-pop {
     background: var(--color-surface);
     border-radius: var(--radius-card);

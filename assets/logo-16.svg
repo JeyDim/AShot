@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- 1b, pixel master for 16–20 px (tray, title bar, small icons): no corners, only a bold A
+       on the 16 × 16 grid. 24 px and up — logo.svg. -->
+  <rect width="16" height="16" rx="2.5" fill="#B5F000"/>
+  <path d="M5 3H11L13 5V13H11V10H5V13H3V5Z M5 5H11V8H5Z" fill="#111111" fill-rule="evenodd"/>
+</svg>

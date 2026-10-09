@@ -256,33 +256,16 @@ export function DevBadge({ channel, className }: { channel: string; className?: 
   );
 }
 
-/** App logo (icon 9h «Пунктир вокруг A»): the A in a dashed lime selection frame and a white
- *  pointer on a dark tile, in both themes (a faint rim keeps the tile apart from a dark
- *  background). Same drawing as assets/logo.svg, on a 100-unit grid. */
+/** App logo (icon 1b «Лаймовая плашка»): a dark A in four crop corners on a lime tile, the same
+ *  in both themes. Same drawing as assets/logo.svg (the master for 24 px and up), on a 48-unit
+ *  grid; `radius` in 1024ths of the size. */
 export function Logo({ size = 28, className, radius }: { size?: number; className?: string; radius?: number }) {
-  const r = radius ?? 232;
-  // A 1 px rim just inside the tile's edge.
-  const inset = 512 / size;
+  const r = ((radius ?? 213) * 48) / 1024;
   return (
-    <svg width={size} height={size} viewBox="0 0 1024 1024" className={clsx('shrink-0', className)} aria-hidden>
-      <rect width="1024" height="1024" rx={r} fill="#111111" />
-      <rect
-        className="logo-rim"
-        x={inset}
-        y={inset}
-        width={1024 - 2 * inset}
-        height={1024 - 2 * inset}
-        rx={Math.max(0, r - inset)}
-        fill="none"
-        stroke="rgb(255 255 255 / 0.14)"
-        strokeWidth={1}
-        vectorEffect="non-scaling-stroke"
-      />
-      <g transform="scale(10.24)" strokeLinejoin="round">
-        <rect x={16} y={16} width={64} height={64} fill="none" stroke="#B5F000" strokeWidth={7} strokeDasharray="11.2 4.8" strokeDashoffset={5.6} />
-        <path d="M34 68L48 32L62 68M39 56H57" fill="none" stroke="#FFFFFF" strokeWidth={10} strokeLinecap="round" />
-        <path d="M68 64L95 76L83 80L78 93Z" fill="#FFFFFF" stroke="#111111" strokeWidth={5} />
-      </g>
+    <svg width={size} height={size} viewBox="0 0 48 48" className={clsx('shrink-0', className)} aria-hidden>
+      <rect width="48" height="48" rx={r} fill="#B5F000" />
+      <path d="M6 6H13V8.5H8.5V13H6Z M42 6H35V8.5H39.5V13H42Z M6 42H13V39.5H8.5V35H6Z M42 42H35V39.5H39.5V35H42Z" fill="#111111" />
+      <path d="M20.5 12H27.5L34 35H29L27.6 30.5H20.4L19 35H14Z M21.6 26H26.4L24.6 18H23.4Z" fill="#111111" fillRule="evenodd" />
     </svg>
   );
 }

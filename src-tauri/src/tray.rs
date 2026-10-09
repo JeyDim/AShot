@@ -1,6 +1,6 @@
 //! Tray icon: left click opens the panel, right click shows a compact menu.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use tauri::image::Image;
 use tauri::menu::{IconMenuItem, Menu, PredefinedMenuItem};
@@ -45,6 +45,59 @@ fn menu_is_dark() -> bool {
 #[cfg(not(windows))]
 fn menu_is_dark() -> bool {
     false
+}
+
+/// Size of the tray icon now (it changes with the taskbar's scale).
+static TRAY_SIZE: AtomicU32 = AtomicU32::new(0);
+
+/// The size Windows draws tray icons at: the small-icon size at the primary monitor's scale
+/// (16 px at 100 %, 20 at 125 %, 24 at 150 %…), where the notification area is.
+#[cfg(windows)]
+fn tray_size() -> u32 {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTOPRIMARY, MonitorFromPoint};
+    use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetSystemMetricsForDpi, MDT_EFFECTIVE_DPI};
+    use windows::Win32::UI::WindowsAndMessaging::SM_CXSMICON;
+    let (mut dpi, mut dpi_y) = (96, 96);
+    unsafe {
+        let primary = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
+        let _ = GetDpiForMonitor(primary, MDT_EFFECTIVE_DPI, &mut dpi, &mut dpi_y);
+        GetSystemMetricsForDpi(SM_CXSMICON, dpi).max(16) as u32
+    }
+}
+
+#[cfg(not(windows))]
+fn tray_size() -> u32 {
+    16
+}
+
+/// The app icon drawn for that size (`npm run icons`: 16–20 px — the pixel master, larger —
+/// the full drawing); Tauri's own icon is the 256 px one, which Windows shrinks into a blur.
+fn tray_icon(size: u32) -> Image<'static> {
+    const ICONS: [(u32, &[u8]); 8] = [
+        (16, include_bytes!("../icons/tray/16.png")),
+        (20, include_bytes!("../icons/tray/20.png")),
+        (24, include_bytes!("../icons/tray/24.png")),
+        (28, include_bytes!("../icons/tray/28.png")),
+        (32, include_bytes!("../icons/tray/32.png")),
+        (36, include_bytes!("../icons/tray/36.png")),
+        (40, include_bytes!("../icons/tray/40.png")),
+        (48, include_bytes!("../icons/tray/48.png")),
+    ];
+    // Exact, or the next larger one (Windows shrinks it to the size).
+    let png = ICONS.iter().find(|(s, _)| *s >= size).unwrap_or(&ICONS[ICONS.len() - 1]).1;
+    Image::from_bytes(png).expect("tray icon")
+}
+
+/// The display scale changed: the tray icon for the new size.
+pub fn scale_changed(app: &AppHandle) {
+    let size = tray_size();
+    if size == TRAY_SIZE.swap(size, Ordering::Relaxed) {
+        return;
+    }
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_icon(Some(tray_icon(size)));
+    }
 }
 
 /// Icon of a menu item: a 16 px mask (`npm run menu-icons`; the menu draws its icons at
@@ -110,9 +163,10 @@ pub fn refresh(app: &AppHandle) {
 
 pub fn create(app: &App) -> tauri::Result<()> {
     let menu = menu(app.handle())?;
-    let icon = app.default_window_icon().cloned().expect("bundle icon");
+    let size = tray_size();
+    TRAY_SIZE.store(size, Ordering::Relaxed);
     TrayIconBuilder::with_id("main")
-        .icon(icon)
+        .icon(tray_icon(size))
         .tooltip(match crate::state::channel() {
             "" => "AShot — скриншоты".to_string(),
             channel => format!("AShot Dev — {channel}"),
