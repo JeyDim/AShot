@@ -18,6 +18,7 @@ const settings: AppSettings = {
   // `&theme=light|dark` for screenshots of both themes.
   theme: (query.get('theme') as AppSettings['theme']) ?? 'system',
   uiScale: 100,
+  editorScale: 100,
   autostart: true,
   historyLimit: 10,
   saveFolder: '',

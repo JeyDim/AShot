@@ -24,7 +24,7 @@ const PANEL_SIZE: (f64, f64) = (400.0, 660.0);
 const TOAST_SIZE: (f64, f64) = (400.0, 176.0);
 const SETTINGS_SIZE: (f64, f64) = (840.0, 700.0);
 /// The editor is never smaller: its toolbar fits in one row at its most compact (see `Toolbar`
-/// in the front end). The UI scale is lowered for the editor on a screen too small for that.
+/// in the front end). The editor scale is lowered on a screen too small for that.
 const EDITOR_MIN: (f64, f64) = (1024.0, 520.0);
 
 fn url(route: &str) -> WebviewUrl {
@@ -53,20 +53,25 @@ pub fn apply_theme(app: &AppHandle) {
 
 // ---------------------------------------------------------------- UI scale
 
-/// The "UI scale" setting as a web view zoom factor (1.0 = 100%).
+/// The "UI scale" setting (tray panel, toasts, settings) as a web view zoom factor (1.0 = 100%).
 pub fn ui_scale(app: &AppHandle) -> f64 {
     app.state::<AppState>().settings().ui_scale as f64 / 100.0
 }
 
+/// The "editor scale" setting (editor windows, toolbars of the selection overlays) as a web
+/// view zoom factor. The pictures in them are laid out in physical pixels and do not change.
+pub fn editor_scale(app: &AppHandle) -> f64 {
+    app.state::<AppState>().settings().editor_scale as f64 / 100.0
+}
+
 /// Zoom for a fixed-size window of `size` (logical, at 100%) that has to fit into
-/// `avail_w × avail_h` (logical): the UI scale, smaller when the window would not fit.
+/// `avail_w × avail_h` (logical): the scale `zoom`, smaller when the window would not fit.
 fn fit_zoom(zoom: f64, size: (f64, f64), avail_w: f64, avail_h: f64) -> f64 {
     zoom.min(avail_w / size.0).min(avail_h / size.1).max(0.5)
 }
 
 /// `fit_zoom` for a window on its current monitor (`margin` — logical px kept free).
-fn fit_on_monitor(app: &AppHandle, window: &WebviewWindow, size: (f64, f64), margin: f64) -> f64 {
-    let zoom = ui_scale(app);
+fn fit_on_monitor(app: &AppHandle, window: &WebviewWindow, zoom: f64, size: (f64, f64), margin: f64) -> f64 {
     match window.current_monitor().ok().flatten().or_else(|| app.primary_monitor().ok().flatten()) {
         Some(m) => {
             let wa = m.work_area();
@@ -77,19 +82,20 @@ fn fit_on_monitor(app: &AppHandle, window: &WebviewWindow, size: (f64, f64), mar
     }
 }
 
-/// Applies the UI scale to a window's web view (called when its page loads).
+/// Applies the UI or editor scale to a window's web view (called when its page loads).
 pub fn apply_zoom(app: &AppHandle, window: &WebviewWindow) {
     let zoom = match window.label() {
         BOX_LOGIN => return,
         SETTINGS => return fit_settings(app, window),
         // Sized for the monitor each time they are shown, see `show_panel` and `toast`.
-        PANEL => fit_on_monitor(app, window, PANEL_SIZE, 8.0),
-        TOAST => fit_on_monitor(app, window, TOAST_SIZE, 16.0),
+        PANEL => fit_on_monitor(app, window, ui_scale(app), PANEL_SIZE, 8.0),
+        TOAST => fit_on_monitor(app, window, ui_scale(app), TOAST_SIZE, 16.0),
+        label if label.starts_with(overlay::PREFIX) => editor_scale(app),
         label if label.starts_with("editor-") => {
-            let zoom = fit_on_monitor(app, window, EDITOR_MIN, 0.0);
+            let zoom = fit_on_monitor(app, window, editor_scale(app), EDITOR_MIN, 0.0);
             let min = LogicalSize::new(EDITOR_MIN.0 * zoom, EDITOR_MIN.1 * zoom);
             let _ = window.set_min_size(Some(min));
-            // A bigger UI scale: the window grows to its new minimum.
+            // A bigger editor scale: the window grows to its new minimum.
             if let (Ok(size), Ok(k)) = (window.inner_size(), window.scale_factor()) {
                 let now = size.to_logical::<f64>(k);
                 if now.width < min.width || now.height < min.height {
@@ -103,8 +109,8 @@ pub fn apply_zoom(app: &AppHandle, window: &WebviewWindow) {
     let _ = window.set_zoom(zoom);
 }
 
-/// Re-applies a changed UI scale to the open windows; the tray panel and toasts pick it up
-/// the next time they are shown (with a matching window size).
+/// Re-applies a changed UI or editor scale to the open windows; the tray panel and toasts
+/// pick it up the next time they are shown (with a matching window size).
 pub fn apply_ui_scale(app: &AppHandle) {
     for (label, window) in app.webview_windows() {
         if label != PANEL && label != TOAST {
@@ -470,10 +476,10 @@ pub fn open_editor(app: &AppHandle, id: &str) {
     let (iw, ih) = state.history.get(id).map(|i| (i.width, i.height)).unwrap_or((1280, 720));
     let (cx, cy) = capture::cursor_position();
     let (wx, wy, ww, wh, scale) = work_area_at(app, cx, cy);
-    // Logical sizes: image at 100% + toolbar/status bar/padding (they grow with the UI
+    // Logical sizes: image at 100% + toolbar/status bar/padding (they grow with the editor
     // scale), clamped to the work area.
     let (avail_w, avail_h) = (ww as f64 / scale, wh as f64 / scale);
-    let zoom = fit_zoom(ui_scale(app), EDITOR_MIN, avail_w, avail_h);
+    let zoom = fit_zoom(editor_scale(app), EDITOR_MIN, avail_w, avail_h);
     let (min_w, min_h) = (EDITOR_MIN.0 * zoom, EDITOR_MIN.1 * zoom);
     let max_w = (avail_w * 0.92).max(min_w);
     let max_h = (avail_h * 0.92).max(min_h);

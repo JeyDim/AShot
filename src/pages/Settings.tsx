@@ -1083,12 +1083,25 @@ function About({ s, update }: { s: AppSettings; update: Update }) {
         <div className="flex flex-col gap-2 border-t border-border py-2.5 text-[14px]">
           <span className="flex flex-col">
             Масштаб интерфейса
-            <span className="text-[12px] text-muted">Панель в трее, редактор, панели на экране выделения и настройки</span>
+            <span className="text-[12px] text-muted">Панель в трее, уведомления и настройки</span>
           </span>
           <Segmented
             accent
             value={s.uiScale}
             onChange={(v) => update({ uiScale: v })}
+            options={UI_SCALES.map((v) => ({ value: v, label: `${v}%` }))}
+            className="self-start"
+          />
+        </div>
+        <div className="flex flex-col gap-2 border-t border-border py-2.5 text-[14px]">
+          <span className="flex flex-col">
+            Масштаб кнопок в редакторах
+            <span className="text-[12px] text-muted">Редактор и панели на экране выделения; сам снимок не меняется</span>
+          </span>
+          <Segmented
+            accent
+            value={s.editorScale}
+            onChange={(v) => update({ editorScale: v })}
             options={UI_SCALES.map((v) => ({ value: v, label: `${v}%` }))}
             className="self-start"
           />

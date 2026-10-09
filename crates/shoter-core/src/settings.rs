@@ -378,7 +378,7 @@ pub struct Experimental {
 }
 
 /// Version of the settings file written by this build (see [`AppSettings::migrate`]).
-pub const SETTINGS_VERSION: u32 = 4;
+pub const SETTINGS_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -392,8 +392,11 @@ pub struct AppSettings {
     pub after_capture: AfterCapture,
     pub fullscreen_mode: FullscreenMode,
     pub theme: Theme,
-    /// Size of the app's own UI (panel, editor, settings, toolbars), percent.
+    /// Size of the app's own UI (tray panel, notifications, settings), percent.
     pub ui_scale: u32,
+    /// Size of the buttons and panels in the editor and on the selection screen, percent
+    /// (the picture itself is not scaled).
+    pub editor_scale: u32,
     pub autostart: bool,
     /// How many recent screenshots are kept in the temporary history.
     pub history_limit: u32,
@@ -433,6 +436,7 @@ impl Default for AppSettings {
             fullscreen_mode: FullscreenMode::CurrentMonitor,
             theme: Theme::System,
             ui_scale: 100,
+            editor_scale: 100,
             autostart: false,
             history_limit: 10,
             save_folder: String::new(),
@@ -467,6 +471,7 @@ impl AppSettings {
         self.history_limit = self.history_limit.clamp(1, MAX_HISTORY_LIMIT);
         self.jpeg_quality = self.jpeg_quality.clamp(10, 100);
         self.ui_scale = self.ui_scale.clamp(MIN_UI_SCALE, MAX_UI_SCALE);
+        self.editor_scale = self.editor_scale.clamp(MIN_UI_SCALE, MAX_UI_SCALE);
         self.editor.size = self.editor.size.min(2);
         self.resize.size = self.resize.size.clamp(MIN_RESIZE, MAX_RESIZE);
         self.watermark.size = self.watermark.size.min(2);
@@ -507,6 +512,10 @@ impl AppSettings {
         if self.version < 4 && self.watermark.text == "© Advant" {
             // The first default copyright text.
             self.watermark.text = DEFAULT_WATERMARK_TEXT.into();
+        }
+        if self.version < 5 {
+            // One UI scale used to cover the editors too; they keep the size they had.
+            self.editor_scale = self.ui_scale;
         }
         self.version = SETTINGS_VERSION;
         self
@@ -614,7 +623,7 @@ mod tests {
         assert_eq!(s.box_.folder_name, "AShot");
         assert!(s.box_.client_id.is_empty(), "built-in Box app by default");
         assert_eq!(s.theme, Theme::System);
-        assert_eq!(s.ui_scale, 100);
+        assert_eq!((s.ui_scale, s.editor_scale), (100, 100));
         assert_eq!((s.watermark.kind, s.watermark.layout, s.watermark.opacity), (WatermarkKind::Text, WatermarkLayout::Tile, 25));
         assert_eq!(serde_json::to_value(WatermarkKind::Image).unwrap(), "image");
         assert_eq!(serde_json::to_value(WatermarkPosition::BottomRight).unwrap(), "bottomRight");
@@ -677,6 +686,13 @@ mod tests {
         assert_eq!(AppSettings::load(&path).watermark.text, "© Me");
         std::fs::write(&path, r#"{"version":4,"watermark":{"text":"© Advant"}}"#).unwrap();
         assert_eq!(AppSettings::load(&path).watermark.text, "© Advant", "chosen after the migration");
+        // Version 4 had one UI scale: the editors keep it, afterwards they have their own.
+        std::fs::write(&path, br#"{"version":4,"uiScale":125}"#).unwrap();
+        let s = AppSettings::load(&path);
+        assert_eq!((s.ui_scale, s.editor_scale), (125, 125));
+        std::fs::write(&path, br#"{"version":5,"uiScale":125,"editorScale":90}"#).unwrap();
+        let s = AppSettings::load(&path);
+        assert_eq!((s.ui_scale, s.editor_scale), (125, 90));
         // After the migration a cleared hotkey stays cleared.
         let mut s = AppSettings::default();
         s.hotkeys.window.clear();
@@ -701,11 +717,12 @@ mod tests {
         s.links.template = "advant.one".into();
         s.box_.folder_name = "  ".into();
         s.ui_scale = 10;
+        s.editor_scale = 999;
         s.watermark.opacity = 0;
         s.watermark.size = 7;
         s.watermark.angle = 200;
         let s = s.sanitized();
-        assert_eq!(s.ui_scale, MIN_UI_SCALE);
+        assert_eq!((s.ui_scale, s.editor_scale), (MIN_UI_SCALE, MAX_UI_SCALE));
         assert_eq!((s.watermark.opacity, s.watermark.size, s.watermark.angle), (5, 2, 90));
         assert_eq!(s.box_.folder_name, "AShot");
         assert_eq!(s.history_limit, 1);

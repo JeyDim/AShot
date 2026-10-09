@@ -158,7 +158,7 @@ async fn apply_changes(app: &AppHandle, before: &AppSettings, after: &AppSetting
     if before.theme != after.theme {
         ui::apply_theme(app);
     }
-    if before.ui_scale != after.ui_scale {
+    if before.ui_scale != after.ui_scale || before.editor_scale != after.editor_scale {
         ui::apply_ui_scale(app);
     }
     if before.experimental != after.experimental {
@@ -484,7 +484,7 @@ pub async fn open_settings(app: AppHandle, section: Option<String>) {
     ui::open_settings(&app, section.as_deref());
 }
 
-/// Called by every page before its first render: applies the UI scale to its window (a
+/// Called by every page before its first render: applies the UI or editor scale to its window (a
 /// zoom set while the window was being created may not survive the page load). Async, so
 /// the web view is never changed from inside its own message callback.
 #[tauri::command]

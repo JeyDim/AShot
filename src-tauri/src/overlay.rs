@@ -60,8 +60,8 @@ fn build(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
         .focused(false)
         .inner_size(800.0, 600.0)
         .build()?;
-    // The toolbars and hints follow the UI scale; the picture is laid out in physical pixels.
-    let _ = window.set_zoom(crate::ui::ui_scale(app));
+    // The toolbars and hints follow the editor scale; the picture is laid out in physical pixels.
+    let _ = window.set_zoom(crate::ui::editor_scale(app));
     // Moving a window to a monitor with another DPI scale makes Windows/tao resize it to
     // keep its *logical* size (a 2K overlay would shrink to ~FullHD and show a squeezed,
     // grainy picture). Whenever that happens, snap it back to the exact monitor bounds.

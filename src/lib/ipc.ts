@@ -70,7 +70,7 @@ export const api = {
   },
 
   openSettings: (section?: SettingsSection) => invoke<void>('open_settings', { section: section ?? null }),
-  /** Applies the "UI scale" setting to this window (web view zoom). */
+  /** Applies the "UI scale" or "editor scale" setting to this window (web view zoom). */
   uiZoom: () => invoke<void>('ui_zoom'),
   panelHide: () => invoke<void>('panel_hide'),
   toastCurrent: () => invoke<ToastPayload | null>('toast_current'),

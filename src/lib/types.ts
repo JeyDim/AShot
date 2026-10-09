@@ -104,8 +104,10 @@ export interface AppSettings {
   afterCapture: AfterCapture;
   fullscreenMode: FullscreenMode;
   theme: ThemeSetting;
-  /** Size of the app's UI (panel, editor, settings, toolbars), percent. */
+  /** Size of the app's UI (tray panel, notifications, settings), percent. */
   uiScale: number;
+  /** Size of the buttons and panels in the editor and on the selection screen, percent. */
+  editorScale: number;
   autostart: boolean;
   historyLimit: number;
   saveFolder: string;
