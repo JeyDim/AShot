@@ -469,7 +469,11 @@ export default function Overlay() {
     }
     const pathRect = st.path.length ? st.path[Math.min(st.level, st.path.length - 1)] : null;
     if (pathRect && contains(pathRect, x, y)) {
-      st.hover = clamp(pathRect, st.bounds);
+      // Only what is seen of it: the window list holds the visible part of each window (not
+      // the part under the taskbar), the element or window from UI Automation does not.
+      const w = topmostAt(st.windows, x, y);
+      const seen = w ? clamp(pathRect, w) : pathRect;
+      st.hover = clamp(seen.width >= 4 && seen.height >= 4 ? seen : pathRect, st.bounds);
       st.hoverIsElement = st.level < st.path.length - 1;
     } else {
       const w = topmostAt(st.windows, x, y);

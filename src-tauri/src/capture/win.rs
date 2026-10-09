@@ -115,8 +115,10 @@ fn is_own_window(hwnd: HWND) -> bool {
 }
 
 /// Visible top-level windows in z-order (topmost first), excluding our own windows,
-/// the desktop and cloaked (hidden UWP / other virtual desktop) windows.
-fn windows_list(virtual_screen: Rect) -> Vec<WindowInfo> {
+/// the desktop and cloaked (hidden UWP / other virtual desktop) windows. Each one is cut to
+/// what is seen of it: the part on the screens, without edges that the windows above cover
+/// (the taskbar over a window that reaches below it).
+fn windows_list(screens: &[Rect]) -> Vec<WindowInfo> {
     unsafe extern "system" fn collect(hwnd: HWND, data: LPARAM) -> BOOL {
         let list = unsafe { &mut *(data.0 as *mut Vec<HWND>) };
         list.push(hwnd);
@@ -127,6 +129,8 @@ fn windows_list(virtual_screen: Rect) -> Vec<WindowInfo> {
         let _ = EnumWindows(Some(collect), LPARAM(&mut handles as *mut _ as isize));
     }
     let mut out = Vec::new();
+    // Whole bounds of the windows seen so far (all above the next one).
+    let mut above: Vec<Rect> = Vec::new();
     for hwnd in handles {
         unsafe {
             if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
@@ -143,11 +147,12 @@ fn windows_list(virtual_screen: Rect) -> Vec<WindowInfo> {
         if matches!(class.as_str(), "Progman" | "WorkerW") {
             continue;
         }
-        let Some(bounds) = window_bounds(hwnd) else { continue };
-        let Some(bounds) = bounds.intersect(&virtual_screen) else { continue };
-        if bounds.width < 8 || bounds.height < 8 {
-            continue;
-        }
+        let Some(full) = window_bounds(hwnd) else { continue };
+        // On the screens: not off their edges, nor in the gaps between screens of different sizes.
+        let Some(on_screens) = screens.iter().filter_map(|s| full.intersect(s)).reduce(|a, b| a.union(&b)) else { continue };
+        let seen = on_screens.visible_part(&above);
+        above.push(on_screens);
+        let Some(bounds) = seen.filter(|b| b.width >= 8 && b.height >= 8) else { continue };
         let mut title = [0u16; 256];
         let n = unsafe { GetWindowTextW(hwnd, &mut title) };
         out.push(WindowInfo { title: String::from_utf16_lossy(&title[..n.max(0) as usize]), bounds });
@@ -271,7 +276,7 @@ pub fn capture_session(id: u64, include_cursor: bool) -> Result<CaptureSession, 
         });
         shots.push(MonitorShot { bounds: m.bounds, image: capture_rect(m.bounds, cursor)? });
     }
-    let virtual_screen = shoter_core::imaging::virtual_bounds(&shots);
-    let windows = windows_list(virtual_screen);
+    let screens: Vec<Rect> = monitors.iter().map(|m| m.bounds).collect();
+    let windows = windows_list(&screens);
     Ok(CaptureSession::new(id, monitors, shots, windows, at))
 }

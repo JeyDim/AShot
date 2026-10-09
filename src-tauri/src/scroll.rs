@@ -186,7 +186,7 @@ mod engine {
             progress(Progress::Preloading);
             scroller.preload(rect, stop)?;
             progress(Progress::ToTop);
-            scroller.to_top(rect, stop)?;
+            scroller.back_to_top(rect, stop)?;
             glue(rect, &mut scroller, stop, progress)
         })();
         if let Some((pattern, percent)) = restore {
@@ -367,7 +367,7 @@ mod engine {
 
         /// To the top: UI Automation jumps there; the wheel makes sure (up until nothing moves —
         /// the jump may be missing, or land short on a page that grew).
-        fn to_top(&mut self, rect: Rect, stop: &AtomicBool) -> Result<(), String> {
+        fn back_to_top(&mut self, rect: Rect, stop: &AtomicBool) -> Result<(), String> {
             if let Some(uia) = &self.uia {
                 unsafe {
                     let _ = uia.pattern.SetScrollPercent(UIA_ScrollPatternNoScroll, 0.0);
