@@ -81,7 +81,7 @@ impl MsaaWorkerAdmission {
 
     fn try_acquire(self: &Arc<Self>) -> Option<MsaaWorkerPermit> {
         self.live_workers
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |live| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |live| {
                 (live < MSAA_MAX_OUTSTANDING_WORKERS).then_some(live + 1)
             })
             .ok()?;
