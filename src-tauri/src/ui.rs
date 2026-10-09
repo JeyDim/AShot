@@ -23,6 +23,9 @@ pub const SETTINGS: &str = "settings";
 const PANEL_SIZE: (f64, f64) = (400.0, 660.0);
 const TOAST_SIZE: (f64, f64) = (400.0, 176.0);
 const SETTINGS_SIZE: (f64, f64) = (840.0, 700.0);
+/// The editor is never smaller: its toolbar fits in one row at its most compact (see `Toolbar`
+/// in the front end). The UI scale is lowered for the editor on a screen too small for that.
+const EDITOR_MIN: (f64, f64) = (1024.0, 520.0);
 
 fn url(route: &str) -> WebviewUrl {
     WebviewUrl::App(format!("index.html#/{route}").into())
@@ -82,6 +85,19 @@ pub fn apply_zoom(app: &AppHandle, window: &WebviewWindow) {
         // Sized for the monitor each time they are shown, see `show_panel` and `toast`.
         PANEL => fit_on_monitor(app, window, PANEL_SIZE, 8.0),
         TOAST => fit_on_monitor(app, window, TOAST_SIZE, 16.0),
+        label if label.starts_with("editor-") => {
+            let zoom = fit_on_monitor(app, window, EDITOR_MIN, 0.0);
+            let min = LogicalSize::new(EDITOR_MIN.0 * zoom, EDITOR_MIN.1 * zoom);
+            let _ = window.set_min_size(Some(min));
+            // A bigger UI scale: the window grows to its new minimum.
+            if let (Ok(size), Ok(k)) = (window.inner_size(), window.scale_factor()) {
+                let now = size.to_logical::<f64>(k);
+                if now.width < min.width || now.height < min.height {
+                    let _ = window.set_size(LogicalSize::new(now.width.max(min.width), now.height.max(min.height)));
+                }
+            }
+            zoom
+        }
         _ => ui_scale(app),
     };
     let _ = window.set_zoom(zoom);
@@ -454,19 +470,21 @@ pub fn open_editor(app: &AppHandle, id: &str) {
     let (iw, ih) = state.history.get(id).map(|i| (i.width, i.height)).unwrap_or((1280, 720));
     let (cx, cy) = capture::cursor_position();
     let (wx, wy, ww, wh, scale) = work_area_at(app, cx, cy);
-    let zoom = ui_scale(app);
     // Logical sizes: image at 100% + toolbar/status bar/padding (they grow with the UI
     // scale), clamped to the work area.
-    let max_w = ww as f64 / scale * 0.92;
-    let max_h = wh as f64 / scale * 0.92;
-    let w = (iw as f64 / scale + 96.0 * zoom).clamp((980.0 * zoom).min(max_w), max_w);
+    let (avail_w, avail_h) = (ww as f64 / scale, wh as f64 / scale);
+    let zoom = fit_zoom(ui_scale(app), EDITOR_MIN, avail_w, avail_h);
+    let (min_w, min_h) = (EDITOR_MIN.0 * zoom, EDITOR_MIN.1 * zoom);
+    let max_w = (avail_w * 0.92).max(min_w);
+    let max_h = (avail_h * 0.92).max(min_h);
+    let w = (iw as f64 / scale + 96.0 * zoom).clamp(min_w, max_w);
     let h = (ih as f64 / scale + 190.0 * zoom).clamp((640.0 * zoom).min(max_h), max_h);
     let x = wx as f64 / scale + (ww as f64 / scale - w) / 2.0;
     let y = wy as f64 / scale + (wh as f64 / scale - h) / 2.0;
     let built = WebviewWindowBuilder::new(app, &label, url(&format!("editor/{id}")))
         .title("Редактор — AShot")
         .inner_size(w, h)
-        .min_inner_size((760.0 * zoom).min(max_w), (480.0 * zoom).min(max_h))
+        .min_inner_size(min_w, min_h)
         .position(x, y)
         .theme(window_theme(app))
         .focused(true)

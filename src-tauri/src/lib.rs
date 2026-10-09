@@ -150,9 +150,10 @@ pub fn run() {
                 );
             } else if !settings.welcomed {
                 let hk = &settings.hotkeys;
+                let scroll = settings.experimental.scroll_capture;
                 let keys: Vec<String> = [(&hk.region, "область"), (&hk.window, "окно"), (&hk.fullscreen, "экран"), (&hk.scroll, "с прокруткой")]
                     .into_iter()
-                    .filter(|(accel, _)| !accel.trim().is_empty())
+                    .filter(|(accel, what)| !accel.trim().is_empty() && (scroll || *what != "с прокруткой"))
                     .map(|(accel, what)| format!("{} — {what}", shoter_core::settings::hotkey_label(accel)))
                     .collect();
                 let first = if keys.is_empty() { String::new() } else { format!("{}. ", keys.join(", ")) };

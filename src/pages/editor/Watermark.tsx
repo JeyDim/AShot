@@ -1,20 +1,26 @@
-// Watermark and copyright of the editor — one button with a drop-down. The watermark repeats
-// the text or the picture over the whole screenshot in slanted rows (under the drawings);
-// the copyright puts it once, in a corner (it can then be moved and resized like any shape).
-// The settings are remembered; the picture lives in the config folder.
+// Watermark and copyright of the editor and of the capture overlay — one button with a
+// drop-down. The watermark repeats the text or the picture over the whole screenshot in slanted
+// rows (under the drawings); the copyright puts it once, in a corner (it can then be moved and
+// resized like any shape). The settings are remembered; the picture lives in the config folder.
 import clsx from 'clsx';
 import { Copyright, Droplets, ImageIcon, ImagePlus, Type } from 'lucide-react';
-import type { CSSProperties, ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Button, IconButton, Segmented } from '../../components/ui';
+import { api, errorText, loadWatermarkLogo } from '../../lib/ipc';
 import type { WatermarkPosition, WatermarkSettings } from '../../lib/types';
 import {
+  DEFAULT_WATERMARK,
+  isMark,
   MARK_OPACITY,
+  newId,
   placeStamp,
+  removeShape,
   stampFontSize,
   stampImageSize,
   watermarkFontSize,
   watermarkItemSize,
   type Crop,
+  type Doc,
   type StampShape,
   type WatermarkShape,
 } from './model';
@@ -81,6 +87,143 @@ export function buildMark(
   return { ...base, ...placeStamp(area, w, fontSize, ws.position), text, fontSize };
 }
 
+/** Where the mark goes in a document: `area` — the part that is shown (the copyright's corner,
+ *  the sizes), `full` — what the watermark covers, `scale` — the "downscale to N px" thickening. */
+export interface MarkFrame {
+  area: Crop;
+  full: Crop;
+  scale: number;
+}
+
+/** What the mark needs from the drawing (`useAnnotator`). */
+interface MarkHost {
+  apply: (d: Doc) => void;
+  /** A change without an undo step of its own. */
+  live: (d: Doc) => void;
+  commitText: () => void;
+  setSelectedId: (id: string | null) => void;
+  beginGesture: () => void;
+  endGesture: () => void;
+}
+
+/** The watermark / copyright button of a drawing: its settings (remembered), the picture and
+ *  the mark in the document. `frame` — where it goes; `null` while there is no picture yet. */
+export function useWatermark({ doc, host, frame, onError }: { doc: Doc; host: MarkHost; frame: (d: Doc) => MarkFrame | null; onError: (text: string) => void }) {
+  const [settings, setSettings] = useState<WatermarkSettings>(DEFAULT_WATERMARK);
+  const [logo, setLogo] = useState<Logo | null>(null);
+  const touched = useRef(false);
+  const save = useRef<number | undefined>(undefined);
+  const mark = doc.shapes.find(isMark) ?? null;
+
+  useEffect(() => {
+    let cancelled = false;
+    loadWatermarkLogo()
+      .then(logoFrom)
+      .then((l) => !cancelled && setLogo(l))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /** The remembered settings, as they arrive (unless already changed here). */
+  const init = (ws: WatermarkSettings | undefined) => {
+    if (ws && !touched.current) setSettings(ws);
+  };
+
+  /** The document with the mark built from `ws` (replacing the one there); `null` when there is
+   *  nothing to put (empty text, no picture). A watermark goes under the drawings, a copyright
+   *  on top. */
+  const withMark = (d: Doc, ws = settings, lg = logo): Doc | null => {
+    const f = frame(d);
+    if (!f) return null;
+    const old = d.shapes.find(isMark);
+    const next = buildMark(ws, f.area, f.full, lg, f.scale, old?.id ?? newId());
+    if (!next) return null;
+    const rest = d.shapes.filter((sh) => !isMark(sh));
+    if (next.type === 'watermark') return { ...d, shapes: [next, ...rest] };
+    // A copyright keeps its place among the shapes when only its settings change.
+    if (old?.type === 'stamp') return { ...d, shapes: d.shapes.map((sh) => (sh.id === old.id ? next : sh)) };
+    return { ...d, shapes: [...rest, next] };
+  };
+
+  /** Settings changed in the drop-down: remembered, and the mark is put / updated at once. */
+  const change = (ws: WatermarkSettings, typing = false, lg = logo) => {
+    touched.current = true;
+    setSettings(ws);
+    window.clearTimeout(save.current);
+    save.current = window.setTimeout(() => api.settingsPatch({ watermark: ws }).catch(() => {}), typing ? 500 : 0);
+    if (!frame(doc)) return;
+    const next = withMark(doc, ws, lg) ?? (mark ? removeShape(doc, mark.id) : null);
+    if (!next) return;
+    // While typing the text the mark follows without an undo step per letter.
+    if (typing) host.live(next);
+    else host.apply(next);
+  };
+
+  const pickLogo = async () => {
+    try {
+      if (!(await api.watermarkPick())) return;
+      const lg = await logoFrom(await loadWatermarkLogo());
+      setLogo(lg);
+      if (lg) change({ ...settings, kind: 'image' }, false, lg);
+    } catch (e) {
+      onError(errorText(e));
+    }
+  };
+
+  const clearLogo = async () => {
+    await api.watermarkClear().catch(() => {});
+    setLogo(null);
+    if (mark?.src) host.apply(removeShape(doc, mark.id));
+  };
+
+  /** The button: puts the watermark / copyright, or removes it. */
+  const toggle = () => {
+    if (!frame(doc)) return;
+    host.commitText();
+    if (mark) {
+      host.setSelectedId(null);
+      host.apply(removeShape(doc, mark.id));
+      return;
+    }
+    if (settings.kind === 'image' && !logo) {
+      pickLogo();
+      return;
+    }
+    const next = withMark(doc);
+    if (next) host.apply(next);
+    else onError('Впишите текст водяного знака (стрелка рядом с кнопкой)');
+  };
+
+  /** The mark follows a new frame (the overlay's selection moved), without an undo step. */
+  const refit = (d: Doc) => {
+    if (!d.shapes.some(isMark)) return;
+    const next = withMark(d);
+    if (next) host.live(next);
+  };
+
+  /** The button with its drop-down; `up` — it opens upwards, `tipsUp` — hints above the button. */
+  const picker = (size: number, up?: boolean, tipsUp?: boolean) => (
+    <WatermarkPicker
+      value={settings}
+      onChange={change}
+      logo={logo}
+      onPickLogo={pickLogo}
+      onClearLogo={clearLogo}
+      placed={!!mark}
+      onToggle={toggle}
+      onTextFocus={host.beginGesture}
+      onTextBlur={host.endGesture}
+      size={size}
+      up={up}
+      tipsUp={tipsUp}
+    />
+  );
+
+  return { settings, init, mark, refit, picker };
+}
+
 const POSITIONS: { value: WatermarkPosition; label: string }[] = [
   { value: 'topLeft', label: 'Слева вверху' },
   { value: 'top', label: 'Вверху' },
@@ -134,6 +277,8 @@ export function WatermarkPicker({
   onTextFocus,
   onTextBlur,
   size,
+  up,
+  tipsUp,
 }: {
   value: WatermarkSettings;
   /** `typing` — the text is being typed (no undo step per letter). */
@@ -147,6 +292,9 @@ export function WatermarkPicker({
   onTextFocus: () => void;
   onTextBlur: () => void;
   size: number;
+  /** The drop-down opens upwards (the overlay's bar at the bottom of the screen). */
+  up?: boolean;
+  tipsUp?: boolean;
 }) {
   const set = (patch: Partial<WatermarkSettings>) => onChange({ ...value, ...patch });
   const tile = value.layout === 'tile';
@@ -155,11 +303,12 @@ export function WatermarkPicker({
     <Dropdown
       tip="Водяной знак или копирайт"
       face={null}
+      up={up}
       panelClassName="rounded-[18px] p-3"
       toggleClassName="flex w-[15px] items-center justify-center self-stretch rounded-full text-muted transition-colors hover:bg-text/6 hover:text-text"
       chevronSize={12}
       before={
-        <IconButton tip={placed ? `Убрать ${name}` : `Поставить ${name}`} active={placed} size={size} onClick={onToggle}>
+        <IconButton tip={placed ? `Убрать ${name}` : `Поставить ${name}`} tipPos={tipsUp ? 'top' : undefined} active={placed} size={size} onClick={onToggle}>
           {tile ? <Droplets size={19} /> : <Copyright size={19} />}
         </IconButton>
       }

@@ -101,6 +101,8 @@ export default function TrayPanel() {
   };
 
   const hk = settings?.hotkeys;
+  // An experiment: only when turned on in Settings.
+  const scroll = settings?.experimental?.scrollCapture ?? false;
   const [latest, ...earlier] = items;
   const grid = showAll ? items : earlier;
 
@@ -126,7 +128,7 @@ export default function TrayPanel() {
             <Hero item={latest} busy={latest ? busy[latest.id] : undefined} run={run} onMenu={openMenu} hotkey={hk?.region ?? ''} />
 
             {/* Capture modes */}
-            <div className="grid grid-cols-4 gap-2 p-4">
+            <div className={clsx('grid gap-2 p-4', scroll ? 'grid-cols-4' : 'grid-cols-3')}>
               <ModeTile icon={<Scan size={22} />} label="Область" keys={hk?.region} onClick={() => api.capture('region')} main />
               <ModeTile icon={<AppWindow size={22} />} label="Окно" keys={hk?.window} onClick={() => capture('windowPick')} tip="Кликните по окну" />
               <ModeTile
@@ -136,14 +138,16 @@ export default function TrayPanel() {
                 onClick={() => capture('fullscreen')}
                 tip={settings?.fullscreenMode === 'allMonitors' ? 'Все мониторы — сразу в редактор' : 'Экран — сразу в редактор\nНесколько экранов — кликните по нужному'}
               />
-              <ModeTile
-                icon={<ChevronsDown size={22} />}
-                label="Прокрутка"
-                keys={hk?.scroll}
-                onClick={() => capture('scroll')}
-                tip={'Страница целиком: кликните по ней —\nAShot прокрутит и склеит'}
-                tipPos="top-left"
-              />
+              {scroll && (
+                <ModeTile
+                  icon={<ChevronsDown size={22} />}
+                  label="Прокрутка"
+                  keys={hk?.scroll}
+                  onClick={() => capture('scroll')}
+                  tip={'Страница целиком: кликните по ней —\nAShot прокрутит и склеит'}
+                  tipPos="top-left"
+                />
+              )}
             </div>
           </>
         )}

@@ -109,7 +109,7 @@ const check = (cond, msg) => {
   await commitCount(page, 4);
   c = await commits();
   st = c[c.length - 1];
-  check(st?.mark?.text === '© Advant' && st.mark.x > 1000 && st.mark.y > 900, `undo restores it step by step (${JSON.stringify(st?.mark)})`);
+  check(st?.mark?.text === 'AShot' && st.mark.x > 1000 && st.mark.y > 900, `undo restores it step by step (${JSON.stringify(st?.mark)})`);
   await page.getByRole('button', { name: 'Убрать копирайт' }).click();
   await page.keyboard.press('Control+c');
   await commitCount(page, 5);
@@ -316,6 +316,9 @@ const check = (cond, msg) => {
   await page.mouse.down();
   await page.mouse.move(1000, 700, { steps: 4 });
   await page.mouse.up();
+  // the watermark of the editor is here too; it follows the selection when that is resized
+  await page.getByRole('button', { name: 'Поставить водяной знак' }).click();
+  check(await page.getByRole('button', { name: 'Убрать водяной знак' }).isVisible(), 'overlay: a watermark over the selection');
   // resize the selection with its bottom-right handle while a tool is active
   await page.mouse.move(700, 500);
   await page.mouse.down();
@@ -376,7 +379,12 @@ const check = (cond, msg) => {
     }));
     console.log('  overlay state:', JSON.stringify(state), 'console errors:', JSON.stringify(consoleErrors));
   }
-  check(last?.shapes === 6, `drawings inside the selection only, callout = arrow + text (got ${last?.shapes}, want 6)`);
+  check(last?.shapes === 7, `drawings inside the selection only, callout = arrow + text, watermark (got ${last?.shapes}, want 7)`);
+  const wm = last?.mark;
+  check(
+    last?.marks === 1 && last.firstType === 'watermark' && Math.abs(wm.x) <= 1 && Math.abs(wm.y) <= 1 && Math.abs(wm.w - last.width) <= 2 && Math.abs(wm.h - last.height) <= 2,
+    `the watermark under the drawings covers the resized selection (${JSON.stringify(wm && { x: wm.x, y: wm.y, w: wm.w, h: wm.h })})`,
+  );
   check(last && Math.abs(last.width - Math.round(560 * k)) <= 2 && Math.abs(last.height - Math.round(390 * k)) <= 2, `image has the resized selection size (${last?.width}×${last?.height})`);
   check(errors.length === 0, `no page errors ${errors.join('; ')}`);
   await page.screenshot({ path: process.env.OUT_OVERLAY || '/tmp/overlay-smoke.png' });

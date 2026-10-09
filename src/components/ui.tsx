@@ -256,25 +256,32 @@ export function DevBadge({ channel, className }: { channel: string; className?: 
   );
 }
 
-/** App logo (icon 9h «Пунктир вокруг A») on an ink tile that inverts with the theme, in the
- *  two variants of the design: on the dark tile (light theme) — lime dashes and a white
- *  pointer; on the light tile (dark theme) — lime dashes with a dark outline and a lime
- *  pointer. Same drawing as assets/logo.svg / logo-dev.svg, on a 100-unit grid. */
+/** App logo (icon 9h «Пунктир вокруг A»): the A in a dashed lime selection frame and a white
+ *  pointer on a dark tile, in both themes (a faint rim keeps the tile apart from a dark
+ *  background). Same drawing as assets/logo.svg, on a 100-unit grid. */
 export function Logo({ size = 28, className, radius }: { size?: number; className?: string; radius?: number }) {
-  const frame = { x: 16, y: 16, width: 64, height: 64, fill: 'none' };
-  const pointer = 'M68 64L95 76L83 80L78 93Z';
+  const r = radius ?? 232;
+  // A 1 px rim just inside the tile's edge.
+  const inset = 512 / size;
   return (
     <svg width={size} height={size} viewBox="0 0 1024 1024" className={clsx('shrink-0', className)} aria-hidden>
-      <rect width="1024" height="1024" rx={radius ?? 232} fill="var(--color-text)" />
+      <rect width="1024" height="1024" rx={r} fill="#111111" />
+      <rect
+        className="logo-rim"
+        x={inset}
+        y={inset}
+        width={1024 - 2 * inset}
+        height={1024 - 2 * inset}
+        rx={Math.max(0, r - inset)}
+        fill="none"
+        stroke="rgb(255 255 255 / 0.14)"
+        strokeWidth={1}
+        vectorEffect="non-scaling-stroke"
+      />
       <g transform="scale(10.24)" strokeLinejoin="round">
-        <g className="logo-on-light">
-          <rect {...frame} stroke="#111111" strokeWidth={11} strokeDasharray="13.6 2.4" strokeDashoffset={6.8} />
-          <rect {...frame} stroke="#B5F000" strokeWidth={6} strokeDasharray="11.2 4.8" strokeDashoffset={5.6} />
-        </g>
-        <rect className="logo-on-dark" {...frame} stroke="#B5F000" strokeWidth={7} strokeDasharray="11.2 4.8" strokeDashoffset={5.6} />
-        <path d="M34 68L48 32L62 68M39 56H57" fill="none" stroke="var(--color-surface)" strokeWidth={10} strokeLinecap="round" />
-        <path className="logo-on-dark" d={pointer} fill="#FFFFFF" stroke="#111111" strokeWidth={5} />
-        <path className="logo-on-light" d={pointer} fill="#B5F000" stroke="#111111" strokeWidth={5} />
+        <rect x={16} y={16} width={64} height={64} fill="none" stroke="#B5F000" strokeWidth={7} strokeDasharray="11.2 4.8" strokeDashoffset={5.6} />
+        <path d="M34 68L48 32L62 68M39 56H57" fill="none" stroke="#FFFFFF" strokeWidth={10} strokeLinecap="round" />
+        <path d="M68 64L95 76L83 80L78 93Z" fill="#FFFFFF" stroke="#111111" strokeWidth={5} />
       </g>
     </svg>
   );

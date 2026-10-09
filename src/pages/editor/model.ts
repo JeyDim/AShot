@@ -143,7 +143,7 @@ export function textFontSize(t: TextShape, imageScale = 1): number {
 export const DEFAULT_WATERMARK: WatermarkSettings = {
   kind: 'text',
   layout: 'tile',
-  text: '© Advant',
+  text: 'AShot',
   color: '#FFFFFF',
   size: 1,
   opacity: 25,

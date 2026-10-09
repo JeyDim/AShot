@@ -126,14 +126,11 @@ jobs:
           $config = [ordered]@{ version = $v }
           if ($env:PR) {
             # AShot Dev: installs next to AShot (own settings, history, sign-in, autostart entry),
-            # light icon, no self-update; only the NSIS installer.
+            # no self-update; only the NSIS installer.
             $config.productName = 'AShot Dev'
             $config.mainBinaryName = 'AShot-Dev'
             $config.identifier = 'one.advant.shoter.dev'
-            $config.bundle = [ordered]@{
-              targets = @('nsis')
-              icon = @('icons-dev/32x32.png', 'icons-dev/128x128.png', 'icons-dev/128x128@2x.png', 'icons-dev/icon.ico')
-            }
+            $config.bundle = [ordered]@{ targets = @('nsis') }
           }
           $config | ConvertTo-Json -Depth 5 | Set-Content -Path "${{ runner.temp }}/version.json" -Encoding utf8NoBOM
           Get-Content "${{ runner.temp }}/version.json"

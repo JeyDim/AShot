@@ -253,6 +253,8 @@ pub enum WatermarkPosition {
     BottomRight,
 }
 
+pub const DEFAULT_WATERMARK_TEXT: &str = "AShot";
+
 /// Watermark / copyright of the editor: one button puts it on the screenshot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -279,7 +281,7 @@ impl Default for WatermarkSettings {
         Self {
             kind: WatermarkKind::Text,
             layout: WatermarkLayout::Tile,
-            text: "© Advant".into(),
+            text: DEFAULT_WATERMARK_TEXT.into(),
             color: "#FFFFFF".into(),
             size: 1,
             opacity: 25,
@@ -341,8 +343,16 @@ impl ResizeSettings {
     }
 }
 
+/// Features still being tried out: off unless turned on in Settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Experimental {
+    /// Scrolling capture (whole pages): its menu item, panel tile and hotkey.
+    pub scroll_capture: bool,
+}
+
 /// Version of the settings file written by this build (see [`AppSettings::migrate`]).
-pub const SETTINGS_VERSION: u32 = 3;
+pub const SETTINGS_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -373,6 +383,7 @@ pub struct AppSettings {
     pub editor: EditorPrefs,
     pub resize: ResizeSettings,
     pub watermark: WatermarkSettings,
+    pub experimental: Experimental,
     /// Set after the welcome notification has been shown once.
     pub welcomed: bool,
     /// Install new versions from GitHub Releases automatically (when nothing is open).
@@ -405,6 +416,7 @@ impl Default for AppSettings {
             editor: EditorPrefs::default(),
             resize: ResizeSettings::default(),
             watermark: WatermarkSettings::default(),
+            experimental: Experimental::default(),
             welcomed: false,
             auto_update: true,
             last_version: String::new(),
@@ -454,6 +466,10 @@ impl AppSettings {
         if self.version < 3 {
             // The scrolling capture came with a default hotkey another capture may already use.
             self.hotkeys.dedupe();
+        }
+        if self.version < 4 && self.watermark.text == "© Advant" {
+            // The first default copyright text.
+            self.watermark.text = DEFAULT_WATERMARK_TEXT.into();
         }
         self.version = SETTINGS_VERSION;
         self
@@ -615,6 +631,15 @@ mod tests {
         assert_eq!((s.hotkeys.window.as_str(), s.hotkeys.scroll.as_str()), ("", ""), "cleared stays cleared, taken is not reused");
         std::fs::write(&path, br#"{"version":2,"hotkeys":{"region":"F9","window":"","fullscreen":""}}"#).unwrap();
         assert_eq!(AppSettings::load(&path).hotkeys.scroll, "Control+Shift+PrintScreen");
+        // Version 3: the old default copyright text becomes the new one, a custom one stays.
+        std::fs::write(&path, r#"{"version":3,"watermark":{"text":"© Advant"}}"#).unwrap();
+        let s = AppSettings::load(&path);
+        assert_eq!(s.watermark.text, DEFAULT_WATERMARK_TEXT);
+        assert!(!s.experimental.scroll_capture, "experiments are off");
+        std::fs::write(&path, r#"{"version":3,"watermark":{"text":"© Me"}}"#).unwrap();
+        assert_eq!(AppSettings::load(&path).watermark.text, "© Me");
+        std::fs::write(&path, r#"{"version":4,"watermark":{"text":"© Advant"}}"#).unwrap();
+        assert_eq!(AppSettings::load(&path).watermark.text, "© Advant", "chosen after the migration");
         // After the migration a cleared hotkey stays cleared.
         let mut s = AppSettings::default();
         s.hotkeys.window.clear();

@@ -26,7 +26,9 @@ const settings: AppSettings = {
   links: { rewrite: true, template: '', copyAfterUpload: true, openAfterUpload: false },
   editor: { color: '#FF3B30', size: 1 },
   resize: { enabled: false, side: 'width', size: 740, thicken: true },
-  watermark: { kind: 'text', layout: 'tile', text: '© Advant', color: '#FFFFFF', size: 1, opacity: 25, angle: 30, spacing: 1, position: 'bottomRight' },
+  watermark: { kind: 'text', layout: 'tile', text: 'AShot', color: '#FFFFFF', size: 1, opacity: 25, angle: 30, spacing: 1, position: 'bottomRight' },
+  // `&experimental` turns the experiments on (the scrolling capture).
+  experimental: { scrollCapture: query.has('experimental') },
   welcomed: true,
   autoUpdate: true,
   lastVersion: '0.1.57',

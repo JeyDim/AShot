@@ -123,7 +123,7 @@ pub async fn settings_patch(app: AppHandle, patch: serde_json::Value) -> CmdResu
 async fn apply_changes(app: &AppHandle, before: &AppSettings, after: &AppSettings) -> CmdResult<Vec<String>> {
     let state = app.state::<AppState>();
     let mut problems = Vec::new();
-    if before.hotkeys != after.hotkeys {
+    if before.hotkeys != after.hotkeys || before.experimental != after.experimental {
         // Register on the main thread (the plugin would otherwise block this thread on it).
         let (tx, rx) = tokio::sync::oneshot::channel();
         let handle = app.clone();
@@ -158,6 +158,9 @@ async fn apply_changes(app: &AppHandle, before: &AppSettings, after: &AppSetting
     }
     if before.ui_scale != after.ui_scale {
         ui::apply_ui_scale(app);
+    }
+    if before.experimental != after.experimental {
+        crate::tray::refresh(app);
     }
     let _ = app.emit("settings:changed", after);
     Ok(problems)

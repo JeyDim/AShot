@@ -25,9 +25,3 @@ Thumbs.db
 # `tauri icon` also writes mobile icons; the app is Windows-only
 src-tauri/icons/android/
 src-tauri/icons/ios/
-# AShot Dev (pull request builds) needs only the Windows icons
-/src-tauri/icons-dev/*
-!/src-tauri/icons-dev/32x32.png
-!/src-tauri/icons-dev/128x128.png
-!/src-tauri/icons-dev/128x128@2x.png
-!/src-tauri/icons-dev/icon.ico

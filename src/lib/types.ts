@@ -78,6 +78,12 @@ export interface ResizeSettings {
   thicken: boolean;
 }
 
+/** Features still being tried out: off unless turned on in Settings. */
+export interface Experimental {
+  /** Scrolling capture: its menu item, panel tile and hotkey. */
+  scrollCapture: boolean;
+}
+
 export interface AppSettings {
   showCursor: boolean;
   showMagnifier: boolean;
@@ -98,6 +104,7 @@ export interface AppSettings {
   editor: EditorPrefs;
   resize: ResizeSettings;
   watermark: WatermarkSettings;
+  experimental: Experimental;
   welcomed: boolean;
   autoUpdate: boolean;
   lastVersion: string;

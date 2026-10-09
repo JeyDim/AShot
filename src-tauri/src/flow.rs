@@ -29,6 +29,13 @@ fn action_for(after: AfterCapture) -> Option<Action> {
 /// Starts a capture unless one is already running.
 pub fn start(app: &AppHandle, mode: CaptureMode) {
     let state = app.state::<AppState>();
+    if mode == CaptureMode::Scroll && !state.settings().experimental.scroll_capture {
+        ui::toast(
+            app,
+            Toast::info("Снимок с прокруткой выключен").message("Это экспериментальная функция: включите её в Настройках → Снимок → «Экспериментальное»."),
+        );
+        return;
+    }
     {
         let mut flow = state.flow.lock().unwrap();
         // A stale "busy" flag (e.g. a crashed overlay) expires after two minutes.

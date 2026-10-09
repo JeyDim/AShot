@@ -32,6 +32,8 @@ const MIN_MATCH: f32 = 0.5;
 const GOOD_ROW: f32 = 3.0;
 /// Fixed bands (sticky header / footer) are at most this share of the frame.
 const MAX_BAND: f32 = 0.3;
+/// `stopped`: at least this share of the rows with content is in place.
+const STOPPED: f32 = 0.85;
 
 type Profile = [u32; BLOCKS];
 
@@ -40,7 +42,8 @@ type Profile = [u32; BLOCKS];
 pub enum Step {
     /// The content moved up by `shift` rows; `added` rows were appended.
     Added { shift: u32, added: u32 },
-    /// Nothing moved: the end of the page (or the area does not scroll).
+    /// Nothing moved: the end of the page (or the area does not scroll). Something inside may
+    /// have changed (an animation, a caret) — the content did not move.
     Unchanged,
     /// The frames do not overlap (moved too far, or changed too much).
     NoMatch,
@@ -113,8 +116,16 @@ impl Stitcher {
         // (the appended rows come from the bottom, it never gets into the picture).
         let search_header = header.max(now.0);
         let expected = expected.or(self.last_shift);
-        match find_shift(&self.prev_profiles, &next, search_header, footer, expected) {
-            Some(shift) => self.append(frame, next, (header, footer), shift),
+        let found = find_shift(&self.prev_profiles, &next, search_header, footer, expected);
+        // The rows match in place at least as well as at any shift: the content did not move,
+        // only something in it changed (an animation, a blinking caret).
+        let (known_header, known_footer) = self.bands.unwrap_or((0, 0));
+        let still = still_share(&self.prev_profiles, &next, known_header, known_footer);
+        if still >= MIN_MATCH && found.is_none_or(|(_, score)| still >= score) {
+            return Step::Unchanged;
+        }
+        match found {
+            Some((shift, _)) => self.append(frame, next, (header, footer), shift),
             None => Step::NoMatch,
         }
     }
@@ -165,6 +176,19 @@ impl Stitcher {
 /// Two frames show the same picture (up to re-rendering noise): the page stopped moving.
 pub fn nearly_same(a: &RgbaImage, b: &RgbaImage) -> bool {
     a.dimensions() == b.dimensions() && (a.as_raw() == b.as_raw() || profiles(a).iter().zip(&profiles(b)).all(|(x, y)| diff(x, y) <= SAME_ROW))
+}
+
+/// The content of `b` is where it was in `a`: the same picture, or only something in it
+/// changed (an animation, a blinking caret) — the page is not moving.
+pub fn stopped(a: &RgbaImage, b: &RgbaImage) -> bool {
+    if a.dimensions() != b.dimensions() {
+        return false;
+    }
+    if a.as_raw() == b.as_raw() {
+        return true;
+    }
+    let (p, q) = (profiles(a), profiles(b));
+    p.iter().zip(&q).all(|(x, y)| diff(x, y) <= SAME_ROW) || still_share(&p, &q, 0, 0) >= STOPPED
 }
 
 /// Row profiles: the brightness of `BLOCKS` column blocks. A strip at the right (a scrollbar)
@@ -230,14 +254,25 @@ fn fixed_bands(prev: &[Profile], next: &[Profile]) -> (u32, u32) {
     (header, footer)
 }
 
+/// Share of `next`'s rows with content inside the scrolling band that match `prev` in place.
+fn still_share(prev: &[Profile], next: &[Profile], header: u32, footer: u32) -> f32 {
+    let (top, bottom) = (header as usize, prev.len().saturating_sub(footer as usize));
+    let (mut total, mut ok) = (0usize, 0usize);
+    for y in (top..bottom).filter(|&y| informative(&next[y])) {
+        total += 1;
+        ok += (diff(&next[y], &prev[y]) <= GOOD_ROW) as usize;
+    }
+    if total < MIN_INFORMATIVE { 0.0 } else { ok as f32 / total as f32 }
+}
+
 /// The shift (rows the content moved up) that matches `next` to `prev` best inside the
-/// scrolling band; `None` when nothing matches well enough.
+/// scrolling band, with its score; `None` when nothing matches well enough.
 ///
 /// A shift scores the share of `next`'s rows with content (blank rows match anything) that
 /// match the rows `shift` lower in `prev`. The true shift matches all of them but a sticky
 /// element or a hover highlight; a shift a row or two off fails wherever the content changes
 /// from row to row.
-fn find_shift(prev: &[Profile], next: &[Profile], header: u32, footer: u32, expected: Option<u32>) -> Option<u32> {
+fn find_shift(prev: &[Profile], next: &[Profile], header: u32, footer: u32, expected: Option<u32>) -> Option<(u32, f32)> {
     let h = prev.len();
     let (top, bottom) = (header as usize, h - footer as usize);
     let band = bottom.saturating_sub(top);
@@ -290,7 +325,7 @@ fn find_shift(prev: &[Profile], next: &[Profile], header: u32, footer: u32, expe
         Some(e) => ties.min_by_key(|&(s, _)| (s as i64 - e as i64).unsigned_abs()),
         None => ties.min_by_key(|&(s, _)| s),
     };
-    pick.map(|(s, _)| s as u32)
+    pick.map(|(s, sc)| (s as u32, sc))
 }
 
 #[cfg(test)]
@@ -478,6 +513,27 @@ mod tests {
     }
 
     #[test]
+    fn an_animation_at_the_end_of_the_page_is_not_a_move() {
+        // The page stopped (the end), but a banner in it keeps changing.
+        let (w, view) = (400, 300);
+        let pg = page(w, 1200);
+        let shot = |o: u32, tick: u8| {
+            let mut f = frame(&pg, o, view, None, None);
+            for x in 40..360 {
+                for y in 120..150 {
+                    f.put_pixel(x, y, Rgba([tick.wrapping_mul(70), (x as u8) ^ tick, 90, 255]));
+                }
+            }
+            f
+        };
+        let mut s = Stitcher::new(shot(0, 0), 50_000);
+        assert_eq!(s.push(shot(160, 1), None), Step::Added { shift: 160, added: 160 });
+        assert_eq!(s.push(shot(160, 2), None), Step::Unchanged);
+        assert_eq!(s.push(shot(160, 3), None), Step::Unchanged);
+        assert_eq!(s.push(shot(300, 4), None), Step::Added { shift: 140, added: 140 });
+    }
+
+    #[test]
     fn settled_frames_are_nearly_the_same() {
         let pg = page(200, 600);
         let a = frame(&pg, 0, 200, None, None);
@@ -485,6 +541,16 @@ mod tests {
         b.get_pixel_mut(5, 5).0[0] ^= 1;
         assert!(nearly_same(&a, &b));
         assert!(!nearly_same(&a, &frame(&pg, 20, 200, None, None)));
+        // a small animated spot: not the same picture, but the page is not moving
+        let mut c = a.clone();
+        for x in 20..180 {
+            for y in 50..60 {
+                c.put_pixel(x, y, Rgba([200, (x * 3) as u8, 0, 255]));
+            }
+        }
+        assert!(!nearly_same(&a, &c));
+        assert!(stopped(&a, &c) && stopped(&a, &b));
+        assert!(!stopped(&a, &frame(&pg, 3, 200, None, None)), "moving slowly");
         let mut s = Stitcher::new(a, 10_000);
         assert_eq!(s.scrolling_rows(), 200);
         s.push(frame(&pg, 100, 200, None, None), None);

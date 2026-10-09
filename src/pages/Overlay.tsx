@@ -27,6 +27,7 @@ import { DEFAULT_RESIZE, emptyDoc, historyOf, imageScaleFor, outputSize, thicken
 import type { PixelSource } from './editor/pixelate';
 import { ColorPicker, ResizePicker, SizePicker, StepPicker, ToolButtons, TOOLS } from './editor/Toolbar';
 import { isHandle, shapeIdOf, useAnnotator } from './editor/useAnnotator';
+import { useWatermark } from './editor/Watermark';
 import {
   actionBarPosition,
   clamp,
@@ -181,11 +182,31 @@ export default function Overlay() {
   });
   const annRef = useRef(ann);
   annRef.current = ann;
+  // Watermark / copyright over the selection (the settings are shared with the editor).
+  const wm = useWatermark({
+    doc: hist.present,
+    host: ann,
+    frame: () => {
+      const r = s.current.selection;
+      if (!r) return null;
+      const area = { x: r.x, y: r.y, w: r.width, h: r.height };
+      return { area, full: area, scale: thickenFactor(downscaleRef.current, r.width, r.height) };
+    },
+    onError: (text) => {
+      setToast(text);
+      window.setTimeout(() => setToast(null), 2500);
+    },
+  });
   const docRef = useRef(hist.present);
   docRef.current = hist.present;
   const toolRef = useRef(tool);
   toolRef.current = tool;
   void selectionRev; // re-render trigger for the selection-dependent props above
+  // The watermark / copyright follows the selection when it is moved or resized.
+  useEffect(() => {
+    wm.refit(docRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectionRev]);
 
   const resetDrawing = () => {
     annRef.current.reset();
@@ -223,8 +244,10 @@ export default function Overlay() {
         setColor(v.settings.editor.color || '#FF3B30');
         setSize(v.settings.editor.size ?? 1);
         if (v.settings.resize) setDownscale(v.settings.resize);
+        wm.init(v.settings.watermark);
       })
       .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   // Shared with the editor (and the other monitors' overlays); echoes of changes made
   // here are ignored (they could arrive after a newer value typed here).
@@ -1025,6 +1048,8 @@ export default function Overlay() {
         >
           <div className="flex items-center" role="toolbar" aria-label="Инструменты">
             <ToolButtons tools={OVERLAY_TOOLS} tool={tool} setTool={setTool} size={34} up={barUp} tipsUp />
+            <div className="mx-0.5 h-5 w-px shrink-0 bg-border-strong" />
+            {wm.picker(34, barUp, true)}
           </div>
           <BarDivider />
           <ColorPicker color={color} setColor={changeColor} compact up={barUp} />

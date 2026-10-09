@@ -137,9 +137,8 @@
 }
 
 @layer components {
-  /* The logo's tile is dark in the light theme and light in the dark one (see Logo). */
-  :root[data-theme="dark"] .logo-on-dark,
-  :root:not([data-theme="dark"]) .logo-on-light {
+  /* The logo's rim shows only on a dark background. */
+  :root:not([data-theme="dark"]) .logo-rim {
     display: none;
   }
   .card-pop {

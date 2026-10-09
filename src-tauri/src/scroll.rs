@@ -1,9 +1,11 @@
 //! Scrolling capture: AShot scrolls the chosen area itself and glues the frames together
 //! (`shoter_core::stitch`). First it runs to the bottom of the page, a screen at a time, so
-//! lazily loaded pictures arrive; then back to the top, and down again taking the frames.
-//! It scrolls through UI Automation when the content under the selection offers it
-//! (browsers, Explorer, Office) — the page goes back where it was afterwards — otherwise
-//! with the mouse wheel. How far a step goes is learned from the glued frames.
+//! lazily loaded pictures arrive; then back to the top, and down again with the mouse wheel,
+//! taking the frames. How far a notch goes and where the page ends are decided from the
+//! picture alone. When the content under the selection offers UI Automation scrolling
+//! (browsers, Explorer, Office), it does the run to the bottom and back without the cursor,
+//! finds where the wheel scrolls that content and nothing inside it, and puts the page back
+//! where it was afterwards.
 //!
 //! The progress toast is excluded from screen capture (see `ui::create_toast`), so it may sit
 //! over the area. Esc (registered globally for the time of the capture) or "Stop" in the toast
@@ -139,10 +141,13 @@ mod engine {
     use windows::Win32::Foundation::POINT;
     use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
     use windows::Win32::UI::Accessibility::{
-        CUIAutomation, IUIAutomation, IUIAutomationScrollPattern, ScrollAmount_LargeIncrement, ScrollAmount_NoAmount,
-        ScrollAmount_SmallIncrement, UIA_ScrollPatternId, UIA_ScrollPatternNoScroll,
+        CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationScrollPattern, ScrollAmount_LargeIncrement,
+        ScrollAmount_NoAmount, UIA_ScrollPatternId, UIA_ScrollPatternNoScroll,
     };
-    use windows::Win32::UI::Input::KeyboardAndMouse::{SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_WHEEL, MOUSEINPUT};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_MOVE, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL,
+        MOUSEINPUT,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SetCursorPos, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN};
 
     use super::{Ending, Outcome, Progress, CANCELLED, MAX_FRAMES, MAX_HEIGHT};
@@ -151,7 +156,9 @@ mod engine {
     /// Share of the scrolling rows one step moves (the rest overlaps, for gluing).
     const STEP: f64 = 0.55;
     const WHEEL_DELTA: i32 = 120;
-    /// Wheel notches per step while running to the bottom (about a screen in browsers).
+    /// Most wheel notches in one step.
+    const MAX_NOTCHES: i32 = 25;
+    /// Wheel notches per screen while running to the bottom without UI Automation.
     const PRELOAD_NOTCHES: i32 = 6;
     /// Time for lazily loaded pictures to appear after each screen of the preload run.
     const PRELOAD_PAUSE: Duration = Duration::from_millis(250);
@@ -196,11 +203,15 @@ mod engine {
         result
     }
 
+    /// Down with the wheel a step at a time, gluing each frame. Every decision is made from the
+    /// picture: how far a notch goes (learned from the glued frames) and where the page ends
+    /// (twice nothing moved). Browsers report their scroll position late, so it is not used.
     fn glue(rect: Rect, sc: &mut Scroller, stop: &AtomicBool, progress: &dyn Fn(Progress)) -> Result<Outcome, String> {
         let mut st = Stitcher::new(settle(rect, stop)?, MAX_HEIGHT);
         let mut frames = 1;
         progress(Progress::Frames(frames, st.height()));
-        let mut retries = 0;
+        // Steps in a row that moved nothing / did not match.
+        let (mut still, mut misses) = (0, 0);
         let ending = loop {
             if stop.load(Ordering::SeqCst) {
                 break Ending::Stopped;
@@ -208,50 +219,38 @@ mod engine {
             if frames >= MAX_FRAMES {
                 break Ending::Limit;
             }
-            let step = ((st.scrolling_rows() as f64 * STEP) as u32).max(16);
-            let before = sc.position();
-            let Some(how) = sc.down(step) else {
-                log::info!("scrolling capture: the scroll position is at the end");
-                break if frames == 1 { Ending::NotScrollable } else { Ending::End };
-            };
+            let px = ((st.scrolling_rows() as f64 * STEP) as u32).max(16);
+            // After a step that showed nothing, a bigger one: smooth scrolling that started
+            // late, a notch too small to show (programs that scroll by whole lines).
+            let notches = sc.down(px, if still > 0 { 2 } else { 1 });
             let frame = settle(rect, stop)?;
-            let expected = sc.moved_since(before);
-            let result = st.push(frame.clone(), expected);
-            log::info!("scrolling capture: step {frames}: {how}, expected {expected:?} → {result:?}");
+            let expected = sc.expected();
+            let result = st.push(frame, expected);
+            log::info!(
+                "scrolling capture: step {frames}: {notches} notches ({} since the last frame), expected {expected:?} → {result:?}",
+                sc.pending
+            );
             match result {
                 Step::Added { shift, .. } => {
-                    sc.learn(shift, before);
-                    retries = 0;
+                    sc.glued(shift);
+                    (still, misses) = (0, 0);
                     frames += 1;
                     progress(Progress::Frames(frames, st.height()));
                 }
-                // UI Automation moved, the picture did not: some programs report a scroll
-                // position they do not show — the wheel then.
-                Step::Unchanged if frames == 1 && sc.is_uia() => {
-                    log::info!("scrolling capture: nothing moved through UI Automation, trying the mouse wheel");
-                    *sc = Scroller::wheel(rect);
+                Step::Unchanged => {
+                    still += 1;
+                    if still >= 2 {
+                        break if frames == 1 { Ending::NotScrollable } else { Ending::End };
+                    }
                 }
-                Step::Unchanged => break if frames == 1 { Ending::NotScrollable } else { Ending::End },
                 Step::Full => break Ending::Limit,
-                Step::NoMatch => {
-                    // UI Automation tells how far the page went once that is learned — trust it.
-                    if let (true, Some(shift)) = (sc.is_calibrated(), expected.filter(|&e| e > 0)) {
-                        log::info!("scrolling capture: no visual match, using the reported shift {shift}");
-                        if st.push_shifted(frame, shift) == Step::Full {
-                            break Ending::Limit;
-                        }
-                        frames += 1;
-                        progress(Progress::Frames(frames, st.height()));
-                        continue;
-                    }
-                    // Too far: back, and smaller steps.
-                    if retries < 2 && sc.back_off(before) {
-                        retries += 1;
-                        let _ = settle(rect, stop)?;
-                        continue;
-                    }
-                    break Ending::Lost;
+                // Too far (or the page changed): back, and smaller steps.
+                Step::NoMatch if misses < 2 => {
+                    misses += 1;
+                    sc.back_off();
+                    let _ = settle(rect, stop)?;
                 }
+                Step::NoMatch => break Ending::Lost,
             }
         };
         log::info!("scrolling capture: {frames} frames, {} px, {ending:?}", st.height());
@@ -268,7 +267,7 @@ mod engine {
             }
             sleep(Duration::from_millis(80));
             let next = capture::grab(rect)?;
-            if stitch::nearly_same(&last, &next) {
+            if stitch::stopped(&last, &next) {
                 return Ok(next);
             }
             last = next;
@@ -280,103 +279,85 @@ mod engine {
         if stop.load(Ordering::SeqCst) { Err(CANCELLED.into()) } else { Ok(()) }
     }
 
-    enum Scroller {
-        /// UI Automation scroll pattern of the scrolling element. `per_percent` — pixels per
-        /// scroll percent, learned from the glued steps (the reported page size is not
-        /// trusted: browsers differ in what they report).
-        Uia { _automation: IUIAutomation, pattern: IUIAutomationScrollPattern, per_percent: Option<f64> },
-        /// Mouse wheel at `at`; `per_notch` — pixels one notch scrolls, once known.
-        Wheel { at: (i32, i32), notches: i32, per_notch: Option<f64> },
+    /// UI Automation scroll pattern of the scrolling element: runs to the bottom and to the top
+    /// without the cursor, and puts the page back afterwards.
+    struct Uia {
+        _automation: IUIAutomation,
+        pattern: IUIAutomationScrollPattern,
+    }
+
+    struct Scroller {
+        uia: Option<Uia>,
+        /// Where the wheel turns: over the scrolling element (its scrollbar when it can be).
+        at: (i32, i32),
+        /// Where the cursor waits between the steps: off the area, so hover effects stay out
+        /// of the frames.
+        park: Option<(i32, i32)>,
+        /// Notches turned since the last glued frame.
+        pending: i32,
+        /// Pixels a notch scrolls, learned from the glued frames.
+        per_notch: Option<f64>,
+        /// Notches per step until `per_notch` is known.
+        first: i32,
+        /// Most notches per step (halved after a step that went too far).
+        most: i32,
     }
 
     impl Scroller {
         fn find(rect: Rect) -> Self {
-            match uia_scroller(rect) {
-                Some(s) => {
-                    park_cursor(rect);
-                    s
+            let park = park_spot(rect);
+            let (uia, at) = match uia_scroller(rect) {
+                Some((automation, element, pattern)) => {
+                    let at = wheel_point(&automation, &element, rect);
+                    log::info!("scrolling capture: the wheel turns at {at:?}");
+                    (Some(Uia { _automation: automation, pattern }), at.unwrap_or_else(|| inside(rect)))
                 }
                 None => {
-                    log::info!("scrolling capture of {rect:?}: no UI Automation scroll pattern, using the mouse wheel");
-                    Self::wheel(rect)
+                    log::info!("scrolling capture of {rect:?}: no UI Automation scroll pattern, the mouse wheel only");
+                    (None, inside(rect))
+                }
+            };
+            if let Some((x, y)) = park {
+                unsafe {
+                    let _ = SetCursorPos(x, y);
                 }
             }
-        }
-
-        fn wheel(rect: Rect) -> Self {
-            // Over the content, near the right edge (away from the middle of the page).
-            let at = (rect.right() - (rect.width as i32 / 8).clamp(8, 60), rect.y + rect.height as i32 / 2);
-            Scroller::Wheel { at, notches: 3, per_notch: None }
-        }
-
-        fn is_uia(&self) -> bool {
-            matches!(self, Scroller::Uia { .. })
-        }
-
-        /// The scroll position reports exactly how far a step went (UI Automation, learned).
-        fn is_calibrated(&self) -> bool {
-            matches!(self, Scroller::Uia { per_percent: Some(_), .. })
+            let first = (rect.height as i32 / 300).clamp(1, 3);
+            Scroller { uia, at, park, pending: 0, per_notch: None, first, most: MAX_NOTCHES }
         }
 
         fn restore_point(&self) -> Option<(IUIAutomationScrollPattern, f64)> {
-            match self {
-                Scroller::Uia { pattern, .. } => Some((pattern.clone(), self.position()?)),
-                Scroller::Wheel { .. } => None,
-            }
+            // Nothing has scrolled yet: the reported position is current.
+            let uia = self.uia.as_ref()?;
+            let percent = unsafe { uia.pattern.CurrentVerticalScrollPercent() }.ok().filter(|p| *p >= 0.0)?;
+            Some((uia.pattern.clone(), percent))
         }
 
-        /// Scroll position, percent (UI Automation only).
-        fn position(&self) -> Option<f64> {
-            match self {
-                Scroller::Uia { pattern, .. } => unsafe { pattern.CurrentVerticalScrollPercent() }.ok().filter(|p| *p >= 0.0),
-                Scroller::Wheel { .. } => None,
-            }
-        }
-
-        /// To the bottom a screen at a time, so lazily loaded pictures come in on the way
-        /// (as far as the capture can go anyway).
+        /// To the bottom a screen at a time, so lazily loaded pictures come in on the way (as
+        /// far as the capture can go anyway). The bottom: twice nothing moved.
         fn preload(&mut self, rect: Rect, stop: &AtomicBool) -> Result<(), String> {
             let started = Instant::now();
             let max_steps = MAX_HEIGHT / rect.height.max(1) + 4;
-            let mut steps = 0;
-            match self {
-                Scroller::Uia { pattern, .. } => {
-                    let pattern = pattern.clone();
-                    while steps < max_steps && started.elapsed() < Duration::from_secs(40) {
-                        cancelled(stop)?;
-                        let Some(p) = self.position().filter(|p| *p < 99.9) else { break };
-                        // A page down.
-                        if unsafe { pattern.Scroll(ScrollAmount_NoAmount, ScrollAmount_LargeIncrement) }.is_err() {
-                            break;
-                        }
-                        sleep(PRELOAD_PAUSE);
-                        steps += 1;
-                        if self.position().is_none_or(|now| (now - p).abs() < 0.001) {
-                            break;
-                        }
-                    }
+            let (mut steps, mut still) = (0, 0);
+            let mut last = capture::grab(rect)?;
+            while steps < max_steps && started.elapsed() < Duration::from_secs(40) {
+                cancelled(stop)?;
+                let paged = self.uia.as_ref().is_some_and(|u| unsafe { u.pattern.Scroll(ScrollAmount_NoAmount, ScrollAmount_LargeIncrement) }.is_ok());
+                if !paged {
+                    self.wheel(-PRELOAD_NOTCHES);
                 }
-                Scroller::Wheel { at, .. } => {
-                    let mut last = capture::grab(rect)?;
-                    let mut still = 0;
-                    while steps < max_steps && started.elapsed() < Duration::from_secs(40) {
-                        cancelled(stop)?;
-                        wheel(*at, -PRELOAD_NOTCHES);
-                        sleep(PRELOAD_PAUSE);
-                        steps += 1;
-                        let next = capture::grab(rect)?;
-                        // Twice nothing moved: the bottom.
-                        if stitch::nearly_same(&last, &next) {
-                            still += 1;
-                            if still >= 2 {
-                                break;
-                            }
-                        } else {
-                            still = 0;
-                        }
-                        last = next;
+                sleep(PRELOAD_PAUSE);
+                steps += 1;
+                let next = capture::grab(rect)?;
+                if stitch::stopped(&last, &next) {
+                    still += 1;
+                    if still >= 2 {
+                        break;
                     }
+                } else {
+                    still = 0;
                 }
+                last = next;
             }
             log::info!("scrolling capture: preloaded {steps} screens in {:?}", started.elapsed());
             // The last pictures.
@@ -384,126 +365,98 @@ mod engine {
             cancelled(stop)
         }
 
+        /// To the top: UI Automation jumps there; the wheel makes sure (up until nothing moves —
+        /// the jump may be missing, or land short on a page that grew).
         fn to_top(&mut self, rect: Rect, stop: &AtomicBool) -> Result<(), String> {
-            match self {
-                Scroller::Uia { pattern, .. } => unsafe {
-                    let _ = pattern.SetScrollPercent(UIA_ScrollPatternNoScroll, 0.0);
-                },
-                Scroller::Wheel { at, .. } => {
-                    // Up until nothing moves any more.
-                    let mut last = capture::grab(rect)?;
-                    for _ in 0..60 {
-                        cancelled(stop)?;
-                        wheel(*at, 25);
-                        let next = settle(rect, stop)?;
-                        if stitch::nearly_same(&last, &next) {
-                            break;
-                        }
-                        last = next;
-                    }
+            if let Some(uia) = &self.uia {
+                unsafe {
+                    let _ = uia.pattern.SetScrollPercent(UIA_ScrollPatternNoScroll, 0.0);
                 }
+            }
+            let mut last = settle(rect, stop)?;
+            for _ in 0..60 {
+                cancelled(stop)?;
+                self.wheel(MAX_NOTCHES);
+                let next = settle(rect, stop)?;
+                if stitch::stopped(&last, &next) {
+                    break;
+                }
+                last = next;
             }
             cancelled(stop)
         }
 
-        /// Scrolls down by about `px`; what it did (for the log), `None` — already at the end.
-        fn down(&mut self, px: u32) -> Option<String> {
-            let percent = self.position();
-            match self {
-                Scroller::Uia { pattern, per_percent, .. } => {
-                    let p = percent?;
-                    if p >= 99.95 {
-                        return None;
-                    }
-                    if let Some(k) = *per_percent {
-                        let target = (p + px as f64 / k).min(100.0);
-                        if unsafe { pattern.SetScrollPercent(UIA_ScrollPatternNoScroll, target) }.is_ok() {
-                            return Some(format!("UI Automation {p:.2}% → {target:.2}%"));
-                        }
-                    }
-                    // The step size is not known yet: a few lines (or 1%), then it is learned.
-                    if small_steps(pattern, 3) {
-                        return Some(format!("UI Automation, 3 lines from {p:.2}% (calibration)"));
-                    }
-                    let target = (p + 1.0).min(100.0);
-                    unsafe { pattern.SetScrollPercent(UIA_ScrollPatternNoScroll, target) }
-                        .is_ok()
-                        .then(|| format!("UI Automation {p:.2}% → {target:.2}% (calibration)"))
-                }
-                Scroller::Wheel { at, notches, per_notch } => {
-                    if let Some(per) = per_notch {
-                        *notches = ((px as f64 / *per).round() as i32).clamp(1, 25);
-                    }
-                    wheel(*at, -*notches);
-                    Some(format!("wheel {} notches", *notches))
-                }
-            }
+        /// Turns the wheel down for about `px` (× `boost`); the notches turned.
+        fn down(&mut self, px: u32, boost: i32) -> i32 {
+            let n = self.per_notch.map_or(self.first, |p| (px as f64 / p).round() as i32);
+            let n = (n.max(1) * boost).clamp(1, self.most);
+            self.wheel(-n);
+            self.pending += n;
+            n
         }
 
-        /// How far the content should have moved since `before` (the scroll position), once
-        /// the step size is learned.
-        fn moved_since(&self, before: Option<f64>) -> Option<u32> {
-            match self {
-                Scroller::Uia { per_percent: Some(k), .. } => {
-                    let moved = (self.position()? - before?) * k;
-                    (moved >= 1.0).then(|| moved.round() as u32)
-                }
-                Scroller::Uia { .. } => None,
-                Scroller::Wheel { notches, per_notch, .. } => per_notch.map(|p| (p * *notches as f64).round() as u32),
-            }
+        /// How far the content should have moved since the last glued frame, once known.
+        fn expected(&self) -> Option<u32> {
+            self.per_notch.map(|p| (p * self.pending as f64).round() as u32)
         }
 
-        /// A glued step tells how far the scrolling goes.
-        fn learn(&mut self, shift: u32, before: Option<f64>) {
-            let now = self.position();
-            match self {
-                Scroller::Uia { per_percent, .. } => {
-                    if let (Some(now), Some(before)) = (now, before)
-                        && now - before > 0.0001
-                    {
-                        let k = shift as f64 / (now - before);
-                        // The page may grow while pictures load: lean to the latest step.
-                        *per_percent = Some(per_percent.map_or(k, |old| old * 0.3 + k * 0.7));
-                    }
-                }
-                Scroller::Wheel { notches, per_notch, .. } => *per_notch = Some(shift as f64 / *notches as f64),
+        /// A frame was glued, `shift` rows lower: that is what the notches since the last one did.
+        fn glued(&mut self, shift: u32) {
+            if self.pending > 0 {
+                let per = shift as f64 / self.pending as f64;
+                // The last step may stop short at the end of the page: lean to the latest step,
+                // without forgetting the earlier ones.
+                self.per_notch = Some(self.per_notch.map_or(per, |old| old * 0.3 + per * 0.7));
             }
+            self.pending = 0;
         }
 
-        /// Undoes the last step and makes the next ones smaller.
-        fn back_off(&mut self, before: Option<f64>) -> bool {
-            match self {
-                Scroller::Wheel { at, notches, per_notch } => {
-                    wheel(*at, *notches);
-                    *notches = (*notches / 2).max(1);
-                    // The learned distance was for a bigger step; learn it anew.
-                    *per_notch = None;
-                    true
-                }
-                Scroller::Uia { pattern, per_percent, .. } => {
-                    let Some(before) = before else { return false };
-                    unsafe {
-                        let _ = pattern.SetScrollPercent(UIA_ScrollPatternNoScroll, before);
-                    }
-                    // Learn the step again, from a small one.
-                    *per_percent = None;
-                    true
-                }
+        /// Undoes the steps since the last glued frame and makes the next ones smaller.
+        fn back_off(&mut self) {
+            let last = self.pending;
+            self.wheel(self.pending);
+            self.pending = 0;
+            self.most = (last / 2).max(1);
+        }
+
+        /// Turns the wheel at `at`, `notches` > 0 — up, < 0 — down, and takes the cursor back to
+        /// `park`. One input batch, so the wheel goes where the cursor was put for it.
+        fn wheel(&self, notches: i32) {
+            if notches == 0 {
+                return;
+            }
+            let notch = INPUT {
+                r#type: INPUT_MOUSE,
+                Anonymous: INPUT_0 {
+                    mi: MOUSEINPUT { mouseData: (notches.signum() * WHEEL_DELTA) as u32, dwFlags: MOUSEEVENTF_WHEEL, ..Default::default() },
+                },
+            };
+            let mut inputs = vec![move_to(self.at)];
+            inputs.extend(std::iter::repeat_n(notch, notches.unsigned_abs() as usize));
+            inputs.extend(self.park.map(move_to));
+            unsafe {
+                SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
             }
         }
-    }
-
-    fn small_steps(pattern: &IUIAutomationScrollPattern, n: usize) -> bool {
-        (0..n).all(|_| unsafe { pattern.Scroll(ScrollAmount_NoAmount, ScrollAmount_SmallIncrement) }.is_ok())
     }
 
     /// The nearest element under the middle of the area that scrolls vertically.
-    fn uia_scroller(rect: Rect) -> Option<Scroller> {
+    fn uia_scroller(rect: Rect) -> Option<(IUIAutomation, IUIAutomationElement, IUIAutomationScrollPattern)> {
         let automation: IUIAutomation = unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }.ok()?;
-        let (cx, cy) = rect.center();
+        let (element, pattern) = scroller_at(&automation, rect.center())?;
+        let percent = unsafe { pattern.CurrentVerticalScrollPercent() }.unwrap_or(-1.0);
+        let visible = unsafe { pattern.CurrentVerticalViewSize() }.unwrap_or(-1.0);
+        let class = unsafe { element.CurrentClassName() }.map(|s| s.to_string()).unwrap_or_default();
+        let bounds = unsafe { element.CurrentBoundingRectangle() }.ok();
+        log::info!("scrolling capture of {rect:?}: UI Automation element {class:?} {bounds:?}, at {percent:.2}%, {visible:.2}% visible");
+        Some((automation, element, pattern))
+    }
+
+    /// The nearest element at the point (or above it) that scrolls vertically.
+    fn scroller_at(automation: &IUIAutomation, (x, y): (i32, i32)) -> Option<(IUIAutomationElement, IUIAutomationScrollPattern)> {
         let own = std::process::id() as i32;
         let walker = unsafe { automation.ControlViewWalker() }.ok()?;
-        let mut element = unsafe { automation.ElementFromPoint(POINT { x: cx, y: cy }) }.ok()?;
+        let mut element = unsafe { automation.ElementFromPoint(POINT { x, y }) }.ok()?;
         for _ in 0..40 {
             if unsafe { element.CurrentProcessId() }.ok() == Some(own) {
                 return None;
@@ -511,53 +464,69 @@ mod engine {
             if let Ok(pattern) = unsafe { element.GetCurrentPatternAs::<IUIAutomationScrollPattern>(UIA_ScrollPatternId) }
                 && unsafe { pattern.CurrentVerticallyScrollable() }.is_ok_and(|v| v.as_bool())
             {
-                let percent = unsafe { pattern.CurrentVerticalScrollPercent() }.ok().filter(|p| *p >= 0.0)?;
-                let visible = unsafe { pattern.CurrentVerticalViewSize() }.unwrap_or(-1.0);
-                let class = unsafe { element.CurrentClassName() }.map(|s| s.to_string()).unwrap_or_default();
-                let bounds = unsafe { element.CurrentBoundingRectangle() }.ok();
-                log::info!(
-                    "scrolling capture of {rect:?}: UI Automation element {class:?} {bounds:?}, at {percent:.2}%, {visible:.2}% visible"
-                );
-                return Some(Scroller::Uia { _automation: automation, pattern, per_percent: None });
+                return Some((element, pattern));
             }
             element = unsafe { walker.GetParentElement(&element) }.ok()?;
         }
         None
     }
 
-    /// Mouse wheel at `at`: `notches` > 0 — up, < 0 — down.
-    fn wheel(at: (i32, i32), notches: i32) {
-        unsafe {
-            let _ = SetCursorPos(at.0, at.1);
+    /// A point where the wheel scrolls `target` itself (not a scrolling box inside it, a map,
+    /// an embedded page): its scrollbar, else a spot in the area near its sides.
+    fn wheel_point(automation: &IUIAutomation, target: &IUIAutomationElement, rect: Rect) -> Option<(i32, i32)> {
+        let (cx, cy) = rect.center();
+        let inset = (rect.width as i32 / 8).clamp(8, 60);
+        let mut spots = Vec::new();
+        if let Ok(b) = unsafe { target.CurrentBoundingRectangle() }
+            && b.right - b.left > 40
+            && b.bottom - b.top > 60
+        {
+            spots.push((b.right - 7, cy.clamp(b.top + 20, b.bottom - 21)));
         }
-        let one = INPUT {
-            r#type: INPUT_MOUSE,
-            Anonymous: INPUT_0 {
-                mi: MOUSEINPUT { mouseData: (notches.signum() * WHEEL_DELTA) as u32, dwFlags: MOUSEEVENTF_WHEEL, ..Default::default() },
-            },
-        };
-        let inputs = vec![one; notches.unsigned_abs() as usize];
-        unsafe {
-            SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
-        }
+        spots.extend([(rect.right() - inset, cy), (rect.x + inset, cy), (cx, cy), (cx, rect.y + rect.height as i32 / 4)]);
+        spots.into_iter().find(|&spot| {
+            scroller_at(automation, spot).is_some_and(|(element, _)| unsafe { automation.CompareElements(&element, target) }.is_ok_and(|same| same.as_bool()))
+        })
     }
 
-    /// Takes the cursor off the area, so hover effects do not change the frames.
-    fn park_cursor(rect: Rect) {
-        let (vx, vy, vw, vh) = unsafe {
+    /// Over the content, near the right edge (away from the middle of the page).
+    fn inside(rect: Rect) -> (i32, i32) {
+        (rect.right() - (rect.width as i32 / 8).clamp(8, 60), rect.y + rect.height as i32 / 2)
+    }
+
+    fn virtual_screen() -> (i32, i32, i32, i32) {
+        unsafe {
             (
                 GetSystemMetrics(SM_XVIRTUALSCREEN),
                 GetSystemMetrics(SM_YVIRTUALSCREEN),
                 GetSystemMetrics(SM_CXVIRTUALSCREEN),
                 GetSystemMetrics(SM_CYVIRTUALSCREEN),
             )
-        };
+        }
+    }
+
+    /// Just outside the area, on a screen.
+    fn park_spot(rect: Rect) -> Option<(i32, i32)> {
+        let (vx, vy, vw, vh) = virtual_screen();
         let (cx, cy) = rect.center();
         let spots = [(rect.right() + 4, cy), (rect.x - 5, cy), (cx, rect.bottom() + 4), (cx, rect.y - 5)];
-        if let Some(&(x, y)) = spots.iter().find(|&&(x, y)| x >= vx && y >= vy && x < vx + vw && y < vy + vh) {
-            unsafe {
-                let _ = SetCursorPos(x, y);
-            }
+        spots.into_iter().find(|&(x, y)| x >= vx && y >= vy && x < vx + vw && y < vy + vh)
+    }
+
+    /// A cursor move to `(x, y)` (virtual-screen pixels) as input.
+    fn move_to((x, y): (i32, i32)) -> INPUT {
+        let (vx, vy, vw, vh) = virtual_screen();
+        let norm = |v: i32, origin: i32, size: i32| (((v - origin) as i64 * 65535 + (size as i64 - 1) / 2) / (size as i64 - 1).max(1)) as i32;
+        INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx: norm(x, vx, vw),
+                    dy: norm(y, vy, vh),
+                    dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+                    ..Default::default()
+                },
+            },
         }
     }
 }

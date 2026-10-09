@@ -207,7 +207,7 @@ export default function Settings({ initial }: { initial?: string }) {
               </div>
             )}
             {section === 'general' && <General s={settings} update={update} />}
-            {section === 'hotkeys' && <HotkeysSection value={settings.hotkeys} onChange={(h) => update({ hotkeys: h })} />}
+            {section === 'hotkeys' && <HotkeysSection value={settings.hotkeys} scroll={settings.experimental.scrollCapture} onChange={(h) => update({ hotkeys: h })} />}
             {section === 'saving' && <Saving s={settings} update={update} view={view} />}
             {section === 'box' && <BoxSection s={settings} update={update} flush={flush} defaultTemplate={view.defaultLinkTemplate} />}
             {section === 'about' && <About s={settings} update={update} />}
@@ -326,6 +326,19 @@ function General({ s, update }: { s: AppSettings; update: Update }) {
           </Select>
         </Row>
       </Group>
+      <Group title="Экспериментальное">
+        <Row
+          label={
+            <span className="flex items-center gap-2">
+              Снимок с прокруткой
+              <span className="inline-flex h-[18px] items-center rounded-full bg-lime px-1.5 text-[10.5px] font-semibold text-on-lime">бета</span>
+            </span>
+          }
+          hint="Страница целиком: AShot сам прокрутит область и склеит кадры. В панели и меню появится «Прокрутка». Ещё в работе — получается не на всех страницах"
+        >
+          <Switch checked={s.experimental.scrollCapture} onChange={(v) => update({ experimental: { scrollCapture: v } })} label="Снимок с прокруткой" />
+        </Row>
+      </Group>
     </>
   );
 }
@@ -335,13 +348,15 @@ function General({ s, update }: { s: AppSettings; update: Update }) {
 // Every capture has a hotkey by default (same as `Hotkeys::default` in Rust).
 const DEFAULT_HOTKEYS: Hotkeys = { region: 'Control+PrintScreen', window: 'Alt+PrintScreen', fullscreen: 'Shift+PrintScreen', scroll: 'Control+Shift+PrintScreen' };
 
-function HotkeysSection({ value, onChange }: { value: Hotkeys; onChange: (h: Hotkeys) => void }) {
-  const rows: { key: keyof Hotkeys; label: string; hint: string; icon: ReactNode }[] = [
+function HotkeysSection({ value, scroll, onChange }: { value: Hotkeys; scroll: boolean; onChange: (h: Hotkeys) => void }) {
+  const all: { key: keyof Hotkeys; label: string; hint: string; icon: ReactNode }[] = [
     { key: 'region', label: 'Снимок области', hint: 'Выделение мышью, клик — окно или элемент', icon: <Scan size={20} /> },
     { key: 'window', label: 'Снимок окна', hint: 'Наведите на окно и кликните', icon: <AppWindow size={20} /> },
     { key: 'fullscreen', label: 'Весь экран', hint: 'Сразу в редактор; если экранов несколько — кликните по нужному', icon: <Monitor size={20} /> },
     { key: 'scroll', label: 'Снимок с прокруткой', hint: 'Страница целиком: AShot прокрутит область и склеит', icon: <ChevronsDown size={20} /> },
   ];
+  // The scrolling capture is an experiment: its hotkey shows once it is turned on.
+  const rows = all.filter((r) => scroll || r.key !== 'scroll');
   const isDefault = (Object.keys(DEFAULT_HOTKEYS) as (keyof Hotkeys)[]).every((k) => value[k] === DEFAULT_HOTKEYS[k]);
   return (
     <>

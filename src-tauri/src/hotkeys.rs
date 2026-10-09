@@ -10,7 +10,8 @@ use crate::state::{AppState, CaptureMode};
 /// combinations that could not be registered (taken by another application).
 pub fn apply(app: &AppHandle) -> Vec<String> {
     let state = app.state::<AppState>();
-    let hk = state.settings().hotkeys;
+    let settings = state.settings();
+    let hk = settings.hotkeys;
     let gs = app.global_shortcut();
     // Registration runs on the main thread and blocks this one, so never hold the
     // `hotkeys` lock here (the hotkey handler on the main thread takes it).
@@ -22,7 +23,8 @@ pub fn apply(app: &AppHandle) -> Vec<String> {
         (CaptureMode::Region, hk.region, "Снимок области"),
         (CaptureMode::WindowPick, hk.window, "Снимок окна"),
         (CaptureMode::Fullscreen, hk.fullscreen, "Весь экран"),
-        (CaptureMode::Scroll, hk.scroll, "Снимок с прокруткой"),
+        // An experiment: only when turned on in Settings.
+        (CaptureMode::Scroll, if settings.experimental.scroll_capture { hk.scroll } else { String::new() }, "Снимок с прокруткой"),
     ];
     for (mode, accel, title) in entries {
         let accel = accel.trim();

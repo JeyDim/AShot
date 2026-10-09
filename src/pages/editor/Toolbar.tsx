@@ -182,30 +182,36 @@ export function Toolbar(props: {
   redo: () => void;
   busy: Action | null;
   act: (a: Action) => void;
-  /** Extra control at the end of the tools (watermark / copyright). */
-  extra?: ReactNode;
+  /** Extra control at the end of the tools (watermark / copyright), for the tools' button size. */
+  extra?: (size: number) => ReactNode;
 }) {
   const { tool, setTool, color, setColor, size, setSize, busy, act } = props;
   const width = useWindowWidth();
+  // The bar never scrolls or wraps: it gets more compact as the window narrows (the widths are
+  // what it needs with the widest tool set — the step tool adds its number), and the window is
+  // never narrower than the most compact bar (`EDITOR_MIN` in ui.rs).
+  const roomy = width >= 1220;
+  const pickers = width >= 1460;
+  const labels = width >= 1610;
   return (
-    <div className={clsx('flex h-[58px] shrink-0 items-center overflow-x-auto border-b border-border bg-surface px-3', width < 1180 ? 'gap-1.5' : 'gap-2')} data-tauri-drag-region>
+    <div className={clsx('flex h-[58px] shrink-0 items-center border-b border-border bg-surface px-3', roomy ? 'gap-2' : 'gap-1.5')} data-tauri-drag-region>
       <div className="flex items-center gap-0.5 rounded-full bg-surface-2 p-1" role="toolbar" aria-label="Инструменты">
-        <ToolButtons tools={TOOLS} tool={tool} setTool={setTool} size={width < 1180 ? 33 : 38} />
+        <ToolButtons tools={TOOLS} tool={tool} setTool={setTool} size={roomy ? 38 : 33} />
         {props.extra && (
           <>
             <div className="mx-0.5 h-5 w-px shrink-0 bg-border-strong" />
-            {props.extra}
+            {props.extra(roomy ? 38 : 33)}
           </>
         )}
       </div>
 
       <Divider />
 
-      <ColorPicker color={color} setColor={setColor} compact={width < 1440} />
+      <ColorPicker color={color} setColor={setColor} compact={!pickers} />
 
       <Divider />
 
-      <SizePicker size={size} setSize={setSize} color={color} compact={width < 1440} />
+      <SizePicker size={size} setSize={setSize} color={color} compact={!pickers} />
 
       {tool === 'step' && (
         <>
@@ -216,10 +222,10 @@ export function Toolbar(props: {
 
       <Divider />
 
-      <IconButton tip="Отменить · Ctrl+Z" size={width < 1180 ? 32 : 36} disabled={!props.canUndo} onClick={props.undo}>
+      <IconButton tip="Отменить · Ctrl+Z" size={roomy ? 36 : 32} disabled={!props.canUndo} onClick={props.undo}>
         <Undo2 size={18} />
       </IconButton>
-      <IconButton tip="Повторить · Ctrl+Y" size={width < 1180 ? 32 : 36} disabled={!props.canRedo} onClick={props.redo}>
+      <IconButton tip="Повторить · Ctrl+Y" size={roomy ? 36 : 32} disabled={!props.canRedo} onClick={props.redo}>
         <Redo2 size={18} />
       </IconButton>
 
@@ -227,14 +233,14 @@ export function Toolbar(props: {
 
       <ResizePicker value={props.resize} onChange={props.setResize} source={props.source} />
 
-      <Button variant="secondary" icon={<Copy size={16} />} loading={busy === 'copy'} tip="Копировать в буфер · Ctrl+C" onClick={() => act('copy')}>
-        {width >= 1560 && 'Копировать'}
+      <Button variant="secondary" icon={<Copy size={16} />} loading={busy === 'copy'} tip="Копировать в буфер · Ctrl+C" tipPos="left" onClick={() => act('copy')}>
+        {labels && 'Копировать'}
       </Button>
-      <Button variant="secondary" icon={<Save size={16} />} loading={busy === 'saveAs'} tip="Сохранить… (куда и под каким именем) · Ctrl+S" onClick={() => act('saveAs')}>
-        {width >= 1560 && 'Сохранить'}
+      <Button variant="secondary" icon={<Save size={16} />} loading={busy === 'saveAs'} tip="Сохранить… (куда и под каким именем) · Ctrl+S" tipPos="left" onClick={() => act('saveAs')}>
+        {labels && 'Сохранить'}
       </Button>
       <Button variant="primary" icon={<Link2 size={17} />} loading={busy === 'upload'} tip="Загрузить в Box и скопировать ссылку · Ctrl+U" tipPos="left" onClick={() => act('upload')}>
-        {width >= 1180 ? 'Получить ссылку' : width >= 980 ? 'Ссылка' : null}
+        {roomy ? 'Получить ссылку' : width >= 1075 ? 'Ссылка' : null}
       </Button>
     </div>
   );

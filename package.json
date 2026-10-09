@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "tauri": "tauri",
-    "icons": "node scripts/render-logo.mjs && tauri icon assets/logo-1024.png && tauri icon assets/logo-dev-1024.png -o src-tauri/icons-dev",
+    "icons": "node scripts/render-logo.mjs && tauri icon assets/logo-1024.png",
     "screens": "node scripts/screens.mjs",
     "smoke": "node scripts/ui-smoke.mjs"
   },
