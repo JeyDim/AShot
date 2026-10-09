@@ -172,14 +172,21 @@ const check = (cond, msg) => {
   await page.mouse.down();
   await page.mouse.move(760, 540, { steps: 4 });
   await page.mouse.up();
-  // steps numbered from 5: the field shows the next number
+  // steps numbered from 5 (picked in the drop-down); the button shows the next number
   await page.keyboard.press('n');
-  const next = page.getByRole('textbox', { name: 'Следующий номер' });
-  await next.fill('5');
-  await next.press('Enter');
+  const next = page.getByRole('button', { name: 'Следующий номер' });
+  await next.click();
+  await page.getByRole('option', { name: '5', exact: true }).click();
   await page.mouse.click(250, 200);
   await page.mouse.click(250, 260);
-  check((await next.inputValue()) === '7', `step numbering starts from the typed number (next: ${await next.inputValue()})`);
+  check((await next.textContent()) === '7', `step numbering starts from the picked number (next: ${await next.textContent()})`);
+  // any number in the field, applied as you type
+  await next.click();
+  await page.getByRole('textbox', { name: 'Свой номер' }).fill('42');
+  await page.keyboard.press('Enter');
+  check((await next.textContent()) === '42', `custom step number (next: ${await next.textContent()})`);
+  await next.click();
+  await page.getByRole('option', { name: '7', exact: true }).click();
   // "Save as…" cancelled (the mock dialog returns null): the capture stays open
   await page.keyboard.press('Control+s');
   await page.waitForTimeout(300);

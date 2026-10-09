@@ -575,7 +575,7 @@ function hintFor(tool: Tool): string {
     case 'text':
       return 'Клик — новый текст, Enter — готово, Shift+Enter — новая строка';
     case 'step':
-      return 'Клик — следующий номер; с какого начать — в поле на панели';
+      return 'Клик — следующий номер; с какого начать — выберите номер на панели';
     case 'pixelate':
       return 'Выделите область, которую нужно скрыть';
     case 'crop':

@@ -21,7 +21,7 @@ import {
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, IconButton } from '../../components/ui';
 import type { Action } from '../../lib/types';
-import { MAX_STEP, PALETTE, type Tool } from './model';
+import { contrastText, MAX_STEP, PALETTE, type Tool } from './model';
 
 export const TOOLS: { id: Tool; label: string; key: string; icon: ReactNode }[] = [
   { id: 'select', label: 'Выбор и перемещение', key: 'V', icon: <MousePointer2 size={19} /> },
@@ -81,7 +81,7 @@ export function Toolbar(props: {
       {tool === 'step' && (
         <>
           <Divider />
-          <StepCounter value={props.stepNext} onChange={props.setStepNext} />
+          <StepPicker value={props.stepNext} onChange={props.setStepNext} color={color} />
         </>
       )}
 
@@ -155,7 +155,19 @@ function Swatches({ color, setColor }: { color: string; setColor: (c: string) =>
 }
 
 /** Button with a pop-up panel (color, stroke size). `up`: open above the button. */
-function Dropdown({ tip, face, up, children }: { tip: string; face: ReactNode; up?: boolean; children: (close: () => void) => ReactNode }) {
+function Dropdown({
+  tip,
+  face,
+  up,
+  panelClassName = 'flex items-center gap-2 rounded-full p-2',
+  children,
+}: {
+  tip: string;
+  face: ReactNode;
+  up?: boolean;
+  panelClassName?: string;
+  children: (close: () => void) => ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -168,13 +180,20 @@ function Dropdown({ tip, face, up, children }: { tip: string; face: ReactNode; u
   }, [open]);
   return (
     <div ref={ref} className="relative">
-      <button data-tip={open ? undefined : tip} data-tip-pos={up ? 'top' : undefined} onClick={() => setOpen((o) => !o)} className="flex h-9 items-center gap-1 rounded-full pr-1.5 pl-2 transition-colors hover:bg-text/6">
+      <button
+        aria-label={tip}
+        aria-expanded={open}
+        data-tip={open ? undefined : tip}
+        data-tip-pos={up ? 'top' : undefined}
+        onClick={() => setOpen((o) => !o)}
+        className="flex h-9 items-center gap-1 rounded-full pr-1.5 pl-2 transition-colors hover:bg-text/6"
+      >
         {face}
         <ChevronDown size={14} className={clsx('text-muted transition-transform', open && 'rotate-180')} />
       </button>
       {open && (
         <div
-          className="animate-pop-in fixed z-40 mt-2 flex items-center gap-2 rounded-full bg-elevated p-2 shadow-(--shadow-pop) ring-1 ring-border"
+          className={clsx('animate-pop-in fixed z-40 mt-2 bg-elevated shadow-(--shadow-pop) ring-1 ring-border', panelClassName)}
           // `fixed` escapes the scrolling toolbar; `up`: toolbar near the bottom of the screen.
           // `translate`, not `transform`: the pop-in animation owns `transform`.
           style={up ? { translate: '0 calc(-100% - 52px)' } : undefined}
@@ -256,48 +275,84 @@ export function SizePicker({ size, setSize, color, compact, up }: { size: number
   );
 }
 
-/** Number the step tool places next (numbering can start from any number). */
-export function StepCounter({ value, onChange, up }: { value: number; onChange: (n: number) => void; up?: boolean }) {
+/** Number the step tool places next: a drop-down from the number, like the color —
+ *  quick picks and a field for any other number (applied as you type). */
+export function StepPicker({ value, onChange, color, up }: { value: number; onChange: (n: number) => void; color: string; up?: boolean }) {
+  return (
+    <Dropdown
+      tip="Следующий номер"
+      up={up}
+      panelClassName="rounded-[18px] p-2"
+      face={
+        <span
+          className="flex h-[22px] min-w-[22px] items-center justify-center rounded-full px-1 text-[11px] leading-none font-bold tabular-nums"
+          style={{ background: color, color: contrastText(color) }}
+        >
+          {value}
+        </span>
+      }
+    >
+      {(close) => (
+        <div className="flex w-[196px] flex-col gap-2">
+          <div className="grid grid-cols-5 gap-1" role="listbox" aria-label="Номер">
+            {QUICK_STEPS.map((n) => (
+              <button
+                key={n}
+                role="option"
+                aria-selected={n === value}
+                onClick={() => {
+                  onChange(n);
+                  close();
+                }}
+                className={clsx('h-8 rounded-full text-[13px] font-semibold tabular-nums transition-colors', n === value ? 'bg-primary text-on-primary' : 'text-text hover:bg-text/8')}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+          <StepInput value={value} onChange={onChange} onDone={close} />
+        </div>
+      )}
+    </Dropdown>
+  );
+}
+
+const QUICK_STEPS = Array.from({ length: 15 }, (_, i) => i + 1);
+
+function StepInput({ value, onChange, onDone }: { value: number; onChange: (n: number) => void; onDone: () => void }) {
   const [text, setText] = useState(String(value));
-  const skipCommit = useRef(false);
   useEffect(() => setText(String(value)), [value]);
-  const commit = () => {
-    if (skipCommit.current) {
-      skipCommit.current = false;
-      setText(String(value));
-      return;
-    }
-    const n = parseInt(text, 10);
-    if (Number.isFinite(n) && n !== value) onChange(n);
-    else setText(String(value));
-  };
   const step = (d: number) => onChange(Math.min(MAX_STEP, Math.max(1, value + d)));
   return (
-    <div className="flex items-center rounded-full bg-surface-2 p-0.5" data-tip="Следующий номер" data-tip-pos={up ? 'top' : undefined}>
-      <button aria-label="Меньше" disabled={value <= 1} onClick={() => step(-1)} className="flex h-8 w-7 items-center justify-center rounded-full text-muted transition-colors hover:bg-text/6 hover:text-text disabled:opacity-35">
+    <div className="flex items-center rounded-full bg-surface-2 p-0.5">
+      <button aria-label="Меньше" disabled={value <= 1} onClick={() => step(-1)} className="flex h-8 w-8 items-center justify-center rounded-full text-muted transition-colors hover:bg-text/6 hover:text-text disabled:opacity-35">
         <Minus size={14} />
       </button>
       <input
-        aria-label="Следующий номер"
+        aria-label="Свой номер"
         inputMode="numeric"
+        placeholder="Свой"
         value={text}
-        onChange={(e) => setText(e.target.value.replace(/\D/g, '').slice(0, 3))}
+        onChange={(e) => {
+          const digits = e.target.value.replace(/\D/g, '').slice(0, 3);
+          setText(digits);
+          if (digits) onChange(parseInt(digits, 10));
+        }}
         onFocus={(e) => e.currentTarget.select()}
-        onBlur={commit}
+        onBlur={() => setText(String(value))}
         onKeyDown={(e) => {
           e.stopPropagation();
           if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
             e.preventDefault();
             step(e.key === 'ArrowUp' ? 1 : -1);
           } else if (e.key === 'Enter' || e.key === 'Escape') {
-            skipCommit.current = e.key === 'Escape';
-            e.currentTarget.blur();
+            onDone();
           }
         }}
         onWheel={(e) => step(e.deltaY < 0 ? 1 : -1)}
-        className="w-9 bg-transparent text-center text-[13px] font-semibold tabular-nums outline-none"
+        className="min-w-0 flex-1 bg-transparent text-center text-[13px] font-semibold tabular-nums outline-none placeholder:font-normal placeholder:text-muted"
       />
-      <button aria-label="Больше" disabled={value >= MAX_STEP} onClick={() => step(1)} className="flex h-8 w-7 items-center justify-center rounded-full text-muted transition-colors hover:bg-text/6 hover:text-text disabled:opacity-35">
+      <button aria-label="Больше" disabled={value >= MAX_STEP} onClick={() => step(1)} className="flex h-8 w-8 items-center justify-center rounded-full text-muted transition-colors hover:bg-text/6 hover:text-text disabled:opacity-35">
         <Plus size={14} />
       </button>
     </div>

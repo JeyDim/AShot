@@ -24,7 +24,7 @@ import { api, shotUrl } from '../lib/ipc';
 import type { Action, OverlayPrepare, Rect } from '../lib/types';
 import { emptyDoc, historyOf, imageScaleFor, translate, type History, type Tool } from './editor/model';
 import type { PixelSource } from './editor/pixelate';
-import { ColorPicker, SizePicker, StepCounter, TOOLS } from './editor/Toolbar';
+import { ColorPicker, SizePicker, StepPicker, TOOLS } from './editor/Toolbar';
 import { isHandle, shapeIdOf, useAnnotator } from './editor/useAnnotator';
 import {
   actionBarPosition,
@@ -789,7 +789,7 @@ export default function Overlay() {
       if (!st.img) return;
       const a = annRef.current;
       if (a.textEdit) return; // the textarea handles its own keys
-      if ((e.target as HTMLElement | null)?.tagName === 'INPUT') return; // step number field
+      if ((e.target as HTMLElement | null)?.tagName === 'INPUT') return; // custom step number field
       if (finishing.current) return; // e.g. the "Save as…" dialog is open
       const ctrl = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
@@ -976,7 +976,7 @@ export default function Overlay() {
           <BarDivider />
           <ColorPicker color={color} setColor={changeColor} compact up={barUp} />
           <SizePicker size={size} setSize={changeSize} color={color} compact up={barUp} />
-          {tool === 'step' && <StepCounter value={ann.stepNext} onChange={ann.setStepNext} up />}
+          {tool === 'step' && <StepPicker value={ann.stepNext} onChange={ann.setStepNext} color={color} up={barUp} />}
           <BarDivider />
           <BarButton tip="Копировать · Ctrl+C" onClick={() => finish('copy')}>
             <Copy size={18} />
