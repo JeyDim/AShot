@@ -3,6 +3,7 @@ import clsx from 'clsx';
 import {
   AppWindow,
   Check,
+  ChevronsDown,
   CloudUpload,
   Copy,
   Download,
@@ -116,7 +117,7 @@ export default function TrayPanel() {
             <Hero item={latest} busy={latest ? busy[latest.id] : undefined} run={run} onMenu={openMenu} hotkey={hk?.region ?? ''} />
 
             {/* Capture modes */}
-            <div className="grid grid-cols-3 gap-2 p-4">
+            <div className="grid grid-cols-4 gap-2 p-4">
               <ModeTile icon={<Scan size={22} />} label="Область" keys={hk?.region} onClick={() => api.capture('region')} main />
               <ModeTile icon={<AppWindow size={22} />} label="Окно" keys={hk?.window} onClick={() => capture('windowPick')} tip="Кликните по окну" />
               <ModeTile
@@ -125,6 +126,13 @@ export default function TrayPanel() {
                 keys={hk?.fullscreen}
                 onClick={() => capture('fullscreen')}
                 tip={settings?.fullscreenMode === 'allMonitors' ? 'Все мониторы — сразу в редактор' : 'Весь экран — сразу в редактор'}
+              />
+              <ModeTile
+                icon={<ChevronsDown size={22} />}
+                label="Прокрутка"
+                keys={hk?.scroll}
+                onClick={() => capture('scroll')}
+                tip={'Страница целиком: кликните по ней —\nAShot прокрутит и склеит'}
                 tipPos="top-left"
               />
             </div>
@@ -334,6 +342,8 @@ function ModeTile({
   tip?: string;
   tipPos?: 'top' | 'top-left';
 }) {
+  // Narrow tiles: Shift as ⇧ (Ctrl+⇧+PrtSc).
+  const shortcut = keys ? hotkeyParts(keys).map((k) => (k === 'Shift' ? '⇧' : k)).join('+') : '';
   return (
     <button
       onClick={onClick}
@@ -347,7 +357,7 @@ function ModeTile({
     >
       {icon}
       <span className="text-[12px] leading-tight font-medium">{label}</span>
-      <span className="font-mono text-[10px] leading-tight opacity-65">{keys ? hotkeyParts(keys).join('+') : '—'}</span>
+      <span className={clsx('font-mono leading-tight whitespace-nowrap opacity-65', shortcut.length > 11 ? 'text-[9px] tracking-tight' : 'text-[10px]')}>{shortcut || '—'}</span>
     </button>
   );
 }

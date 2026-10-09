@@ -22,6 +22,7 @@ pub fn apply(app: &AppHandle) -> Vec<String> {
         (CaptureMode::Region, hk.region, "Снимок области"),
         (CaptureMode::Window, hk.window, "Снимок окна"),
         (CaptureMode::Fullscreen, hk.fullscreen, "Весь экран"),
+        (CaptureMode::Scroll, hk.scroll, "Снимок с прокруткой"),
     ];
     for (mode, accel, title) in entries {
         let accel = accel.trim();
@@ -59,6 +60,11 @@ pub fn suspend(app: &AppHandle) {
 
 pub fn handle(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
     if event.state() != ShortcutState::Pressed {
+        return;
+    }
+    // Esc is registered only while a scrolling capture runs: it stops it.
+    if crate::scroll::is_stop_key(shortcut) {
+        crate::scroll::stop(app);
         return;
     }
     let mode = app.state::<AppState>().hotkeys.lock().unwrap().get(&shortcut.id()).copied();

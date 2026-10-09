@@ -186,8 +186,8 @@ pub fn open(
             preselect: preselect_here,
             auto_action,
             show_magnifier: settings.show_magnifier,
-            // The window mode highlights whole windows only.
-            ui_elements: cfg!(windows) && mode == CaptureMode::Region,
+            // The window mode highlights whole windows only (the scroll mode — scrolling areas).
+            ui_elements: cfg!(windows) && matches!(mode, CaptureMode::Region | CaptureMode::Scroll),
             cursor: session.cursor,
         };
         payloads.push((m, label(m.index), serde_json::to_value(&payload).map_err(|e| e.to_string())?));

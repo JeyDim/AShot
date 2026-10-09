@@ -244,17 +244,17 @@ export function Range({
   );
 }
 
-/** App logo (icon 09 «Захват курсором»: the A, a selection frame and the pointer) on an ink
- *  tile — white on dark in the light theme, inverted in the dark one. Same drawing as
- *  assets/logo.svg, on a 100-unit grid. */
+/** App logo (icon 9h «Пунктир вокруг A»: the A in a dashed lime frame and the lime pointer) on an
+ *  ink tile — white on dark in the light theme, inverted in the dark one. Same drawing as
+ *  assets/logo.svg, on a 100-unit grid; the pointer's dark outline parts it from the frame. */
 export function Logo({ size = 28, className, radius }: { size?: number; className?: string; radius?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 1024 1024" className={clsx('shrink-0', className)} aria-hidden>
       <rect width="1024" height="1024" rx={radius ?? 232} fill="var(--color-text)" />
-      <g transform="scale(10.24)" fill="none" stroke="var(--color-surface)" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M22 74L42 26L62 74M28.5 58.5H55.5" strokeWidth={7} />
-        <rect x="46" y="40" width="34" height="34" strokeWidth={3} strokeDasharray="5 5" />
-        <path d="M76 70L92 77L84 79L81 87Z" fill="var(--color-surface)" strokeWidth={2} />
+      <g transform="scale(10.24)" strokeLinejoin="round">
+        <rect x="12" y="12" width="64" height="64" fill="none" stroke="var(--color-lime)" strokeWidth={7} strokeDasharray="11.2 4.8" strokeDashoffset={5.6} />
+        <path d="M30 64L44 28L58 64M35 52H53" fill="none" stroke="var(--color-surface)" strokeWidth={10} strokeLinecap="round" />
+        <path d="M62 58L94 72L80 77L74 92Z" fill="var(--color-lime)" stroke="#111111" strokeWidth={6} />
       </g>
     </svg>
   );

@@ -12,6 +12,7 @@ use tauri::{AppHandle, Manager};
 use crate::actions;
 use crate::capture::{self, CaptureSession};
 use crate::overlay;
+use crate::scroll::{self, Ending};
 use crate::state::{Action, AppState, CaptureMode};
 use crate::ui::{self, Toast};
 
@@ -101,13 +102,15 @@ async fn run(app: &AppHandle, mode: CaptureMode) -> Result<(), String> {
             }
             None => overlay::open(app, &session, mode, None, auto),
         },
-        CaptureMode::Region | CaptureMode::WindowPick => {
-            // UI elements (buttons, panels…) are highlighted only in the region mode; the window
-            // mode highlights whole windows.
+        CaptureMode::Region | CaptureMode::WindowPick | CaptureMode::Scroll => {
+            // UI elements (buttons, panels…) are highlighted in the region mode, scrolling areas
+            // in the scroll mode; the window mode highlights whole windows.
             #[cfg(windows)]
-            if mode == CaptureMode::Region {
+            if matches!(mode, CaptureMode::Region | CaptureMode::Scroll) {
                 state.ui_selector.refresh(overlay::own_hwnds(app));
             }
+            // Scrolling starts as soon as the area is chosen: no drawing bar.
+            let auto = if mode == CaptureMode::Scroll { Some(auto.unwrap_or(Action::Edit)) } else { auto };
             overlay::open(app, &session, mode, None, auto)
         }
     }
@@ -128,8 +131,11 @@ pub async fn complete_with(
     save_to: Option<PathBuf>,
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
-    let session: Option<Arc<CaptureSession>> = state.session.lock().unwrap().take();
     let mode = state.flow.lock().unwrap().mode;
+    if mode == Some(CaptureMode::Scroll) {
+        return complete_scrolling(app, rect, action).await;
+    }
+    let session: Option<Arc<CaptureSession>> = state.session.lock().unwrap().take();
     overlay::hide_all(app);
     release(app);
     let session = session.ok_or("снимок экрана устарел, попробуйте ещё раз")?;
@@ -140,6 +146,32 @@ pub async fn complete_with(
         .map_err(|e| e.to_string())??;
     let source = mode.map(|m| m.source()).unwrap_or("region");
     actions::process_capture(app, image, source, action, annotated, save_to).await
+}
+
+/// Scroll mode: the live screen of `rect` is scrolled and glued (the frozen picture is not
+/// needed any more); the capture stays busy until it ends.
+async fn complete_scrolling(app: &AppHandle, rect: Rect, action: Action) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    state.session.lock().unwrap().take();
+    state.flow.lock().unwrap().started = Some(Instant::now());
+    overlay::hide_all(app);
+    #[cfg(windows)]
+    state.ui_selector.release();
+    let outcome = scroll::run(app, rect).await;
+    release(app);
+    let outcome = outcome?;
+    let note = match outcome.ending {
+        Ending::NotScrollable => Some("Область не прокручивается — снят один экран".to_string()),
+        Ending::Lost => Some("Дальше склеить не удалось: страница сильно менялась при прокрутке. Снимок — до этого места".to_string()),
+        Ending::Limit => Some(format!("Достигнут предел — {} px в высоту", scroll::MAX_HEIGHT)),
+        Ending::End | Ending::Stopped => None,
+    };
+    actions::process_capture(app, outcome.image, CaptureMode::Scroll.source(), action, None, None).await?;
+    // Other actions report with their own toast.
+    if let (Some(note), Action::Edit) = (note, action) {
+        ui::toast(app, Toast::info("Снимок с прокруткой").message(note).timeout(8000));
+    }
+    Ok(())
 }
 
 /// Aborts the capture (Esc / right click / error).

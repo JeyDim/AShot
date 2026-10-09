@@ -11,6 +11,7 @@ mod flow;
 mod hotkeys;
 mod overlay;
 mod protocol;
+mod scroll;
 mod secrets;
 mod state;
 mod tray;
@@ -25,7 +26,7 @@ use tauri_plugin_autostart::MacosLauncher;
 use state::{AppState, CaptureMode};
 use ui::Toast;
 
-/// Command line: `--capture region|window|fullscreen`, `--panel`, `--autostart`.
+/// Command line: `--capture region|window|fullscreen|scroll`, `--panel`, `--autostart`.
 fn handle_args(app: &AppHandle, args: &[String], from_second_instance: bool) {
     let mut iter = args.iter().skip(1);
     while let Some(arg) = iter.next() {
@@ -34,6 +35,7 @@ fn handle_args(app: &AppHandle, args: &[String], from_second_instance: bool) {
                 let mode = match iter.next().map(String::as_str) {
                     Some("window") => CaptureMode::Window,
                     Some("fullscreen") => CaptureMode::Fullscreen,
+                    Some("scroll") => CaptureMode::Scroll,
                     _ => CaptureMode::Region,
                 };
                 flow::start(app, mode);
@@ -83,6 +85,8 @@ pub fn run() {
             commands::overlay_finish_annotated,
             commands::overlay_cancel,
             commands::overlay_hit_test,
+            commands::overlay_scroll_target,
+            commands::scroll_stop,
             commands::history_list,
             commands::history_get,
             commands::history_annotations,
@@ -146,7 +150,7 @@ pub fn run() {
                 );
             } else if !settings.welcomed {
                 let hk = &settings.hotkeys;
-                let keys: Vec<String> = [(&hk.region, "область"), (&hk.window, "окно"), (&hk.fullscreen, "экран")]
+                let keys: Vec<String> = [(&hk.region, "область"), (&hk.window, "окно"), (&hk.fullscreen, "экран"), (&hk.scroll, "с прокруткой")]
                     .into_iter()
                     .filter(|(accel, _)| !accel.trim().is_empty())
                     .map(|(accel, what)| format!("{} — {what}", shoter_core::settings::hotkey_label(accel)))

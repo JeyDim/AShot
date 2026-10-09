@@ -82,6 +82,8 @@ pub struct Hotkeys {
     pub region: String,
     pub window: String,
     pub fullscreen: String,
+    /// Scrolling capture (whole web pages).
+    pub scroll: String,
 }
 
 /// Every capture has a hotkey by default (like Greenshot: Alt — window, Shift — screen).
@@ -91,25 +93,40 @@ impl Default for Hotkeys {
             region: "Control+PrintScreen".into(),
             window: "Alt+PrintScreen".into(),
             fullscreen: "Shift+PrintScreen".into(),
+            scroll: "Control+Shift+PrintScreen".into(),
         }
     }
 }
 
 impl Hotkeys {
+    fn all_mut(&mut self) -> [&mut String; 4] {
+        [&mut self.region, &mut self.window, &mut self.fullscreen, &mut self.scroll]
+    }
+
     /// Gives empty hotkeys their defaults, unless the combination is already used.
     fn fill_defaults(&mut self) {
         let d = Hotkeys::default();
-        for (value, default) in [(&mut self.region, d.region), (&mut self.window, d.window), (&mut self.fullscreen, d.fullscreen)] {
+        for (value, default) in self.all_mut().into_iter().zip([d.region, d.window, d.fullscreen, d.scroll]) {
             if value.trim().is_empty() {
                 *value = default;
             }
         }
-        // Never two captures on one combination: the later one gives its default up.
-        if self.window == self.region {
-            self.window.clear();
-        }
-        if self.fullscreen == self.region || self.fullscreen == self.window {
-            self.fullscreen.clear();
+        self.dedupe();
+    }
+
+    /// Never two captures on one combination: the later one (in the order of the settings
+    /// page) gives it up.
+    fn dedupe(&mut self) {
+        let mut seen: Vec<String> = Vec::new();
+        for value in self.all_mut() {
+            if value.is_empty() {
+                continue;
+            }
+            if seen.contains(value) {
+                value.clear();
+            } else {
+                seen.push(value.clone());
+            }
         }
     }
 }
@@ -325,7 +342,7 @@ impl ResizeSettings {
 }
 
 /// Version of the settings file written by this build (see [`AppSettings::migrate`]).
-pub const SETTINGS_VERSION: u32 = 2;
+pub const SETTINGS_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -434,6 +451,10 @@ impl AppSettings {
             // Only the region capture used to have a hotkey; now every capture has one.
             self.hotkeys.fill_defaults();
         }
+        if self.version < 3 {
+            // The scrolling capture came with a default hotkey another capture may already use.
+            self.hotkeys.dedupe();
+        }
         self.version = SETTINGS_VERSION;
         self
     }
@@ -532,6 +553,7 @@ mod tests {
         assert_eq!(s.hotkeys.region, "Control+PrintScreen");
         assert_eq!(s.hotkeys.window, "Alt+PrintScreen");
         assert_eq!(s.hotkeys.fullscreen, "Shift+PrintScreen");
+        assert_eq!(s.hotkeys.scroll, "Control+Shift+PrintScreen");
         assert_eq!(s.version, SETTINGS_VERSION);
         assert_eq!(s.box_.shared_link_access, "open");
         // No folder id needed: the "AShot" folder is created automatically.
@@ -587,6 +609,12 @@ mod tests {
         std::fs::write(&path, br#"{"hotkeys":{"region":"Alt+PrintScreen","window":"","fullscreen":"F8"}}"#).unwrap();
         let s = AppSettings::load(&path);
         assert_eq!((s.hotkeys.region.as_str(), s.hotkeys.window.as_str(), s.hotkeys.fullscreen.as_str()), ("Alt+PrintScreen", "", "F8"));
+        // Version 2 had no scrolling capture: it gets its default, unless that is taken.
+        std::fs::write(&path, br#"{"version":2,"hotkeys":{"region":"Control+Shift+PrintScreen","window":"","fullscreen":"F8"}}"#).unwrap();
+        let s = AppSettings::load(&path);
+        assert_eq!((s.hotkeys.window.as_str(), s.hotkeys.scroll.as_str()), ("", ""), "cleared stays cleared, taken is not reused");
+        std::fs::write(&path, br#"{"version":2,"hotkeys":{"region":"F9","window":"","fullscreen":""}}"#).unwrap();
+        assert_eq!(AppSettings::load(&path).hotkeys.scroll, "Control+Shift+PrintScreen");
         // After the migration a cleared hotkey stays cleared.
         let mut s = AppSettings::default();
         s.hotkeys.window.clear();

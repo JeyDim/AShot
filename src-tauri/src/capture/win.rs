@@ -179,6 +179,11 @@ struct Cursor {
     at: (i32, i32),
 }
 
+/// The screen inside `rect` as it is now, without the cursor (scrolling capture).
+pub fn grab(rect: Rect) -> Result<RgbaImage, String> {
+    capture_rect(rect, None)
+}
+
 /// Captures one monitor rectangle with BitBlt and optionally draws the cursor.
 fn capture_rect(rect: Rect, cursor: Option<&Cursor>) -> Result<RgbaImage, String> {
     let (w, h) = (rect.width as i32, rect.height as i32);

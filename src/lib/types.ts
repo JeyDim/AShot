@@ -5,7 +5,7 @@ export type FullscreenMode = 'currentMonitor' | 'allMonitors';
 export type ThemeSetting = 'system' | 'light' | 'dark';
 export type ImageFormat = 'png' | 'jpeg' | 'webp';
 export type BoxAuthMode = 'oAuth' | 'clientCredentials' | 'developerToken';
-export type CaptureMode = 'region' | 'window' | 'windowPick' | 'fullscreen';
+export type CaptureMode = 'region' | 'window' | 'windowPick' | 'fullscreen' | 'scroll';
 export type Action = 'edit' | 'copy' | 'save' | 'saveAs' | 'upload' | 'store';
 
 export interface Rect {
@@ -19,6 +19,8 @@ export interface Hotkeys {
   region: string;
   window: string;
   fullscreen: string;
+  /** Scrolling capture. */
+  scroll: string;
 }
 
 export interface BoxSettings {
@@ -171,6 +173,8 @@ export interface ToastPayload {
   historyId: string | null;
   /** Offer "Retry" for a failed upload of `historyId`. */
   retryUpload: boolean;
+  /** Offer "Stop" for the running scrolling capture. */
+  stopScroll?: boolean;
   timeoutMs: number;
 }
 

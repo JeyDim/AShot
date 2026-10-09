@@ -5,6 +5,7 @@ import {
   AppWindow,
   Check,
   ChevronRight,
+  ChevronsDown,
   Cloud,
   Copy,
   Download,
@@ -332,13 +333,14 @@ function General({ s, update }: { s: AppSettings; update: Update }) {
 // ---------------------------------------------------------------- Горячие клавиши
 
 // Every capture has a hotkey by default (same as `Hotkeys::default` in Rust).
-const DEFAULT_HOTKEYS: Hotkeys = { region: 'Control+PrintScreen', window: 'Alt+PrintScreen', fullscreen: 'Shift+PrintScreen' };
+const DEFAULT_HOTKEYS: Hotkeys = { region: 'Control+PrintScreen', window: 'Alt+PrintScreen', fullscreen: 'Shift+PrintScreen', scroll: 'Control+Shift+PrintScreen' };
 
 function HotkeysSection({ value, onChange }: { value: Hotkeys; onChange: (h: Hotkeys) => void }) {
   const rows: { key: keyof Hotkeys; label: string; hint: string; icon: ReactNode }[] = [
     { key: 'region', label: 'Снимок области', hint: 'Выделение мышью, клик — окно или элемент', icon: <Scan size={20} /> },
     { key: 'window', label: 'Снимок активного окна', hint: 'Окно в фокусе сразу выделено, можно подправить', icon: <AppWindow size={20} /> },
     { key: 'fullscreen', label: 'Весь экран', hint: 'Сразу в редактор: монитор под курсором или все мониторы', icon: <Monitor size={20} /> },
+    { key: 'scroll', label: 'Снимок с прокруткой', hint: 'Страница целиком: AShot прокрутит область и склеит', icon: <ChevronsDown size={20} /> },
   ];
   const isDefault = (Object.keys(DEFAULT_HOTKEYS) as (keyof Hotkeys)[]).every((k) => value[k] === DEFAULT_HOTKEYS[k]);
   return (

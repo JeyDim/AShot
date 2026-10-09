@@ -230,6 +230,8 @@ pub struct Toast {
     pub history_id: Option<String>,
     /// Offer "Retry" for a failed upload of `history_id`.
     pub retry_upload: bool,
+    /// Offer "Stop" for the running scrolling capture.
+    pub stop_scroll: bool,
     /// 0 = stays until replaced/closed.
     pub timeout_ms: u64,
 }
@@ -267,6 +269,10 @@ impl Toast {
         self.retry_upload = true;
         self
     }
+    pub fn stop_scroll(mut self) -> Self {
+        self.stop_scroll = true;
+        self
+    }
     pub fn timeout(mut self, ms: u64) -> Self {
         self.timeout_ms = ms;
         self
@@ -292,6 +298,14 @@ pub fn create_toast(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .theme(window_theme(app))
         .build()?;
     let _ = window.set_zoom(ui_scale(app));
+    // Never in screenshots: the scrolling capture shows its progress over the area it grabs.
+    #[cfg(windows)]
+    if let Ok(hwnd) = window.hwnd() {
+        use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE};
+        if let Err(e) = unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) } {
+            log::warn!("toast: cannot exclude it from screen capture: {e}");
+        }
+    }
     Ok(window)
 }
 

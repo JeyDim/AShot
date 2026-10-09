@@ -21,7 +21,7 @@ const settings: AppSettings = {
   fileNamePattern: 'Screenshot {date} {time}',
   imageFormat: 'png',
   jpegQuality: 90,
-  hotkeys: { region: 'Control+PrintScreen', window: 'Alt+PrintScreen', fullscreen: 'Shift+PrintScreen' },
+  hotkeys: { region: 'Control+PrintScreen', window: 'Alt+PrintScreen', fullscreen: 'Shift+PrintScreen', scroll: 'Control+Shift+PrintScreen' },
   box: { authMode: 'oAuth', clientId: 'k2x8v1n0q9example', enterpriseId: '', userId: '', folderId: '', folderName: 'AShot', sharedLinkAccess: 'open', redirectUri: '' },
   links: { rewrite: true, template: '', copyAfterUpload: true, openAfterUpload: false },
   editor: { color: '#FF3B30', size: 1 },
@@ -97,7 +97,7 @@ export async function installMocks() {
     return desktop;
   };
 
-  // `&mode=windowPick` — the window mode (whole windows only).
+  // `&mode=windowPick` — the window mode (whole windows only); `&mode=scroll` — scrolling capture.
   const mode = (query.get('mode') as CaptureMode | null) ?? 'region';
   const overlay: OverlayPrepare = {
     label: 'overlay-0',
@@ -111,9 +111,10 @@ export async function installMocks() {
     ],
     mode,
     preselect: new URLSearchParams(location.search).has('selected') ? { x: 560, y: 120, width: 1100, height: 700 } : null,
-    autoAction: null,
+    // The scroll mode starts scrolling right after the area is chosen.
+    autoAction: mode === 'scroll' ? 'edit' : null,
     showMagnifier: true,
-    uiElements: mode === 'region',
+    uiElements: mode === 'region' || mode === 'scroll',
     cursor: [1250, 560],
   };
 
@@ -196,6 +197,12 @@ export async function installMocks() {
           return overlay;
         case 'overlay_hit_test':
           return [];
+        case 'overlay_scroll_target': {
+          // The page of the "Box" window (under its title and address bars).
+          const page = { x: 560, y: 190, width: 1100, height: 630 };
+          const { x, y } = a as { x: number; y: number };
+          return x >= page.x && y >= page.y && x < page.x + page.width && y < page.y + page.height ? [page] : [];
+        }
         case 'overlay_save_path': {
           // Scripts set `window.__savePath`; null — the dialog was cancelled.
           const w = window as unknown as { __savePath?: string; __saveDialogs?: number };
@@ -248,6 +255,7 @@ export async function installMocks() {
         historyId: null,
       },
       saved: { ...base, kind: 'success', title: 'Сохранено', message: 'Screenshot 2026-10-08 14-21-07.png', path: 'C:\\x.png' },
+      scroll: { ...base, kind: 'progress', title: 'Снимок с прокруткой', message: '7 кадров · 4120 px · Esc — остановить', historyId: null, stopScroll: true },
     };
     setTimeout(() => emit('toast:show', payloads[kind] ?? payloads.success), 1000);
   }

@@ -25,6 +25,8 @@ pub enum CaptureMode {
     /// Interactive selection with the "click a window" hint (tray button).
     WindowPick,
     Fullscreen,
+    /// Select an area, then AShot scrolls it and glues the frames (whole web pages).
+    Scroll,
 }
 
 impl CaptureMode {
@@ -33,6 +35,7 @@ impl CaptureMode {
             CaptureMode::Region => "region",
             CaptureMode::Window | CaptureMode::WindowPick => "window",
             CaptureMode::Fullscreen => "fullscreen",
+            CaptureMode::Scroll => "scroll",
         }
     }
 }
@@ -88,6 +91,8 @@ pub struct AppState {
     /// user starts a new sign-in (e.g. closed the browser tab and clicked again).
     pub box_login: tokio::sync::Mutex<()>,
     pub box_login_cancel: tokio::sync::Notify,
+    /// Set while a scrolling capture runs: raising the flag stops it (Esc, "Stop").
+    pub scroll_stop: Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>,
     /// Last toast, pulled by the toast page when it loads after the event was sent.
     pub last_toast: Mutex<Option<(crate::ui::Toast, Instant)>>,
     #[cfg(windows)]
@@ -137,6 +142,7 @@ impl AppState {
             hotkeys: Mutex::new(HashMap::new()),
             panel_hidden_at: Mutex::new(None),
             last_toast: Mutex::new(None),
+            scroll_stop: Mutex::new(None),
             box_login: tokio::sync::Mutex::new(()),
             box_login_cancel: tokio::sync::Notify::new(),
             #[cfg(windows)]

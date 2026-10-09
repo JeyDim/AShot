@@ -203,6 +203,38 @@ const check = (cond, msg) => {
   await page.close();
 }
 
+// ---------------------------------------------------------------- scroll mode: a click on the page starts it
+{
+  const page = await browser.newPage({ viewport: { width: 1440, height: 810 } });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const calls = [];
+  await page.exposeFunction('__record', (c) => calls.push(c));
+  await page.goto(`${base}?mock&mode=scroll#/overlay`);
+  await page.waitForTimeout(900);
+  await page.evaluate(() => {
+    const { __TAURI_INTERNALS__: t } = window;
+    const orig = t.invoke;
+    t.invoke = (cmd, args, opts) => {
+      if (cmd === 'overlay_finish') window.__record({ cmd, args });
+      return orig(cmd, args, opts);
+    };
+  });
+  // The page area of the window is highlighted (not the whole window); a click takes it and
+  // finishes right away — no drawing bar, the scrolling starts.
+  await page.mouse.move(800, 400);
+  await page.waitForTimeout(150);
+  await page.mouse.move(805, 402);
+  await page.waitForTimeout(250);
+  await page.mouse.click(805, 402);
+  for (let i = 0; i < 50 && !calls.length; i++) await page.waitForTimeout(100);
+  const fin = calls[0]?.args;
+  check(fin?.action === 'edit' && JSON.stringify(fin?.rect) === JSON.stringify({ x: 560, y: 190, width: 1100, height: 630 }), `scroll mode takes the page area at once (${JSON.stringify(fin)})`);
+  check(!(await page.getByRole('toolbar', { name: 'Инструменты' }).isVisible().catch(() => false)), 'scroll mode shows no drawing bar');
+  check(errors.length === 0, `no page errors ${errors.join('; ')}`);
+  await page.close();
+}
+
 // ---------------------------------------------------------------- multi-monitor: foreign payloads
 {
   const page = await browser.newPage({ viewport: { width: 1440, height: 810 } });

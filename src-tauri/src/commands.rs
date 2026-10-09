@@ -274,6 +274,27 @@ pub async fn overlay_hit_test(app: AppHandle, x: i32, y: i32) -> Vec<Rect> {
     }
 }
 
+/// Scroll mode: the scrolling area under a point (a browser's page, a document) —
+/// `[rect]`, or nothing (the overlay then highlights the window).
+#[tauri::command]
+pub async fn overlay_scroll_target(app: AppHandle, x: i32, y: i32) -> Vec<Rect> {
+    #[cfg(windows)]
+    {
+        app.state::<AppState>().ui_selector.scroll_target(x, y).await
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (app, x, y);
+        Vec::new()
+    }
+}
+
+/// "Stop" in the progress toast of a scrolling capture.
+#[tauri::command]
+pub fn scroll_stop(app: AppHandle) {
+    crate::scroll::stop(&app);
+}
+
 // ---------------------------------------------------------------- history
 
 #[derive(Serialize)]

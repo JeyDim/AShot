@@ -461,7 +461,9 @@ export default function Overlay() {
     st.lastQuery = { x, y };
     const b = st.prep.monitor.bounds;
     try {
-      const rects = await api.overlayHitTest(Math.round(x + b.x), Math.round(y + b.y));
+      // Scroll mode: the scrolling area (a browser's page) instead of UI elements.
+      const query = st.prep.mode === 'scroll' ? api.overlayScrollTarget : api.overlayHitTest;
+      const rects = await query(Math.round(x + b.x), Math.round(y + b.y));
       const path = rects.map(local).filter((r) => r.width >= 6 && r.height >= 6);
       // Keep the chosen level when only the deepest element changed size slightly.
       const changed = path.length !== st.path.length || path.some((r, i) => r.x !== st.path[i]?.x || r.width !== st.path[i]?.width);
@@ -977,7 +979,13 @@ export default function Overlay() {
 
       {hint && imageSrc && (
         <div className="animate-fade-in pointer-events-none absolute top-6 left-1/2 flex -translate-x-1/2 items-center gap-3 rounded-full bg-surface/95 px-5 py-2.5 text-[13px] text-text shadow-(--shadow-pop)">
-          <span className="font-medium">{mode === 'windowPick' || mode === 'window' ? 'Кликните по окну' : 'Выделите область или кликните по окну'}</span>
+          <span className="font-medium">
+            {mode === 'windowPick' || mode === 'window'
+              ? 'Кликните по окну'
+              : mode === 'scroll'
+                ? 'Кликните по странице или выделите область — AShot прокрутит её сам'
+                : 'Выделите область или кликните по окну'}
+          </span>
           <span className="text-subtle">·</span>
           {mode === 'region' && (
             <>

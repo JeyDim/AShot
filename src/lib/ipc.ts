@@ -38,6 +38,10 @@ export const api = {
   },
   overlayCancel: () => invoke<void>('overlay_cancel'),
   overlayHitTest: (x: number, y: number) => invoke<Rect[]>('overlay_hit_test', { x, y }),
+  /** Scroll mode: the scrolling area (a browser's page) under a point — `[rect]` or `[]`. */
+  overlayScrollTarget: (x: number, y: number) => invoke<Rect[]>('overlay_scroll_target', { x, y }),
+  /** Stops the running scrolling capture (what is glued so far is kept). */
+  scrollStop: () => invoke<void>('scroll_stop'),
 
   historyList: () => invoke<HistoryItem[]>('history_list'),
   historyGet: (id: string) => invoke<HistoryItem>('history_get', { id }),
