@@ -20,7 +20,7 @@ mod ui;
 mod uiselect;
 mod updater;
 
-use tauri::{AppHandle, Manager, RunEvent};
+use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 use tauri_plugin_autostart::MacosLauncher;
 
 use state::{AppState, CaptureMode};
@@ -172,10 +172,11 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building AShot")
-        .run(|_app, event| {
+        .run(|app, event| match event {
             // Tray application: closing the last window must not quit.
-            if let RunEvent::ExitRequested { code: None, api, .. } = event {
-                api.prevent_exit();
-            }
+            RunEvent::ExitRequested { code: None, api, .. } => api.prevent_exit(),
+            // Windows switched dark / light (the overlays, always there, follow it).
+            RunEvent::WindowEvent { event: WindowEvent::ThemeChanged(_), .. } => tray::theme_changed(app),
+            _ => {}
         });
 }
