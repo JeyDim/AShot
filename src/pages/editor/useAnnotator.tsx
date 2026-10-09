@@ -127,10 +127,14 @@ export function useAnnotator(o: AnnotatorOptions) {
   const textRef = useRef<TextEdit | null>(null);
   textRef.current = textEdit;
   // Number typed into the "next number" field; null — continue after the last step.
-  const [stepOverride, setStepOverride] = useState<number | null>(null);
+  const [stepOverride, setStepOverrideState] = useState<number | null>(null);
   const stepNext = stepOverride ?? nextStep(doc.shapes);
-  const stepNextRef = useRef(stepNext);
-  stepNextRef.current = stepNext;
+  // Read by pointer handlers: quick clicks may come before React re-renders.
+  const stepOverrideRef = useRef<number | null>(null);
+  const setStepOverride = (n: number | null) => {
+    stepOverrideRef.current = n;
+    setStepOverrideState(n);
+  };
 
   const selected = doc.shapes.find((s) => s.id === selectedId) ?? null;
 
@@ -255,10 +259,13 @@ export function useAnnotator(o: AnnotatorOptions) {
       return true;
     }
     if (tool === 'step') {
-      const s: Shape = { id: newId(), type: 'step', x: p.x, y: p.y, n: stepNextRef.current, color, size };
-      applyFn((d) => addShape(d, s));
+      // The number comes from the latest document (inside the update), so two quick clicks
+      // never get the same one.
+      const id = newId();
+      const override = stepOverrideRef.current;
+      applyFn((d) => addShape(d, { id, type: 'step', x: p.x, y: p.y, n: override ?? nextStep(d.shapes), color, size }));
       setStepOverride(null);
-      setSelectedId(s.id);
+      setSelectedId(id);
       return true;
     }
     setSelectedId(null);
@@ -527,7 +534,12 @@ export function useAnnotator(o: AnnotatorOptions) {
       <textarea
         autoFocus
         ref={(el) => {
-          if (el && document.activeElement !== el) requestAnimationFrame(() => el.focus());
+          // Focus right away (the text may open on mouse up, after the click focused
+          // something else) and once more after the frame, in case something took it back.
+          if (el && document.activeElement !== el) {
+            el.focus();
+            requestAnimationFrame(() => document.activeElement !== el && el.isConnected && el.focus());
+          }
         }}
         value={textEdit.text}
         placeholder="Текст"

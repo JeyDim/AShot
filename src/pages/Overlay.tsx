@@ -807,7 +807,12 @@ export default function Overlay() {
       const st = s.current;
       if (!st.img) return;
       const a = annRef.current;
-      if (a.textEdit) return; // the textarea handles its own keys
+      if (a.textEdit) {
+        // The textarea handles its own keys; an open text that never got the focus must not
+        // swallow the shortcuts — commit it and go on.
+        if (document.activeElement?.tagName === 'TEXTAREA') return;
+        a.commitText();
+      }
       if ((e.target as HTMLElement | null)?.tagName === 'INPUT') return; // custom step number field
       if (finishing.current) return; // e.g. the "Save as…" dialog is open
       const ctrl = e.ctrlKey || e.metaKey;

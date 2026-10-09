@@ -184,9 +184,12 @@ export async function installMocks() {
           return overlay;
         case 'overlay_hit_test':
           return [];
-        case 'overlay_save_path':
+        case 'overlay_save_path': {
           // Scripts set `window.__savePath`; null — the dialog was cancelled.
-          return (window as unknown as { __savePath?: string }).__savePath ?? null;
+          const w = window as unknown as { __savePath?: string; __saveDialogs?: number };
+          w.__saveDialogs = (w.__saveDialogs ?? 0) + 1;
+          return w.__savePath ?? null;
+        }
         case 'overlay_finish_annotated':
         case 'editor_commit': {
           // Exposed for scripts/ui-smoke.mjs: parse [u32 json len][json][png].

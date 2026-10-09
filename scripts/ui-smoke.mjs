@@ -6,6 +6,19 @@ const base = process.env.BASE_URL || 'http://localhost:4173/';
 const executablePath = process.env.CHROMIUM_PATH || undefined;
 const browser = await chromium.launch(executablePath ? { executablePath } : {});
 let failures = 0;
+// CI runners are slow: wait for what the page reports instead of fixed pauses.
+const commitCount = (page, n, timeout = 10000) =>
+  page.waitForFunction((k) => (window.__commits ?? []).length >= k, n, { timeout }).catch(() => {});
+/** Text of a locator once it equals `want` (or whatever it is after the timeout). */
+async function textSettles(locator, want, timeout = 5000) {
+  const end = Date.now() + timeout;
+  let text = await locator.textContent();
+  while (text !== want && Date.now() < end) {
+    await new Promise((r) => setTimeout(r, 50));
+    text = await locator.textContent();
+  }
+  return text;
+}
 const check = (cond, msg) => {
   console.log(`${cond ? '✓' : '✗'} ${msg}`);
   if (!cond) failures++;
@@ -55,7 +68,7 @@ const check = (cond, msg) => {
   await page.keyboard.press('Control+y');
 
   await page.keyboard.press('Control+c');
-  await page.waitForTimeout(800);
+  await commitCount(page, 1);
   let c = await commits();
   check(c.length === 1, 'Ctrl+C sends the rendered image');
   check(c[0]?.shapes === 7 + 5, `document has all shapes (got ${c[0]?.shapes}, want 12)`);
@@ -71,7 +84,7 @@ const check = (cond, msg) => {
   await page.keyboard.press('Enter');
   await page.waitForTimeout(200);
   await page.keyboard.press('Control+c');
-  await page.waitForTimeout(800);
+  await commitCount(page, 2);
   c = await commits();
   const last = c[c.length - 1];
   check(!!last?.crop, 'crop stored in the document');
@@ -108,7 +121,7 @@ const check = (cond, msg) => {
     };
   });
   await page.keyboard.press('Control+u');
-  await page.waitForTimeout(300);
+  for (let i = 0; i < 100 && !calls.some((c) => c.cmd === 'overlay_finish'); i++) await page.waitForTimeout(100);
   const fin = calls.find((c) => c.cmd === 'overlay_finish');
   const k = 1920 / 1440;
   check(!!fin, 'Ctrl+U finishes the capture');
@@ -144,6 +157,9 @@ const check = (cond, msg) => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 810 } });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
+  // finish() reports its failures with console.error — print them if a check fails here.
+  const consoleErrors = [];
+  page.on('console', (m) => m.type() === 'error' && !m.text().includes('Failed to load resource') && consoleErrors.push(m.text()));
   await page.goto(`${base}?mock#/overlay`);
   await page.waitForTimeout(900);
   await page.mouse.move(200, 150);
@@ -179,12 +195,14 @@ const check = (cond, msg) => {
   await page.getByRole('option', { name: '5', exact: true }).click();
   await page.mouse.click(250, 200);
   await page.mouse.click(250, 260);
-  check((await next.textContent()) === '7', `step numbering starts from the picked number (next: ${await next.textContent()})`);
+  const afterTwo = await textSettles(next, '7');
+  check(afterTwo === '7', `step numbering starts from the picked number (next: ${afterTwo})`);
   // any number in the field, applied as you type
   await next.click();
   await page.getByRole('textbox', { name: 'Свой номер' }).fill('42');
   await page.keyboard.press('Enter');
-  check((await next.textContent()) === '42', `custom step number (next: ${await next.textContent()})`);
+  const custom = await textSettles(next, '42');
+  check(custom === '42', `custom step number (next: ${custom})`);
   await next.click();
   await page.getByRole('option', { name: '7', exact: true }).click();
   // text tool dragged: an arrow to the press point + the text at its tail (one step each)
@@ -204,15 +222,27 @@ const check = (cond, msg) => {
   check(await page.getByRole('toolbar', { name: 'Инструменты' }).isVisible(), 'Esc closes the drop-down, not the capture');
   // "Save as…" cancelled (the mock dialog returns null): the capture stays open
   await page.keyboard.press('Control+s');
-  await page.waitForTimeout(300);
+  // the (mock) dialog was shown and cancelled
+  await page.waitForFunction(() => window.__saveDialogs >= 1, null, { timeout: 10000 }).catch(() => {});
+  check((await page.evaluate(() => window.__saveDialogs)) === 1, '"Save as…" asks for the file before closing the capture');
+  await page.waitForTimeout(200);
   check(await page.getByRole('toolbar', { name: 'Инструменты' }).isVisible(), 'cancelled "Save as…" keeps the overlay');
   check(!(await page.evaluate(() => window.__commits ?? [])).length, 'cancelled "Save as…" sends nothing');
   await page.keyboard.press('Control+c');
-  await page.waitForTimeout(800);
+  await commitCount(page, 1);
   const c = await page.evaluate(() => window.__commits ?? []);
   const k = 1920 / 1440;
   const last = c[c.length - 1];
   check(last?.cmd === 'overlay_finish_annotated', 'Ctrl+C sends the annotated image');
+  if (!last) {
+    const state = await page.evaluate(() => ({
+      active: `${document.activeElement?.tagName} ${document.activeElement?.getAttribute('aria-label') ?? ''}`,
+      textareas: document.querySelectorAll('textarea').length,
+      hasFocus: document.hasFocus(),
+      saveDialogs: window.__saveDialogs,
+    }));
+    console.log('  overlay state:', JSON.stringify(state), 'console errors:', JSON.stringify(consoleErrors));
+  }
   check(last?.shapes === 6, `drawings inside the selection only, callout = arrow + text (got ${last?.shapes}, want 6)`);
   check(last && Math.abs(last.width - Math.round(560 * k)) <= 2 && Math.abs(last.height - Math.round(390 * k)) <= 2, `image has the resized selection size (${last?.width}×${last?.height})`);
   check(errors.length === 0, `no page errors ${errors.join('; ')}`);

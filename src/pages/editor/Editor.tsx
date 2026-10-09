@@ -361,7 +361,12 @@ export default function Editor({ id }: { id: string }) {
   // ------------------------------------------------------------ keyboard
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
-      if (ann.textEdit) return; // the textarea handles its own keys
+      if (ann.textEdit) {
+        // The textarea handles its own keys; an open text that never got the focus must not
+        // swallow the shortcuts — commit it and go on.
+        if (document.activeElement?.tagName === 'TEXTAREA') return;
+        ann.commitText();
+      }
       const target = e.target as HTMLElement;
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
       const ctrl = e.ctrlKey || e.metaKey;
