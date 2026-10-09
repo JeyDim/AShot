@@ -2,10 +2,10 @@
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{App, AppHandle, PhysicalPosition, Position};
+use tauri::{App, AppHandle, Manager, PhysicalPosition, Position, Wry};
 
 use crate::flow;
-use crate::state::CaptureMode;
+use crate::state::{AppState, CaptureMode};
 use crate::ui;
 
 fn physical(p: &Position) -> PhysicalPosition<i32> {
@@ -15,34 +15,51 @@ fn physical(p: &Position) -> PhysicalPosition<i32> {
     }
 }
 
-pub fn create(app: &App) -> tauri::Result<()> {
+/// The right-click menu; the scrolling capture is there when its experiment is on.
+fn menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let item = |id: &str, text: &str| MenuItem::with_id(app, id, text, true, None::<&str>);
-    let menu = Menu::with_items(
-        app,
-        &[
-            &item("region", "Снимок области")?,
-            &item("window", "Снимок окна")?,
-            &item("fullscreen", "Весь экран")?,
-            &item("last", "Последняя область")?,
-            &PredefinedMenuItem::separator(app)?,
-            &item("panel", "Недавние снимки")?,
-            &item("settings", "Настройки")?,
-            &item("about", "О программе")?,
-            &PredefinedMenuItem::separator(app)?,
-            &item("quit", "Выход")?,
-        ],
-    )?;
+    let menu = Menu::with_items(app, &[&item("region", "Снимок области")?, &item("window", "Снимок окна")?, &item("fullscreen", "Весь экран")?])?;
+    if app.state::<AppState>().settings().experimental.scroll_capture {
+        menu.append(&item("scroll", "Снимок с прокруткой")?)?;
+    }
+    menu.append_items(&[
+        &PredefinedMenuItem::separator(app)?,
+        &item("panel", "Недавние снимки")?,
+        &item("settings", "Настройки")?,
+        &item("about", "О программе")?,
+        &PredefinedMenuItem::separator(app)?,
+        &item("quit", "Выход")?,
+    ])?;
+    Ok(menu)
+}
+
+/// Rebuilds the menu (the experiments changed).
+pub fn refresh(app: &AppHandle) {
+    let Some(tray) = app.tray_by_id("main") else { return };
+    match menu(app) {
+        Ok(menu) => {
+            let _ = tray.set_menu(Some(menu));
+        }
+        Err(e) => log::warn!("tray menu: {e}"),
+    }
+}
+
+pub fn create(app: &App) -> tauri::Result<()> {
+    let menu = menu(app.handle())?;
     let icon = app.default_window_icon().cloned().expect("bundle icon");
     TrayIconBuilder::with_id("main")
         .icon(icon)
-        .tooltip("AShot — скриншоты")
+        .tooltip(match crate::state::channel() {
+            "" => "AShot — скриншоты".to_string(),
+            channel => format!("AShot Dev — {channel}"),
+        })
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app: &AppHandle, event| match event.id().as_ref() {
             "region" => flow::start(app, CaptureMode::Region),
             "window" => flow::start(app, CaptureMode::WindowPick),
             "fullscreen" => flow::start(app, CaptureMode::Fullscreen),
-            "last" => flow::start(app, CaptureMode::LastRegion),
+            "scroll" => flow::start(app, CaptureMode::Scroll),
             "panel" => ui::show_panel(app, None),
             "settings" => ui::open_settings(app, None),
             "about" => ui::open_about(app),

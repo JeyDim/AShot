@@ -29,8 +29,8 @@ const nav = (label) => (p) => p.getByRole('button', { name: label }).click();
 await shot('tray-panel', 'panel', { w: 400, h: 660, wall: true, dpr: 2 });
 await shot('tray-panel-dark', 'panel', { w: 400, h: 660, wall: true, dpr: 2, theme: 'dark' });
 await shot('tray-panel-empty', 'panel', { w: 400, h: 660, wall: true, query: '&empty&signedout' });
-await shot('settings-general', 'settings', { w: 840, h: 640 });
-await shot('settings-general-dark', 'settings', { w: 840, h: 640, theme: 'dark' });
+await shot('settings-general', 'settings', { w: 840, h: 760 });
+await shot('settings-general-dark', 'settings', { w: 840, h: 760, theme: 'dark' });
 await shot('settings-hotkeys', 'settings', { w: 840, h: 640, setup: nav('Горячие клавиши') });
 await shot('settings-saving', 'settings', { w: 840, h: 640, setup: nav('Сохранение') });
 await shot('settings-box', 'settings/box', { w: 840, h: 760 });
@@ -45,6 +45,10 @@ await shot('overlay-hover', 'overlay', {
   setup: async (p) => { await p.mouse.move(700, 330); await p.waitForTimeout(100); await p.mouse.move(705, 334); },
 });
 await shot('overlay-selected', 'overlay', { w: 1440, h: 810, query: '&selected', wait: 900 });
+await shot('overlay-scroll', 'overlay', {
+  w: 1440, h: 810, wait: 900, query: '&mode=scroll',
+  setup: async (p) => { await p.mouse.move(800, 400); await p.waitForTimeout(100); await p.mouse.move(805, 402); },
+});
 await shot('overlay-drawing', 'overlay', {
   w: 1440, h: 810, wait: 900,
   setup: async (p) => { await p.mouse.move(300, 200); await p.mouse.down(); await p.mouse.move(520, 330, { steps: 5 }); await p.mouse.move(640, 420, { steps: 5 }); },
@@ -73,4 +77,11 @@ await shot('overlay-annotate', 'overlay', {
 await shot('editor', 'editor/a1', { w: 1500, h: 900, wait: 1500 });
 await shot('editor-dark', 'editor/a1', { w: 1500, h: 900, wait: 1500, theme: 'dark' });
 await shot('editor-compact', 'editor/a1', { w: 1024, h: 700, wait: 1500 });
+await shot('editor-watermark', 'editor/a1', {
+  w: 1500, h: 900, wait: 1500,
+  setup: async (p) => {
+    await p.getByRole('button', { name: 'Поставить водяной знак' }).click();
+    await p.getByRole('button', { name: 'Водяной знак или копирайт' }).click();
+  },
+});
 await browser.close();

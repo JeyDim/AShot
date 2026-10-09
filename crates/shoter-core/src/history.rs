@@ -67,7 +67,7 @@ pub struct HistoryItem {
     pub created_at: DateTime<Local>,
     pub width: u32,
     pub height: u32,
-    /// "region" | "window" | "fullscreen" | "lastRegion" | "file" | "clipboard"
+    /// "region" | "window" | "fullscreen" | "file" | "clipboard" (older items: "lastRegion")
     pub source: String,
     /// Incremented on every change of the image; used for cache busting in the UI.
     #[serde(default)]

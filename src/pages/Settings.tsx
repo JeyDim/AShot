@@ -5,6 +5,7 @@ import {
   AppWindow,
   Check,
   ChevronRight,
+  ChevronsDown,
   Cloud,
   Copy,
   Download,
@@ -16,7 +17,6 @@ import {
   Monitor,
   Power,
   RefreshCw,
-  RotateCcw,
   Save,
   Scan,
   ShieldCheck,
@@ -24,7 +24,7 @@ import {
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type InputHTMLAttributes, type ReactNode } from 'react';
-import { Button, IconButton, Input, Logo, Range, Segmented, Select, Spinner, Switch } from '../components/ui';
+import { Button, DevBadge, IconButton, Input, Logo, Range, Segmented, Select, Spinner, Switch } from '../components/ui';
 import { acceleratorFromEvent, hotkeyLabel, plural } from '../lib/format';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useTauriEvent } from '../lib/hooks';
@@ -156,7 +156,7 @@ export default function Settings({ initial }: { initial?: string }) {
               aria-current={section === s.id ? 'page' : undefined}
               className={clsx(
                 'flex h-[38px] items-center gap-2.5 rounded-full px-3 text-[14px] transition-colors',
-                section === s.id ? 'bg-primary text-on-primary' : 'text-text hover:bg-text/6',
+                section === s.id ? 'bg-lime font-medium text-on-lime' : 'text-text hover:bg-text/6',
               )}
             >
               {s.icon}
@@ -207,7 +207,7 @@ export default function Settings({ initial }: { initial?: string }) {
               </div>
             )}
             {section === 'general' && <General s={settings} update={update} />}
-            {section === 'hotkeys' && <HotkeysSection value={settings.hotkeys} onChange={(h) => update({ hotkeys: h })} />}
+            {section === 'hotkeys' && <HotkeysSection value={settings.hotkeys} scroll={settings.experimental.scrollCapture} onChange={(h) => update({ hotkeys: h })} />}
             {section === 'saving' && <Saving s={settings} update={update} view={view} />}
             {section === 'box' && <BoxSection s={settings} update={update} flush={flush} defaultTemplate={view.defaultLinkTemplate} />}
             {section === 'about' && <About s={settings} update={update} />}
@@ -305,6 +305,7 @@ function General({ s, update }: { s: AppSettings; update: Update }) {
         </Row>
         <Row label="«Весь экран» снимает">
           <Segmented
+            accent
             value={s.fullscreenMode}
             onChange={(v) => update({ fullscreenMode: v })}
             options={[
@@ -325,22 +326,37 @@ function General({ s, update }: { s: AppSettings; update: Update }) {
           </Select>
         </Row>
       </Group>
+      <Group title="Экспериментальное">
+        <Row
+          label={
+            <span className="flex items-center gap-2">
+              Снимок с прокруткой
+              <span className="inline-flex h-[18px] items-center rounded-full bg-lime px-1.5 text-[10.5px] font-semibold text-on-lime">бета</span>
+            </span>
+          }
+          hint="Страница целиком: AShot сам прокрутит область и склеит кадры. В панели и меню появится «Прокрутка». Ещё в работе — получается не на всех страницах"
+        >
+          <Switch checked={s.experimental.scrollCapture} onChange={(v) => update({ experimental: { scrollCapture: v } })} label="Снимок с прокруткой" />
+        </Row>
+      </Group>
     </>
   );
 }
 
 // ---------------------------------------------------------------- Горячие клавиши
 
-// Only the region capture has a hotkey by default; the rest are opt-in.
-const DEFAULT_HOTKEYS: Hotkeys = { region: 'Control+PrintScreen', window: '', fullscreen: '', lastRegion: '' };
+// Every capture has a hotkey by default (same as `Hotkeys::default` in Rust).
+const DEFAULT_HOTKEYS: Hotkeys = { region: 'Control+PrintScreen', window: 'Alt+PrintScreen', fullscreen: 'Shift+PrintScreen', scroll: 'Control+Shift+PrintScreen' };
 
-function HotkeysSection({ value, onChange }: { value: Hotkeys; onChange: (h: Hotkeys) => void }) {
-  const rows: { key: keyof Hotkeys; label: string; hint: string; icon: ReactNode }[] = [
+function HotkeysSection({ value, scroll, onChange }: { value: Hotkeys; scroll: boolean; onChange: (h: Hotkeys) => void }) {
+  const all: { key: keyof Hotkeys; label: string; hint: string; icon: ReactNode }[] = [
     { key: 'region', label: 'Снимок области', hint: 'Выделение мышью, клик — окно или элемент', icon: <Scan size={20} /> },
-    { key: 'window', label: 'Снимок активного окна', hint: 'Окно в фокусе сразу выделено, можно подправить', icon: <AppWindow size={20} /> },
-    { key: 'fullscreen', label: 'Весь экран', hint: 'Монитор под курсором или все мониторы', icon: <Monitor size={20} /> },
-    { key: 'lastRegion', label: 'Повторить последнюю область', hint: 'Та же область, что и в прошлый раз', icon: <RotateCcw size={20} /> },
+    { key: 'window', label: 'Снимок окна', hint: 'Наведите на окно и кликните', icon: <AppWindow size={20} /> },
+    { key: 'fullscreen', label: 'Весь экран', hint: 'Сразу в редактор; если экранов несколько — кликните по нужному', icon: <Monitor size={20} /> },
+    { key: 'scroll', label: 'Снимок с прокруткой', hint: 'Страница целиком: AShot прокрутит область и склеит', icon: <ChevronsDown size={20} /> },
   ];
+  // The scrolling capture is an experiment: its hotkey shows once it is turned on.
+  const rows = all.filter((r) => scroll || r.key !== 'scroll');
   const isDefault = (Object.keys(DEFAULT_HOTKEYS) as (keyof Hotkeys)[]).every((k) => value[k] === DEFAULT_HOTKEYS[k]);
   return (
     <>
@@ -403,7 +419,7 @@ function HotkeyInput({ value, onChange }: { value: string; onChange: (v: string)
         }}
         className={clsx(
           'flex h-9 w-[190px] items-center justify-center rounded-[10px] bg-surface-2 px-3 font-mono text-[12px] ring-1 ring-inset transition-shadow outline-none',
-          recording ? 'text-muted ring-text' : 'ring-transparent hover:ring-border-strong',
+          recording ? 'text-muted ring-2 ring-lime' : 'ring-transparent hover:ring-border-strong',
         )}
       >
         {recording ? 'Нажмите сочетание…' : value ? hotkeyLabel(value) : <span className="font-sans text-muted">Не назначено</span>}
@@ -512,6 +528,7 @@ function Saving({ s, update, view }: { s: AppSettings; update: Update; view: Set
         </Row>
         <Row label="Формат" hint="Используется и для загрузки в Box">
           <Segmented
+            accent
             value={s.imageFormat}
             onChange={(v) => update({ imageFormat: v })}
             options={[
@@ -639,7 +656,7 @@ function BoxSection({ s, update, flush, defaultTemplate }: { s: AppSettings; upd
         <div className="flex items-center gap-3 rounded-[14px] bg-surface-2 p-3.5">
           {oauth && status?.signedIn ? (
             <>
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-text text-[14px] font-medium text-surface">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-lime text-[14px] font-medium text-on-lime">
                 {(account?.name || account?.login || 'B').slice(0, 1).toUpperCase()}
               </div>
               <div className="min-w-0 flex-1 text-[14px] font-medium">
@@ -666,7 +683,7 @@ function BoxSection({ s, update, flush, defaultTemplate }: { s: AppSettings; upd
                   Отмена
                 </Button>
               ) : (
-                <Button variant="primary" size="sm" className="h-8" disabled={!!noApp} onClick={login}>
+                <Button variant="accent" size="sm" className="h-8" disabled={!!noApp} onClick={login}>
                   Войти через Box
                 </Button>
               )}
@@ -748,6 +765,7 @@ function BoxSection({ s, update, flush, defaultTemplate }: { s: AppSettings; upd
           <>
             <Row label="Способ входа">
               <Segmented
+                accent
                 value={box.authMode}
                 onChange={(v) => update({ box: { authMode: v } })}
                 options={[
@@ -829,15 +847,20 @@ function BoxSection({ s, update, flush, defaultTemplate }: { s: AppSettings; upd
 
 // ---------------------------------------------------------------- О программе
 
+const UI_SCALES = [80, 90, 100, 110, 125, 150];
+
 function About({ s, update }: { s: AppSettings; update: Update }) {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     api.appInfo().then(setInfo).catch(() => {});
   }, []);
-  const versionLine = info ? `AShot ${info.version} (${info.commit}, ${info.buildDate}) · Tauri ${info.tauriVersion} · ${info.os}` : '';
+  const name = info?.channel ? 'AShot Dev' : 'AShot';
+  const versionLine = info
+    ? `${name} ${info.version}${info.channel ? ` (${info.channel})` : ''} (${info.commit}, ${info.buildDate}) · Tauri ${info.tauriVersion} · ${info.os}`
+    : '';
   const rows: [string, string][] = [
-    ['Версия', info?.version ?? '…'],
+    ['Версия', info ? `${info.version}${info.channel ? ` · Dev, ${info.channel}` : ''}` : '…'],
     ['Сборка', info ? `${info.commit} · ${info.buildDate}` : '…'],
     ['Платформа', info ? `${info.os} · Tauri ${info.tauriVersion}` : '…'],
   ];
@@ -853,7 +876,10 @@ function About({ s, update }: { s: AppSettings; update: Update }) {
       <div className="flex items-center gap-3.5">
         <Logo size={52} radius={284} />
         <div className="flex flex-col gap-0.5">
-          <h1 className="font-display text-[22px] leading-tight font-normal">AShot</h1>
+          <h1 className="flex items-center gap-2 font-display text-[22px] leading-tight font-normal">
+            AShot
+            {info?.channel && <DevBadge channel={info.channel} />}
+          </h1>
           <div className="text-[13.5px] text-muted">Скриншоты с редактором и ссылками Box</div>
         </div>
       </div>
@@ -876,6 +902,7 @@ function About({ s, update }: { s: AppSettings; update: Update }) {
         <div className="flex items-center justify-between gap-4 py-2 text-[14px]">
           Тема
           <Segmented
+            accent
             value={s.theme}
             onChange={(v) => update({ theme: v })}
             options={[
@@ -883,6 +910,19 @@ function About({ s, update }: { s: AppSettings; update: Update }) {
               { value: 'light', label: 'Светлая' },
               { value: 'dark', label: 'Тёмная' },
             ]}
+          />
+        </div>
+        <div className="flex flex-col gap-2 border-t border-border py-2.5 text-[14px]">
+          <span className="flex flex-col">
+            Масштаб интерфейса
+            <span className="text-[12px] text-muted">Панель в трее, редактор, панели на экране выделения и настройки</span>
+          </span>
+          <Segmented
+            accent
+            value={s.uiScale}
+            onChange={(v) => update({ uiScale: v })}
+            options={UI_SCALES.map((v) => ({ value: v, label: `${v}%` }))}
+            className="self-start"
           />
         </div>
         <div className="flex items-center justify-between gap-4 border-t border-border py-2.5 text-[14px]">
@@ -893,7 +933,7 @@ function About({ s, update }: { s: AppSettings; update: Update }) {
           <Switch checked={s.autostart} onChange={(v) => update({ autostart: v })} label="Запускать вместе с Windows" />
         </div>
       </div>
-      <Updates autoUpdate={s.autoUpdate} onAutoUpdate={(v) => update({ autoUpdate: v })} />
+      <Updates autoUpdate={s.autoUpdate} onAutoUpdate={(v) => update({ autoUpdate: v })} channel={info?.channel ?? ''} />
       <div className="flex flex-col gap-2 px-1">
         <div className="flex gap-5 text-[13px]">
           <button className="flex items-center gap-1.5 transition-colors hover:text-muted" onClick={() => api.openFolder('logs')}>
@@ -914,7 +954,7 @@ function About({ s, update }: { s: AppSettings; update: Update }) {
 }
 
 /** Update check / install from GitHub Releases. */
-function Updates({ autoUpdate, onAutoUpdate }: { autoUpdate: boolean; onAutoUpdate: (v: boolean) => void }) {
+function Updates({ autoUpdate, onAutoUpdate, channel }: { autoUpdate: boolean; onAutoUpdate: (v: boolean) => void; channel: string }) {
   const [st, setSt] = useState<UpdateState>({ phase: 'idle' });
   useEffect(() => {
     api.updateState().then(setSt).catch(() => {});
@@ -926,7 +966,11 @@ function Updates({ autoUpdate, onAutoUpdate }: { autoUpdate: boolean; onAutoUpda
   const install = () => api.updateInstall().catch((e) => setSt({ phase: 'error', message: errorText(e) }));
 
   if (st.phase === 'disabled') {
-    return <div className="text-[12.5px] text-muted">Обновления недоступны в локальной сборке</div>;
+    return (
+      <div className="text-[12.5px] text-muted">
+        {channel ? `Dev-сборка (${channel}) не обновляется сама — новая появляется в PR после каждого пуша` : 'Обновления недоступны в локальной сборке'}
+      </div>
+    );
   }
 
   let text: ReactNode;
@@ -978,7 +1022,7 @@ function Updates({ autoUpdate, onAutoUpdate }: { autoUpdate: boolean; onAutoUpda
         </span>
       );
       action = (
-        <Button variant="primary" icon={<Download size={15} />} onClick={install}>
+        <Button variant="accent" icon={<Download size={15} />} onClick={install}>
           Обновить
         </Button>
       );
@@ -991,7 +1035,7 @@ function Updates({ autoUpdate, onAutoUpdate }: { autoUpdate: boolean; onAutoUpda
             Скачиваю {st.version} — {pct}%
           </span>
           <span className="h-1.5 overflow-hidden rounded-full bg-surface-3">
-            <span className="block h-full rounded-full bg-primary transition-[width]" style={{ width: `${pct}%` }} />
+            <span className="block h-full rounded-full bg-lime transition-[width]" style={{ width: `${pct}%` }} />
           </span>
         </span>
       );

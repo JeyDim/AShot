@@ -14,3 +14,7 @@ pub fn monitors() -> Vec<MonitorInfo> {
 pub fn cursor_position() -> (i32, i32) {
     (0, 0)
 }
+
+pub fn grab(_rect: shoter_core::Rect) -> Result<image::RgbaImage, String> {
+    Err("Захват экрана пока поддерживается только в Windows".into())
+}

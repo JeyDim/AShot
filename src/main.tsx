@@ -1,6 +1,7 @@
 import { StrictMode, Suspense, lazy } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
+import { api } from './lib/ipc';
 import { initTheme } from './lib/theme';
 
 // Every window loads index.html with its own route in the hash: #/panel, #/overlay,
@@ -48,6 +49,8 @@ async function start() {
   initTheme();
   if (page === 'panel' || page === 'toast') document.body.classList.add('transparent');
   if (page === 'overlay') document.body.style.background = '#000';
+  // UI scale (the window's zoom) before the first render, so nothing jumps; never wait long.
+  await Promise.race([api.uiZoom().catch(() => {}), new Promise((r) => setTimeout(r, 300))]);
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <Suspense fallback={null}>

@@ -19,7 +19,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DrawIconEx, EnumWindows, GetClassNameW, GetCursorInfo, GetCursorPos, GetForegroundWindow, GetIconInfo,
+    DrawIconEx, EnumWindows, GetClassNameW, GetCursorInfo, GetCursorPos, GetIconInfo,
     GetWindowLongW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
     CURSORINFO, CURSOR_SHOWING, DI_NORMAL, GWL_EXSTYLE, ICONINFO, MONITORINFOF_PRIMARY, WS_EX_TRANSPARENT,
 };
@@ -108,18 +108,6 @@ fn class_name(hwnd: HWND) -> String {
     String::from_utf16_lossy(&buf[..n.max(0) as usize])
 }
 
-pub fn foreground_window_rect() -> Option<Rect> {
-    let hwnd = unsafe { GetForegroundWindow() };
-    if hwnd.is_invalid() || is_own_window(hwnd) {
-        return None;
-    }
-    let class = class_name(hwnd);
-    if matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd") {
-        return None;
-    }
-    window_bounds(hwnd)
-}
-
 fn is_own_window(hwnd: HWND) -> bool {
     let mut pid = 0u32;
     unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
@@ -127,8 +115,10 @@ fn is_own_window(hwnd: HWND) -> bool {
 }
 
 /// Visible top-level windows in z-order (topmost first), excluding our own windows,
-/// the desktop and cloaked (hidden UWP / other virtual desktop) windows.
-fn windows_list(virtual_screen: Rect) -> Vec<WindowInfo> {
+/// the desktop and cloaked (hidden UWP / other virtual desktop) windows. Each one is cut to
+/// what is seen of it: the part on the screens, without edges that the windows above cover
+/// (the taskbar over a window that reaches below it).
+fn windows_list(screens: &[Rect]) -> Vec<WindowInfo> {
     unsafe extern "system" fn collect(hwnd: HWND, data: LPARAM) -> BOOL {
         let list = unsafe { &mut *(data.0 as *mut Vec<HWND>) };
         list.push(hwnd);
@@ -139,6 +129,8 @@ fn windows_list(virtual_screen: Rect) -> Vec<WindowInfo> {
         let _ = EnumWindows(Some(collect), LPARAM(&mut handles as *mut _ as isize));
     }
     let mut out = Vec::new();
+    // Whole bounds of the windows seen so far (all above the next one).
+    let mut above: Vec<Rect> = Vec::new();
     for hwnd in handles {
         unsafe {
             if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
@@ -155,11 +147,12 @@ fn windows_list(virtual_screen: Rect) -> Vec<WindowInfo> {
         if matches!(class.as_str(), "Progman" | "WorkerW") {
             continue;
         }
-        let Some(bounds) = window_bounds(hwnd) else { continue };
-        let Some(bounds) = bounds.intersect(&virtual_screen) else { continue };
-        if bounds.width < 8 || bounds.height < 8 {
-            continue;
-        }
+        let Some(full) = window_bounds(hwnd) else { continue };
+        // On the screens: not off their edges, nor in the gaps between screens of different sizes.
+        let Some(on_screens) = screens.iter().filter_map(|s| full.intersect(s)).reduce(|a, b| a.union(&b)) else { continue };
+        let seen = on_screens.visible_part(&above);
+        above.push(on_screens);
+        let Some(bounds) = seen.filter(|b| b.width >= 8 && b.height >= 8) else { continue };
         let mut title = [0u16; 256];
         let n = unsafe { GetWindowTextW(hwnd, &mut title) };
         out.push(WindowInfo { title: String::from_utf16_lossy(&title[..n.max(0) as usize]), bounds });
@@ -170,8 +163,22 @@ fn windows_list(virtual_screen: Rect) -> Vec<WindowInfo> {
     out
 }
 
+/// The mouse cursor to draw into the captures: its picture and where it is.
+struct Cursor {
+    info: CURSORINFO,
+    /// Physical virtual-screen position (`GetCursorPos`), the coordinate space of the monitor
+    /// bounds. `CURSORINFO::ptScreenPos` is not: with monitors of different DPI scale it is off
+    /// on every monitor but the primary one, and the cursor ended up outside the picture.
+    at: (i32, i32),
+}
+
+/// The screen inside `rect` as it is now, without the cursor (scrolling capture).
+pub fn grab(rect: Rect) -> Result<RgbaImage, String> {
+    capture_rect(rect, None)
+}
+
 /// Captures one monitor rectangle with BitBlt and optionally draws the cursor.
-fn capture_rect(rect: Rect, cursor: Option<&CURSORINFO>) -> Result<RgbaImage, String> {
+fn capture_rect(rect: Rect, cursor: Option<&Cursor>) -> Result<RgbaImage, String> {
     let (w, h) = (rect.width as i32, rect.height as i32);
     unsafe {
         let screen = GetDC(None);
@@ -185,8 +192,8 @@ fn capture_rect(rect: Rect, cursor: Option<&CURSORINFO>) -> Result<RgbaImage, St
         let result = (|| {
             BitBlt(mem, 0, 0, w, h, Some(screen), rect.x, rect.y, SRCCOPY | CAPTUREBLT)
                 .map_err(|e| format!("BitBlt: {e}"))?;
-            if let Some(ci) = cursor {
-                draw_cursor(mem, ci, rect);
+            if let Some(c) = cursor {
+                draw_cursor(mem, c, rect);
             }
             let mut bmi = BITMAPINFO {
                 bmiHeader: BITMAPINFOHEADER {
@@ -221,15 +228,15 @@ fn capture_rect(rect: Rect, cursor: Option<&CURSORINFO>) -> Result<RgbaImage, St
     }
 }
 
-unsafe fn draw_cursor(mem: HDC, ci: &CURSORINFO, rect: Rect) {
+unsafe fn draw_cursor(mem: HDC, cursor: &Cursor, rect: Rect) {
     let mut info = ICONINFO::default();
     unsafe {
-        let icon = windows::Win32::UI::WindowsAndMessaging::HICON(ci.hCursor.0);
+        let icon = windows::Win32::UI::WindowsAndMessaging::HICON(cursor.info.hCursor.0);
         if GetIconInfo(icon, &mut info).is_err() {
             return;
         }
-        let x = ci.ptScreenPos.x - info.xHotspot as i32 - rect.x;
-        let y = ci.ptScreenPos.y - info.yHotspot as i32 - rect.y;
+        let x = cursor.at.0 - info.xHotspot as i32 - rect.x;
+        let y = cursor.at.1 - info.yHotspot as i32 - rect.y;
         let _ = DrawIconEx(mem, x, y, icon, 0, 0, 0, None, DI_NORMAL);
         if !info.hbmMask.is_invalid() {
             let _ = DeleteObject(HGDIOBJ(info.hbmMask.0));
@@ -245,23 +252,31 @@ pub fn capture_session(id: u64, include_cursor: bool) -> Result<CaptureSession, 
     if monitors.is_empty() {
         return Err("не найдено ни одного монитора".into());
     }
-    let cursor_info = include_cursor
+    let at = cursor_position();
+    let cursor = include_cursor
         .then(|| unsafe {
             let mut ci = CURSORINFO { cbSize: std::mem::size_of::<CURSORINFO>() as u32, ..Default::default() };
             (GetCursorInfo(&mut ci).is_ok() && ci.flags == CURSOR_SHOWING).then_some(ci)
         })
-        .flatten();
+        .flatten()
+        .map(|info| {
+            let reported = (info.ptScreenPos.x, info.ptScreenPos.y);
+            if reported != at {
+                log::info!("cursor: GetCursorInfo reports {reported:?}, GetCursorPos {at:?} — drawing at the latter");
+            }
+            Cursor { info, at }
+        });
 
     let mut shots = Vec::with_capacity(monitors.len());
     for m in &monitors {
-        let cursor = cursor_info.as_ref().filter(|ci| {
+        let cursor = cursor.as_ref().filter(|c| {
             // DrawIconEx clips by itself, but skip monitors the cursor is far away from.
-            let (cx, cy) = (ci.ptScreenPos.x, ci.ptScreenPos.y);
+            let (cx, cy) = c.at;
             cx >= m.bounds.x - 64 && cy >= m.bounds.y - 64 && cx < m.bounds.right() + 64 && cy < m.bounds.bottom() + 64
         });
         shots.push(MonitorShot { bounds: m.bounds, image: capture_rect(m.bounds, cursor)? });
     }
-    let virtual_screen = shoter_core::imaging::virtual_bounds(&shots);
-    let windows = windows_list(virtual_screen);
-    Ok(CaptureSession::new(id, monitors, shots, windows, cursor_position(), foreground_window_rect()))
+    let screens: Vec<Rect> = monitors.iter().map(|m| m.bounds).collect();
+    let windows = windows_list(&screens);
+    Ok(CaptureSession::new(id, monitors, shots, windows, at))
 }

@@ -124,13 +124,13 @@ export function Switch({
       onClick={() => onChange(!checked)}
       className={clsx(
         'relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors duration-150 disabled:opacity-40',
-        checked ? 'bg-primary' : 'bg-toggle-off',
+        checked ? 'bg-lime' : 'bg-toggle-off',
       )}
     >
       <span
         className={clsx(
           'absolute top-0.5 left-0.5 h-4 w-4 rounded-full transition-transform duration-150',
-          checked ? 'translate-x-4 bg-on-primary' : 'bg-knob shadow-sm',
+          checked ? 'translate-x-4 bg-on-lime' : 'bg-knob shadow-sm',
         )}
       />
     </button>
@@ -151,16 +151,19 @@ export function Kbd({ keys, className }: { keys: string; className?: string }) {
   );
 }
 
+/** `accent` — the selected option in the lime accent (settings). */
 export function Segmented<T extends string | number>({
   value,
   options,
   onChange,
   className,
+  accent,
 }: {
   value: T;
   options: { value: T; label: ReactNode; tip?: string }[];
   onChange: (v: T) => void;
   className?: string;
+  accent?: boolean;
 }) {
   return (
     <div role="radiogroup" className={clsx('inline-flex shrink-0 rounded-full bg-surface-2 p-[3px] text-[12px]', className)}>
@@ -174,7 +177,7 @@ export function Segmented<T extends string | number>({
           onClick={() => onChange(o.value)}
           className={clsx(
             'inline-flex items-center justify-center gap-1.5 rounded-full px-3 py-1.5 whitespace-nowrap transition-colors',
-            value === o.value ? 'bg-primary text-on-primary' : 'text-muted hover:text-text',
+            value === o.value ? (accent ? 'bg-lime font-medium text-on-lime' : 'bg-primary text-on-primary') : 'text-muted hover:text-text',
           )}
         >
           {o.label}
@@ -185,7 +188,7 @@ export function Segmented<T extends string | number>({
 }
 
 const fieldClass =
-  'h-9 rounded-(--radius-control) bg-surface-2 px-3 text-[13px] text-text outline-none ring-1 ring-inset ring-transparent transition-shadow placeholder:text-subtle focus:ring-border-strong disabled:opacity-50';
+  'h-9 rounded-(--radius-control) bg-surface-2 px-3 text-[13px] text-text outline-none ring-1 ring-inset ring-transparent transition-shadow placeholder:text-subtle focus:ring-2 focus:ring-lime disabled:opacity-50';
 
 /** Text field; give it a width via `className`. */
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(function Input({ className, ...rest }, ref) {
@@ -241,17 +244,44 @@ export function Range({
   );
 }
 
-/** App logo (icon 09 «Захват курсором»: the A, a selection frame and the pointer) on an ink
- *  tile — white on dark in the light theme, inverted in the dark one. Same drawing as
- *  assets/logo.svg, on a 100-unit grid. */
+/** "DEV · PR #12": this is AShot Dev, the build of a pull request (installed next to AShot). */
+export function DevBadge({ channel, className }: { channel: string; className?: string }) {
+  return (
+    <span
+      className={clsx('inline-flex h-[20px] items-center rounded-full bg-lime px-2 font-sans text-[11px] font-semibold tracking-wide whitespace-nowrap text-on-lime', className)}
+      data-tip="Dev-сборка из pull request: ставится рядом с AShot, свои настройки и история"
+    >
+      DEV · {channel}
+    </span>
+  );
+}
+
+/** App logo (icon 9h «Пунктир вокруг A»): the A in a dashed lime selection frame and a white
+ *  pointer on a dark tile, in both themes (a faint rim keeps the tile apart from a dark
+ *  background). Same drawing as assets/logo.svg, on a 100-unit grid. */
 export function Logo({ size = 28, className, radius }: { size?: number; className?: string; radius?: number }) {
+  const r = radius ?? 232;
+  // A 1 px rim just inside the tile's edge.
+  const inset = 512 / size;
   return (
     <svg width={size} height={size} viewBox="0 0 1024 1024" className={clsx('shrink-0', className)} aria-hidden>
-      <rect width="1024" height="1024" rx={radius ?? 232} fill="var(--color-text)" />
-      <g transform="scale(10.24)" fill="none" stroke="var(--color-surface)" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M22 74L42 26L62 74M28.5 58.5H55.5" strokeWidth={7} />
-        <rect x="46" y="40" width="34" height="34" strokeWidth={3} strokeDasharray="5 5" />
-        <path d="M76 70L92 77L84 79L81 87Z" fill="var(--color-surface)" strokeWidth={2} />
+      <rect width="1024" height="1024" rx={r} fill="#111111" />
+      <rect
+        className="logo-rim"
+        x={inset}
+        y={inset}
+        width={1024 - 2 * inset}
+        height={1024 - 2 * inset}
+        rx={Math.max(0, r - inset)}
+        fill="none"
+        stroke="rgb(255 255 255 / 0.14)"
+        strokeWidth={1}
+        vectorEffect="non-scaling-stroke"
+      />
+      <g transform="scale(10.24)" strokeLinejoin="round">
+        <rect x={16} y={16} width={64} height={64} fill="none" stroke="#B5F000" strokeWidth={7} strokeDasharray="11.2 4.8" strokeDashoffset={5.6} />
+        <path d="M34 68L48 32L62 68M39 56H57" fill="none" stroke="#FFFFFF" strokeWidth={10} strokeLinecap="round" />
+        <path d="M68 64L95 76L83 80L78 93Z" fill="#FFFFFF" stroke="#111111" strokeWidth={5} />
       </g>
     </svg>
   );

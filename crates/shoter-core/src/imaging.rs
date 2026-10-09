@@ -116,6 +116,20 @@ pub fn decode(bytes: &[u8]) -> Result<RgbaImage> {
     Ok(image::load_from_memory(bytes)?.into_rgba8())
 }
 
+/// Picture for the watermark (PNG, JPEG, WebP, BMP), transparency kept, no larger than
+/// `max` px on the longest side (it is drawn small anyway, and it is stored in every edited
+/// screenshot's document).
+pub fn prepare_logo(bytes: &[u8], max: u32) -> Result<RgbaImage> {
+    let img = decode(bytes)?;
+    let (w, h) = img.dimensions();
+    if w <= max && h <= max {
+        return Ok(img);
+    }
+    let k = max as f64 / w.max(h) as f64;
+    let size = |v: u32| ((v as f64 * k).round() as u32).max(1);
+    Ok(resize(&img, size(w), size(h)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,5 +182,16 @@ mod tests {
         assert_eq!(resize(&img, 400, 200).dimensions(), (400, 200));
         let jpg = encode_jpeg(&img, 90).unwrap();
         assert_eq!(&jpg[..2], &[0xFF, 0xD8]);
+    }
+
+    #[test]
+    fn logos_are_limited_and_keep_transparency() {
+        let logo = solid(3000, 1000, [200, 0, 0, 0]);
+        let small = prepare_logo(&encode_png(&logo).unwrap(), 800).unwrap();
+        assert_eq!(small.dimensions(), (800, 267));
+        assert_eq!(small.get_pixel(10, 10).0[3], 0, "alpha kept");
+        let tiny = solid(120, 40, [0, 0, 0, 255]);
+        assert_eq!(prepare_logo(&encode_jpeg(&tiny, 90).unwrap(), 800).unwrap().dimensions(), (120, 40), "never upscaled");
+        assert!(prepare_logo(b"not an image", 800).is_err());
     }
 }

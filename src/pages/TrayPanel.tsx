@@ -3,6 +3,7 @@ import clsx from 'clsx';
 import {
   AppWindow,
   Check,
+  ChevronsDown,
   CloudUpload,
   Copy,
   Download,
@@ -14,14 +15,13 @@ import {
   Monitor,
   MoreHorizontal,
   Pencil,
-  RotateCcw,
   Save,
   Scan,
   Settings as SettingsIcon,
   Trash2,
 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { Button, IconButton, Kbd, Logo, Spinner } from '../components/ui';
+import { Button, DevBadge, IconButton, Kbd, Logo, Spinner } from '../components/ui';
 import { hotkeyParts, relativeTime, sizeLabel } from '../lib/format';
 import { useKeyDown, useTauriEvent } from '../lib/hooks';
 import { api, errorText, shotUrl } from '../lib/ipc';
@@ -39,6 +39,14 @@ export default function TrayPanel() {
   const [showAll, setShowAll] = useState(false);
   const [, setTick] = useState(0);
   const [animKey, setAnimKey] = useState(0);
+  // Dev build of a pull request: shown next to the name.
+  const [channel, setChannel] = useState('');
+  useEffect(() => {
+    api
+      .appInfo()
+      .then((i) => setChannel(i.channel ?? ''))
+      .catch(() => {});
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -93,6 +101,8 @@ export default function TrayPanel() {
   };
 
   const hk = settings?.hotkeys;
+  // An experiment: only when turned on in Settings.
+  const scroll = settings?.experimental?.scrollCapture ?? false;
   const [latest, ...earlier] = items;
   const grid = showAll ? items : earlier;
 
@@ -105,6 +115,7 @@ export default function TrayPanel() {
           <span className="font-display text-[15px] font-semibold" data-tauri-drag-region>
             AShot
           </span>
+          {channel && <DevBadge channel={channel} />}
           <div className="flex-1" data-tauri-drag-region />
           <BoxPill box={box} refresh={refresh} />
           <IconButton tip="Настройки" tipPos="left" size={30} onClick={() => api.openSettings()}>
@@ -117,18 +128,26 @@ export default function TrayPanel() {
             <Hero item={latest} busy={latest ? busy[latest.id] : undefined} run={run} onMenu={openMenu} hotkey={hk?.region ?? ''} />
 
             {/* Capture modes */}
-            <div className="grid grid-cols-4 gap-2 p-4">
+            <div className={clsx('grid gap-2 p-4', scroll ? 'grid-cols-4' : 'grid-cols-3')}>
               <ModeTile icon={<Scan size={22} />} label="Область" keys={hk?.region} onClick={() => api.capture('region')} main />
-              <ModeTile icon={<AppWindow size={22} />} label="Окно" keys={hk?.window} onClick={() => capture('windowPick')} />
-              <ModeTile icon={<Monitor size={22} />} label="Экран" keys={hk?.fullscreen} onClick={() => capture('fullscreen')} />
+              <ModeTile icon={<AppWindow size={22} />} label="Окно" keys={hk?.window} onClick={() => capture('windowPick')} tip="Кликните по окну" />
               <ModeTile
-                icon={<RotateCcw size={21} />}
-                label="Повтор"
-                keys={hk?.lastRegion}
-                onClick={() => capture('lastRegion')}
-                disabled={!settings?.lastRegion}
-                tip={settings?.lastRegion ? 'Снять ту же область ещё раз' : 'Сначала сделайте снимок области'}
+                icon={<Monitor size={22} />}
+                label="Экран"
+                keys={hk?.fullscreen}
+                onClick={() => capture('fullscreen')}
+                tip={settings?.fullscreenMode === 'allMonitors' ? 'Все мониторы — сразу в редактор' : 'Экран — сразу в редактор\nНесколько экранов — кликните по нужному'}
               />
+              {scroll && (
+                <ModeTile
+                  icon={<ChevronsDown size={22} />}
+                  label="Прокрутка"
+                  keys={hk?.scroll}
+                  onClick={() => capture('scroll')}
+                  tip={'Страница целиком: кликните по ней —\nAShot прокрутит и склеит'}
+                  tipPos="top-left"
+                />
+              )}
             </div>
           </>
         )}
@@ -325,6 +344,7 @@ function ModeTile({
   main,
   disabled,
   tip,
+  tipPos,
 }: {
   icon: ReactNode;
   label: string;
@@ -333,12 +353,16 @@ function ModeTile({
   main?: boolean;
   disabled?: boolean;
   tip?: string;
+  tipPos?: 'top' | 'top-left';
 }) {
+  // Narrow tiles: Shift as ⇧ (Ctrl+⇧+PrtSc).
+  const shortcut = keys ? hotkeyParts(keys).map((k) => (k === 'Shift' ? '⇧' : k)).join('+') : '';
   return (
     <button
       onClick={onClick}
       disabled={disabled}
       data-tip={tip}
+      data-tip-pos={tipPos ?? 'top'}
       className={clsx(
         'flex h-[68px] flex-col items-center justify-center gap-1 rounded-[14px] px-1.5 transition-[background,filter,opacity] duration-100 disabled:opacity-40',
         main ? 'bg-lime text-on-lime hover:brightness-105 active:brightness-95' : 'bg-surface-2 text-text hover:bg-surface-3',
@@ -346,7 +370,7 @@ function ModeTile({
     >
       {icon}
       <span className="text-[12px] leading-tight font-medium">{label}</span>
-      <span className="font-mono text-[10px] leading-tight opacity-65">{keys ? hotkeyParts(keys).join('+') : '—'}</span>
+      <span className={clsx('font-mono leading-tight whitespace-nowrap opacity-65', shortcut.length > 11 ? 'text-[9px] tracking-tight' : 'text-[10px]')}>{shortcut || '—'}</span>
     </button>
   );
 }

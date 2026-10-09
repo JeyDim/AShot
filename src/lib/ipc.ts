@@ -38,6 +38,10 @@ export const api = {
   },
   overlayCancel: () => invoke<void>('overlay_cancel'),
   overlayHitTest: (x: number, y: number) => invoke<Rect[]>('overlay_hit_test', { x, y }),
+  /** Scroll mode: the scrolling area (a browser's page) under a point — `[rect]` or `[]`. */
+  overlayScrollTarget: (x: number, y: number) => invoke<Rect[]>('overlay_scroll_target', { x, y }),
+  /** Stops the running scrolling capture (what is glued so far is kept). */
+  scrollStop: () => invoke<void>('scroll_stop'),
 
   historyList: () => invoke<HistoryItem[]>('history_list'),
   historyGet: (id: string) => invoke<HistoryItem>('history_get', { id }),
@@ -51,6 +55,10 @@ export const api = {
   historySaveAs: (id: string) => invoke<string | null>('history_save_as', { id }),
   historyUpload: (id: string) => invoke<string>('history_upload', { id }),
 
+  /** Copyright picture: file dialog, stored as `watermark.png`; `false` — cancelled. */
+  watermarkPick: () => invoke<boolean>('watermark_pick'),
+  watermarkClear: () => invoke<void>('watermark_clear'),
+
   /** Sends the rendered PNG + editor document; `action` decides what happens next. */
   editorCommit: (id: string, action: Action, png: Uint8Array, docJson: string) => {
     const json = new TextEncoder().encode(docJson);
@@ -62,6 +70,8 @@ export const api = {
   },
 
   openSettings: (section?: SettingsSection) => invoke<void>('open_settings', { section: section ?? null }),
+  /** Applies the "UI scale" setting to this window (web view zoom). */
+  uiZoom: () => invoke<void>('ui_zoom'),
   panelHide: () => invoke<void>('panel_hide'),
   toastCurrent: () => invoke<ToastPayload | null>('toast_current'),
   toastHide: () => invoke<void>('toast_hide'),
@@ -93,6 +103,24 @@ export function shotUrl(path: string): string {
   }
   // WebView2 (Windows) exposes custom protocols as http://<scheme>.localhost
   return navigator.userAgent.includes('Windows') ? `http://shot.localhost/${clean}` : `shot://localhost/${clean}`;
+}
+
+/** The copyright picture as a data URL (it goes into the editor document), `null` — none. */
+export async function loadWatermarkLogo(): Promise<string | null> {
+  try {
+    const res = await fetch(shotUrl(`watermark.png?r=${Date.now()}`));
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    if (!blob.size) return null;
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return null;
+  }
 }
 
 export function errorText(e: unknown): string {

@@ -41,6 +41,8 @@ pub struct AppInfo {
     config_dir: String,
     data_dir: String,
     log_dir: String,
+    /// Dev build of a pull request ("PR #12"); empty for releases and local builds.
+    channel: String,
 }
 
 #[tauri::command]
@@ -57,6 +59,7 @@ pub fn app_info(app: AppHandle) -> AppInfo {
         config_dir: state.paths.config_dir.display().to_string(),
         data_dir: state.paths.data_dir.display().to_string(),
         log_dir: state.paths.log_dir.display().to_string(),
+        channel: crate::state::channel().to_string(),
     }
 }
 
@@ -120,7 +123,7 @@ pub async fn settings_patch(app: AppHandle, patch: serde_json::Value) -> CmdResu
 async fn apply_changes(app: &AppHandle, before: &AppSettings, after: &AppSettings) -> CmdResult<Vec<String>> {
     let state = app.state::<AppState>();
     let mut problems = Vec::new();
-    if before.hotkeys != after.hotkeys {
+    if before.hotkeys != after.hotkeys || before.experimental != after.experimental {
         // Register on the main thread (the plugin would otherwise block this thread on it).
         let (tx, rx) = tokio::sync::oneshot::channel();
         let handle = app.clone();
@@ -152,6 +155,12 @@ async fn apply_changes(app: &AppHandle, before: &AppSettings, after: &AppSetting
     }
     if before.theme != after.theme {
         ui::apply_theme(app);
+    }
+    if before.ui_scale != after.ui_scale {
+        ui::apply_ui_scale(app);
+    }
+    if before.experimental != after.experimental {
+        crate::tray::refresh(app);
     }
     let _ = app.emit("settings:changed", after);
     Ok(problems)
@@ -269,6 +278,27 @@ pub async fn overlay_hit_test(app: AppHandle, x: i32, y: i32) -> Vec<Rect> {
         let _ = (app, x, y);
         Vec::new()
     }
+}
+
+/// Scroll mode: the scrolling area under a point (a browser's page, a document) —
+/// `[rect]`, or nothing (the overlay then highlights the window).
+#[tauri::command]
+pub async fn overlay_scroll_target(app: AppHandle, x: i32, y: i32) -> Vec<Rect> {
+    #[cfg(windows)]
+    {
+        app.state::<AppState>().ui_selector.scroll_target(x, y).await
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (app, x, y);
+        Vec::new()
+    }
+}
+
+/// "Stop" in the progress toast of a scrolling capture.
+#[tauri::command]
+pub fn scroll_stop(app: AppHandle) {
+    crate::scroll::stop(&app);
 }
 
 // ---------------------------------------------------------------- history
@@ -404,11 +434,60 @@ pub async fn editor_commit(app: AppHandle, request: Request<'_>) -> CmdResult<Ac
     Ok(result)
 }
 
+// ---------------------------------------------------------------- watermark
+
+/// Longest side of a stored watermark picture.
+const WATERMARK_MAX: u32 = 800;
+
+/// Picks the watermark picture: it is converted to PNG and kept in the config folder
+/// (served as `watermark.png`). `false` — cancelled.
+#[tauri::command]
+pub async fn watermark_pick(window: WebviewWindow) -> CmdResult<bool> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    window
+        .dialog()
+        .file()
+        .set_title("Картинка для водяного знака")
+        .add_filter("Картинки", &["png", "jpg", "jpeg", "webp", "bmp"])
+        .set_parent(&window)
+        .pick_file(move |path| {
+            let _ = tx.send(path);
+        });
+    let Some(path) = rx.await.ok().flatten() else { return Ok(false) };
+    let path = path.into_path().map_err(err)?;
+    let bytes = std::fs::read(&path).map_err(|e| format!("не удалось прочитать {}: {e}", path.display()))?;
+    let png = tauri::async_runtime::spawn_blocking(move || -> CmdResult<Vec<u8>> {
+        let logo = imaging::prepare_logo(&bytes, WATERMARK_MAX).map_err(|_| "это не картинка (нужен PNG, JPG, WebP или BMP)".to_string())?;
+        imaging::encode_png(&logo).map_err(err)
+    })
+    .await
+    .map_err(err)??;
+    let state = window.state::<AppState>();
+    shoter_core::settings::write_atomic(&state.paths.watermark_file, &png).map_err(err)?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn watermark_clear(app: AppHandle) -> CmdResult<()> {
+    match std::fs::remove_file(&app.state::<AppState>().paths.watermark_file) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(err(e)),
+        _ => Ok(()),
+    }
+}
+
 // ---------------------------------------------------------------- windows & misc
 
 #[tauri::command]
 pub async fn open_settings(app: AppHandle, section: Option<String>) {
     ui::open_settings(&app, section.as_deref());
+}
+
+/// Called by every page before its first render: applies the UI scale to its window (a
+/// zoom set while the window was being created may not survive the page load). Async, so
+/// the web view is never changed from inside its own message callback.
+#[tauri::command]
+pub async fn ui_zoom(window: WebviewWindow) {
+    ui::apply_zoom(window.app_handle(), &window);
 }
 
 #[tauri::command]

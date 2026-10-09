@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{
-    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Theme, WebviewUrl, WebviewWindow,
+    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Theme, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder, WindowEvent,
 };
 
@@ -18,9 +18,14 @@ pub const PANEL: &str = "panel";
 pub const TOAST: &str = "toast";
 pub const SETTINGS: &str = "settings";
 
-// Logical sizes: the card from the design (380 wide) plus a 10 px transparent margin.
+// Logical sizes at UI scale 100%: the card from the design (380 wide) plus a 10 px
+// transparent margin.
 const PANEL_SIZE: (f64, f64) = (400.0, 660.0);
 const TOAST_SIZE: (f64, f64) = (400.0, 176.0);
+const SETTINGS_SIZE: (f64, f64) = (840.0, 700.0);
+/// The editor is never smaller: its toolbar fits in one row at its most compact (see `Toolbar`
+/// in the front end). The UI scale is lowered for the editor on a screen too small for that.
+const EDITOR_MIN: (f64, f64) = (1024.0, 520.0);
 
 fn url(route: &str) -> WebviewUrl {
     WebviewUrl::App(format!("index.html#/{route}").into())
@@ -42,6 +47,94 @@ pub fn apply_theme(app: &AppHandle) {
     for (label, window) in app.webview_windows() {
         if !label.starts_with(overlay::PREFIX) {
             let _ = window.set_theme(theme);
+        }
+    }
+}
+
+// ---------------------------------------------------------------- UI scale
+
+/// The "UI scale" setting as a web view zoom factor (1.0 = 100%).
+pub fn ui_scale(app: &AppHandle) -> f64 {
+    app.state::<AppState>().settings().ui_scale as f64 / 100.0
+}
+
+/// Zoom for a fixed-size window of `size` (logical, at 100%) that has to fit into
+/// `avail_w × avail_h` (logical): the UI scale, smaller when the window would not fit.
+fn fit_zoom(zoom: f64, size: (f64, f64), avail_w: f64, avail_h: f64) -> f64 {
+    zoom.min(avail_w / size.0).min(avail_h / size.1).max(0.5)
+}
+
+/// `fit_zoom` for a window on its current monitor (`margin` — logical px kept free).
+fn fit_on_monitor(app: &AppHandle, window: &WebviewWindow, size: (f64, f64), margin: f64) -> f64 {
+    let zoom = ui_scale(app);
+    match window.current_monitor().ok().flatten().or_else(|| app.primary_monitor().ok().flatten()) {
+        Some(m) => {
+            let wa = m.work_area();
+            let scale = m.scale_factor();
+            fit_zoom(zoom, size, wa.size.width as f64 / scale - margin, wa.size.height as f64 / scale - margin)
+        }
+        None => zoom,
+    }
+}
+
+/// Applies the UI scale to a window's web view (called when its page loads).
+pub fn apply_zoom(app: &AppHandle, window: &WebviewWindow) {
+    let zoom = match window.label() {
+        BOX_LOGIN => return,
+        SETTINGS => return fit_settings(app, window),
+        // Sized for the monitor each time they are shown, see `show_panel` and `toast`.
+        PANEL => fit_on_monitor(app, window, PANEL_SIZE, 8.0),
+        TOAST => fit_on_monitor(app, window, TOAST_SIZE, 16.0),
+        label if label.starts_with("editor-") => {
+            let zoom = fit_on_monitor(app, window, EDITOR_MIN, 0.0);
+            let min = LogicalSize::new(EDITOR_MIN.0 * zoom, EDITOR_MIN.1 * zoom);
+            let _ = window.set_min_size(Some(min));
+            // A bigger UI scale: the window grows to its new minimum.
+            if let (Ok(size), Ok(k)) = (window.inner_size(), window.scale_factor()) {
+                let now = size.to_logical::<f64>(k);
+                if now.width < min.width || now.height < min.height {
+                    let _ = window.set_size(LogicalSize::new(now.width.max(min.width), now.height.max(min.height)));
+                }
+            }
+            zoom
+        }
+        _ => ui_scale(app),
+    };
+    let _ = window.set_zoom(zoom);
+}
+
+/// Re-applies a changed UI scale to the open windows; the tray panel and toasts pick it up
+/// the next time they are shown (with a matching window size).
+pub fn apply_ui_scale(app: &AppHandle) {
+    for (label, window) in app.webview_windows() {
+        if label != PANEL && label != TOAST {
+            apply_zoom(app, &window);
+        }
+    }
+}
+
+/// The settings window has a fixed size: it grows with the UI scale (as far as the screen
+/// allows) and stays on screen.
+fn fit_settings(app: &AppHandle, window: &WebviewWindow) {
+    let monitor = window.current_monitor().ok().flatten().or_else(|| app.primary_monitor().ok().flatten());
+    let Some(m) = monitor else {
+        let _ = window.set_zoom(ui_scale(app));
+        return;
+    };
+    let scale = m.scale_factor();
+    let wa = m.work_area();
+    let (aw, ah) = (wa.size.width as f64 / scale, wa.size.height as f64 / scale);
+    let zoom = fit_zoom(ui_scale(app), SETTINGS_SIZE, aw * 0.96, ah * 0.96);
+    let (w, h) = (SETTINGS_SIZE.0 * zoom, SETTINGS_SIZE.1 * zoom);
+    let _ = window.set_zoom(zoom);
+    let _ = window.set_size(LogicalSize::new(w, h));
+    // Keep it inside the work area after growing.
+    if let Ok(pos) = window.outer_position() {
+        let (pw, ph) = ((w * scale).round() as i32, (h * scale).round() as i32);
+        let x = pos.x.min(wa.position.x + wa.size.width as i32 - pw).max(wa.position.x);
+        let y = pos.y.min(wa.position.y + wa.size.height as i32 - ph).max(wa.position.y);
+        if (x, y) != (pos.x, pos.y) {
+            let _ = window.set_position(PhysicalPosition::new(x, y));
         }
     }
 }
@@ -81,6 +174,7 @@ pub fn create_panel(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .focused(false)
         .theme(window_theme(app))
         .build()?;
+    let _ = window.set_zoom(ui_scale(app));
     let handle = app.clone();
     window.on_window_event(move |event| {
         if let WindowEvent::Focused(false) = event {
@@ -96,9 +190,11 @@ pub fn show_panel(app: &AppHandle, anchor: Option<(i32, i32)>) {
     let Ok(window) = create_panel(app) else { return };
     let (cx, cy) = anchor.unwrap_or_else(capture::cursor_position);
     let (wx, wy, ww, wh, scale) = work_area_at(app, cx, cy);
-    let pw = (PANEL_SIZE.0 * scale).round() as i32;
-    let ph = (PANEL_SIZE.1 * scale).round() as i32;
+    let zoom = fit_zoom(ui_scale(app), PANEL_SIZE, ww as f64 / scale - 8.0, wh as f64 / scale - 8.0);
+    let pw = (PANEL_SIZE.0 * zoom * scale).round() as i32;
+    let ph = (PANEL_SIZE.1 * zoom * scale).round() as i32;
     let margin = (4.0 * scale) as i32;
+    let _ = window.set_zoom(zoom);
     let x = if anchor.is_some() { (cx - pw / 2).clamp(wx + margin, wx + ww - pw - margin) } else { wx + ww - pw - margin };
     // Taskbar at the top → open downwards, otherwise upwards.
     let y = if anchor.is_some() && cy < wy + wh / 2 { wy + margin } else { wy + wh - ph - margin };
@@ -150,6 +246,8 @@ pub struct Toast {
     pub history_id: Option<String>,
     /// Offer "Retry" for a failed upload of `history_id`.
     pub retry_upload: bool,
+    /// Offer "Stop" for the running scrolling capture.
+    pub stop_scroll: bool,
     /// 0 = stays until replaced/closed.
     pub timeout_ms: u64,
 }
@@ -187,6 +285,10 @@ impl Toast {
         self.retry_upload = true;
         self
     }
+    pub fn stop_scroll(mut self) -> Self {
+        self.stop_scroll = true;
+        self
+    }
     pub fn timeout(mut self, ms: u64) -> Self {
         self.timeout_ms = ms;
         self
@@ -197,7 +299,7 @@ pub fn create_toast(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     if let Some(w) = app.get_webview_window(TOAST) {
         return Ok(w);
     }
-    WebviewWindowBuilder::new(app, TOAST, url("toast"))
+    let window = WebviewWindowBuilder::new(app, TOAST, url("toast"))
         .title("AShot")
         .inner_size(TOAST_SIZE.0, TOAST_SIZE.1)
         .decorations(false)
@@ -210,7 +312,17 @@ pub fn create_toast(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .focused(false)
         .visible(false)
         .theme(window_theme(app))
-        .build()
+        .build()?;
+    let _ = window.set_zoom(ui_scale(app));
+    // Never in screenshots: the scrolling capture shows its progress over the area it grabs.
+    #[cfg(windows)]
+    if let Ok(hwnd) = window.hwnd() {
+        use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE};
+        if let Err(e) = unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) } {
+            log::warn!("toast: cannot exclude it from screen capture: {e}");
+        }
+    }
+    Ok(window)
 }
 
 /// Shows a notification in the bottom-right corner of the monitor with the cursor.
@@ -220,9 +332,11 @@ pub fn toast(app: &AppHandle, toast: Toast) {
     let Ok(window) = create_toast(app) else { return };
     let (cx, cy) = capture::cursor_position();
     let (wx, wy, ww, wh, scale) = work_area_at(app, cx, cy);
-    let tw = (TOAST_SIZE.0 * scale).round() as i32;
-    let th = (TOAST_SIZE.1 * scale).round() as i32;
+    let zoom = fit_zoom(ui_scale(app), TOAST_SIZE, ww as f64 / scale - 16.0, wh as f64 / scale - 16.0);
+    let tw = (TOAST_SIZE.0 * zoom * scale).round() as i32;
+    let th = (TOAST_SIZE.1 * zoom * scale).round() as i32;
     let margin = (8.0 * scale) as i32;
+    let _ = window.set_zoom(zoom);
     let _ = window.set_position(PhysicalPosition::new(wx + ww - tw - margin, wy + wh - th - margin));
     let _ = window.set_size(PhysicalSize::new(tw as u32, th as u32));
     let _ = app.emit_to(TOAST, "toast:show", &toast);
@@ -319,9 +433,12 @@ pub fn open_settings(app: &AppHandle, section: Option<&str>) {
         return;
     }
     let route = section.map(|s| format!("settings/{s}")).unwrap_or_else(|| "settings".into());
-    let _ = WebviewWindowBuilder::new(app, SETTINGS, url(&route))
+    let (cx, cy) = capture::cursor_position();
+    let (_, _, ww, wh, scale) = work_area_at(app, cx, cy);
+    let zoom = fit_zoom(ui_scale(app), SETTINGS_SIZE, ww as f64 / scale * 0.96, wh as f64 / scale * 0.96);
+    let built = WebviewWindowBuilder::new(app, SETTINGS, url(&route))
         .title("Настройки — AShot")
-        .inner_size(840.0, 700.0)
+        .inner_size(SETTINGS_SIZE.0 * zoom, SETTINGS_SIZE.1 * zoom)
         // Fixed size; own title bar (drag area, minimize / close) is drawn by the page.
         .resizable(false)
         .maximizable(false)
@@ -329,6 +446,9 @@ pub fn open_settings(app: &AppHandle, section: Option<&str>) {
         .center()
         .theme(window_theme(app))
         .build();
+    if let Ok(window) = built {
+        let _ = window.set_zoom(zoom);
+    }
 }
 
 /// "About" is the last section of the settings window.
@@ -350,22 +470,27 @@ pub fn open_editor(app: &AppHandle, id: &str) {
     let (iw, ih) = state.history.get(id).map(|i| (i.width, i.height)).unwrap_or((1280, 720));
     let (cx, cy) = capture::cursor_position();
     let (wx, wy, ww, wh, scale) = work_area_at(app, cx, cy);
-    // Logical sizes: image at 100% + toolbar/status bar/padding, clamped to the work area.
-    let max_w = ww as f64 / scale * 0.92;
-    let max_h = wh as f64 / scale * 0.92;
-    let w = (iw as f64 / scale + 96.0).clamp(980.0_f64.min(max_w), max_w);
-    let h = (ih as f64 / scale + 190.0).clamp(640.0_f64.min(max_h), max_h);
+    // Logical sizes: image at 100% + toolbar/status bar/padding (they grow with the UI
+    // scale), clamped to the work area.
+    let (avail_w, avail_h) = (ww as f64 / scale, wh as f64 / scale);
+    let zoom = fit_zoom(ui_scale(app), EDITOR_MIN, avail_w, avail_h);
+    let (min_w, min_h) = (EDITOR_MIN.0 * zoom, EDITOR_MIN.1 * zoom);
+    let max_w = (avail_w * 0.92).max(min_w);
+    let max_h = (avail_h * 0.92).max(min_h);
+    let w = (iw as f64 / scale + 96.0 * zoom).clamp(min_w, max_w);
+    let h = (ih as f64 / scale + 190.0 * zoom).clamp((640.0 * zoom).min(max_h), max_h);
     let x = wx as f64 / scale + (ww as f64 / scale - w) / 2.0;
     let y = wy as f64 / scale + (wh as f64 / scale - h) / 2.0;
     let built = WebviewWindowBuilder::new(app, &label, url(&format!("editor/{id}")))
         .title("Редактор — AShot")
         .inner_size(w, h)
-        .min_inner_size(760.0, 480.0)
+        .min_inner_size(min_w, min_h)
         .position(x, y)
         .theme(window_theme(app))
         .focused(true)
         .build();
     if let Ok(window) = built {
+        let _ = window.set_zoom(zoom);
         let _ = window.set_focus();
     }
 }

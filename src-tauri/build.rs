@@ -28,5 +28,7 @@ fn main() {
     // Self-update source: own server (CI secret UPDATE_URL) or the GitHub repository.
     println!("cargo:rerun-if-env-changed=SHOTER_UPDATE_URL");
     println!("cargo:rerun-if-env-changed=SHOTER_UPDATE_REPO");
+    // Dev builds of pull requests ("AShot Dev"): the label shown in the app, e.g. "PR #12".
+    println!("cargo:rerun-if-env-changed=SHOTER_CHANNEL");
     tauri_build::build()
 }

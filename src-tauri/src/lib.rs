@@ -11,6 +11,7 @@ mod flow;
 mod hotkeys;
 mod overlay;
 mod protocol;
+mod scroll;
 mod secrets;
 mod state;
 mod tray;
@@ -25,16 +26,16 @@ use tauri_plugin_autostart::MacosLauncher;
 use state::{AppState, CaptureMode};
 use ui::Toast;
 
-/// Command line: `--capture region|window|fullscreen|last`, `--panel`, `--autostart`.
+/// Command line: `--capture region|window|fullscreen|scroll`, `--panel`, `--autostart`.
 fn handle_args(app: &AppHandle, args: &[String], from_second_instance: bool) {
     let mut iter = args.iter().skip(1);
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--capture" => {
                 let mode = match iter.next().map(String::as_str) {
-                    Some("window") => CaptureMode::Window,
+                    Some("window") => CaptureMode::WindowPick,
                     Some("fullscreen") => CaptureMode::Fullscreen,
-                    Some("last") => CaptureMode::LastRegion,
+                    Some("scroll") => CaptureMode::Scroll,
                     _ => CaptureMode::Region,
                 };
                 flow::start(app, mode);
@@ -84,6 +85,8 @@ pub fn run() {
             commands::overlay_finish_annotated,
             commands::overlay_cancel,
             commands::overlay_hit_test,
+            commands::overlay_scroll_target,
+            commands::scroll_stop,
             commands::history_list,
             commands::history_get,
             commands::history_annotations,
@@ -96,7 +99,10 @@ pub fn run() {
             commands::history_save_as,
             commands::history_upload,
             commands::editor_commit,
+            commands::watermark_pick,
+            commands::watermark_clear,
             commands::open_settings,
+            commands::ui_zoom,
             commands::panel_hide,
             commands::toast_current,
             commands::toast_hide,
@@ -143,11 +149,17 @@ pub fn run() {
                     Toast::error("Горячие клавиши не назначены", problems.join("\n")).timeout(15000),
                 );
             } else if !settings.welcomed {
-                let hk = shoter_core::settings::hotkey_label(&settings.hotkeys.region);
-                let first = if hk.is_empty() { String::new() } else { format!("{hk} — снимок области. ") };
+                let hk = &settings.hotkeys;
+                let scroll = settings.experimental.scroll_capture;
+                let keys: Vec<String> = [(&hk.region, "область"), (&hk.window, "окно"), (&hk.fullscreen, "экран"), (&hk.scroll, "с прокруткой")]
+                    .into_iter()
+                    .filter(|(accel, what)| !accel.trim().is_empty() && (scroll || *what != "с прокруткой"))
+                    .map(|(accel, what)| format!("{} — {what}", shoter_core::settings::hotkey_label(accel)))
+                    .collect();
+                let first = if keys.is_empty() { String::new() } else { format!("{}. ", keys.join(", ")) };
                 ui::toast(
                     &handle,
-                    Toast::info("AShot работает в трее")
+                    Toast::info(format!("{} работает в трее", handle.package_info().name))
                         .message(format!("{first}Клик по иконке в трее — меню и последние снимки."))
                         .timeout(9000),
                 );

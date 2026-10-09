@@ -12,9 +12,19 @@ pub mod imaging;
 pub mod links;
 pub mod oauth;
 pub mod settings;
+pub mod stitch;
 pub mod updates;
 
 pub use geometry::Rect;
+
+/// Russian plural form: 1 кадр, 2 кадра, 5 кадров, 21 кадр.
+pub fn plural(n: u64, one: &'static str, few: &'static str, many: &'static str) -> &'static str {
+    match (n % 10, n % 100) {
+        (1, r) if r != 11 => one,
+        (2..=4, r) if !(12..=14).contains(&r) => few,
+        _ => many,
+    }
+}
 
 /// Random lowercase alphanumeric string (no ambiguous characters).
 /// Not cryptographically strong; used for file names and OAuth `state`.
@@ -67,6 +77,12 @@ pub fn percent_decode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn plural_forms() {
+        let f = |n| super::plural(n, "кадр", "кадра", "кадров");
+        assert_eq!([f(1), f(2), f(5), f(11), f(12), f(21), f(24), f(111)], ["кадр", "кадра", "кадров", "кадров", "кадров", "кадр", "кадра", "кадров"]);
+    }
+
     #[test]
     fn random_strings() {
         let a = super::random_string(12);

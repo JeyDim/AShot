@@ -20,21 +20,21 @@ use crate::secrets::Secrets;
 pub enum CaptureMode {
     /// Interactive selection (drag or click a window / UI element).
     Region,
-    /// Active (foreground) window.
-    Window,
-    /// Interactive selection with the "click a window" hint (tray button).
+    /// Hover a window and click it (whole windows only).
     WindowPick,
+    /// The monitor with the cursor or all monitors; with several monitors the user clicks one.
     Fullscreen,
-    LastRegion,
+    /// Select an area, then AShot scrolls it and glues the frames (whole web pages).
+    Scroll,
 }
 
 impl CaptureMode {
     pub fn source(self) -> &'static str {
         match self {
             CaptureMode::Region => "region",
-            CaptureMode::Window | CaptureMode::WindowPick => "window",
+            CaptureMode::WindowPick => "window",
             CaptureMode::Fullscreen => "fullscreen",
-            CaptureMode::LastRegion => "lastRegion",
+            CaptureMode::Scroll => "scroll",
         }
     }
 }
@@ -55,6 +55,8 @@ pub enum Action {
 pub struct Paths {
     pub settings_file: PathBuf,
     pub secrets_file: PathBuf,
+    /// Picture of the watermark (PNG), when one was chosen.
+    pub watermark_file: PathBuf,
     pub history_dir: PathBuf,
     pub default_save_dir: PathBuf,
     pub config_dir: PathBuf,
@@ -88,6 +90,8 @@ pub struct AppState {
     /// user starts a new sign-in (e.g. closed the browser tab and clicked again).
     pub box_login: tokio::sync::Mutex<()>,
     pub box_login_cancel: tokio::sync::Notify,
+    /// Set while a scrolling capture runs: raising the flag stops it (Esc, "Stop").
+    pub scroll_stop: Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>,
     /// Last toast, pulled by the toast page when it loads after the event was sent.
     pub last_toast: Mutex<Option<(crate::ui::Toast, Instant)>>,
     #[cfg(windows)]
@@ -114,6 +118,7 @@ impl AppState {
         let paths = Paths {
             settings_file: config_dir.join("settings.json"),
             secrets_file: config_dir.join("secrets.dat"),
+            watermark_file: config_dir.join("watermark.png"),
             history_dir: data_dir.join("history"),
             default_save_dir,
             config_dir,
@@ -136,6 +141,7 @@ impl AppState {
             hotkeys: Mutex::new(HashMap::new()),
             panel_hidden_at: Mutex::new(None),
             last_toast: Mutex::new(None),
+            scroll_stop: Mutex::new(None),
             box_login: tokio::sync::Mutex::new(()),
             box_login_cancel: tokio::sync::Notify::new(),
             #[cfg(windows)]
@@ -251,6 +257,11 @@ pub fn default_link_template() -> String {
 /// Template for rewriting Box links with the current settings.
 pub fn link_template(links: &shoter_core::settings::LinkSettings) -> String {
     if links.template.trim().is_empty() { default_link_template() } else { links.template.clone() }
+}
+
+/// Dev build of a pull request ("AShot Dev"): its label, e.g. "PR #12"; empty otherwise.
+pub fn channel() -> &'static str {
+    option_env!("SHOTER_CHANNEL").map(str::trim).unwrap_or_default()
 }
 
 /// The Box app compiled into this build, if any.

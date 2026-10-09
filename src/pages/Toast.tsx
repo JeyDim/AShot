@@ -1,6 +1,6 @@
 // Notification card shown in the bottom-right corner (link copied, upload progress, errors…).
 import clsx from 'clsx';
-import { Check, CircleAlert, CircleCheck, CloudUpload, ExternalLink, FolderOpen, Info, Pencil, X } from 'lucide-react';
+import { Check, ChevronsDown, CircleAlert, CircleCheck, CloudUpload, ExternalLink, FolderOpen, Info, Pencil, Square, X } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { IconButton } from '../components/ui';
 import { useTauriEvent } from '../lib/hooks';
@@ -49,7 +49,7 @@ export default function Toast() {
     success: <CircleCheck size={22} className="text-success" />,
     error: <CircleAlert size={22} className="text-danger" />,
     info: <Info size={22} className="text-muted" />,
-    progress: <CloudUpload size={22} className="text-muted" />,
+    progress: toast.stopScroll ? <ChevronsDown size={22} className="text-muted" /> : <CloudUpload size={22} className="text-muted" />,
   }[toast.kind];
 
   const copyLink = async () => {
@@ -93,6 +93,13 @@ export default function Toast() {
           {toast.kind === 'progress' && (
             <div className="h-1 overflow-hidden rounded-full bg-surface-2">
               <div className="animate-indeterminate h-full w-2/5 rounded-full bg-text" />
+            </div>
+          )}
+          {toast.stopScroll && (
+            <div className="flex flex-wrap gap-2">
+              <ToastButton primary icon={<Square size={12} fill="currentColor" />} onClick={() => api.scrollStop().catch(() => {})}>
+                Остановить
+              </ToastButton>
             </div>
           )}
           {(retry || toast.path || showEdit) && (

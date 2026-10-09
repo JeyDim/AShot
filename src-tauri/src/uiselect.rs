@@ -6,7 +6,11 @@
 //! UI Automation calls may time out (cached as failed for the whole capture) or see a page
 //! without content yet. For Firefox windows the MSAA backend is asked as well — it hit-tests
 //! afresh on every query — and the more specific answer wins.
+//!
+//! The scrolling capture asks for the *scrolling area* under the cursor instead: the deepest
+//! child window there (a browser's page) and a UI Automation element that scrolls.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Mutex;
@@ -14,10 +18,17 @@ use std::time::{Duration, Instant};
 
 use shoter_core::Rect;
 use snow_ui_selector::{AccessibilityBackend, ElementRect, ElementRegionService, HitTestMode, Point, QueryControl, StopReason};
-use windows::Win32::Foundation::{HWND, LPARAM, RECT};
-use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
-use windows::Win32::UI::Accessibility::{AccessibleObjectFromWindow, IAccessible};
-use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetClassNameW, GetWindowRect, IsIconic, IsWindowVisible, OBJID_CLIENT};
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
+use windows::Win32::Graphics::Gdi::ScreenToClient;
+use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
+use windows::Win32::UI::Accessibility::{
+    AccessibleObjectFromWindow, CUIAutomation, IAccessible, IUIAutomation, IUIAutomationElement, IUIAutomationScrollPattern,
+    UIA_ScrollPatternId,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    ChildWindowFromPointEx, EnumWindows, GetClassNameW, GetWindowRect, IsIconic, IsWindowVisible, CWP_SKIPINVISIBLE, CWP_SKIPTRANSPARENT,
+    OBJID_CLIENT,
+};
 use windows::core::{BOOL, Interface};
 
 /// A timed-out MSAA window is skipped until the next refresh; Firefox may still be starting
@@ -27,6 +38,7 @@ const MSAA_RETRY_AFTER: Duration = Duration::from_secs(1);
 enum Request {
     Refresh(Vec<usize>),
     Query { x: i32, y: i32, reply: tokio::sync::oneshot::Sender<Vec<Rect>> },
+    ScrollTarget { x: i32, y: i32, reply: tokio::sync::oneshot::Sender<Vec<Rect>> },
     Release,
 }
 
@@ -42,6 +54,10 @@ struct Worker {
     msaa_refreshed: Instant,
     /// Firefox gave no elements in this capture (logged once).
     firefox_warned: bool,
+    /// Own UI Automation client for scroll patterns (created on first use).
+    automation: Option<IUIAutomation>,
+    /// Scrolling area per child window, for this capture.
+    scroll_cache: HashMap<isize, Option<Rect>>,
 }
 
 impl Worker {
@@ -53,7 +69,15 @@ impl Worker {
                 None
             }
         };
-        Self { uia, msaa: None, excluded: Vec::new(), msaa_refreshed: Instant::now(), firefox_warned: false }
+        Self {
+            uia,
+            msaa: None,
+            excluded: Vec::new(),
+            msaa_refreshed: Instant::now(),
+            firefox_warned: false,
+            automation: None,
+            scroll_cache: HashMap::new(),
+        }
     }
 
     fn refresh(&mut self, excluded: Vec<usize>) {
@@ -70,6 +94,7 @@ impl Worker {
         self.msaa_refreshed = Instant::now();
         self.excluded = excluded;
         self.firefox_warned = false;
+        self.scroll_cache.clear();
         warm_up_firefox(&self.excluded);
     }
 
@@ -118,6 +143,59 @@ impl Worker {
             .collect()
     }
 
+    /// The scrolling area under a point: `[rect]` or nothing.
+    fn scroll_target(&mut self, x: i32, y: i32) -> Vec<Rect> {
+        let point = Point { x, y, ..Default::default() };
+        let Some(top) = self.uia.as_ref().or(self.msaa.as_ref()).and_then(|s| s.window_at(point)) else {
+            return Vec::new();
+        };
+        let top = HWND(top as *mut _);
+        let window = deepest_child(top, x, y);
+        if let Some(found) = self.scroll_cache.get(&(window.0 as isize)) {
+            return found.iter().copied().collect();
+        }
+        // A scrolling element, else the child window itself (a document pane) if it is big.
+        let found = self.scrollable_rect(window).or_else(|| {
+            (window != top).then(|| window_rect(window)).flatten().filter(|r| r.width >= 120 && r.height >= 120)
+        });
+        self.scroll_cache.insert(window.0 as isize, found);
+        found.into_iter().collect()
+    }
+
+    /// The first vertically scrolling UI Automation element of a window: the window's own
+    /// element, the first few levels inside it (the page inside a browser's content window),
+    /// then its ancestors.
+    fn scrollable_rect(&mut self, hwnd: HWND) -> Option<Rect> {
+        if self.automation.is_none() {
+            self.automation = unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }.ok();
+        }
+        let uia = self.automation.as_ref()?;
+        let walker = unsafe { uia.ControlViewWalker() }.ok()?;
+        let element = unsafe { uia.ElementFromHandle(hwnd) }.ok()?;
+        let mut candidates: Vec<IUIAutomationElement> = vec![element.clone()];
+        let mut child = unsafe { walker.GetFirstChildElement(&element) }.ok();
+        for _ in 0..3 {
+            let Some(c) = child else { break };
+            child = unsafe { walker.GetFirstChildElement(&c) }.ok();
+            candidates.push(c);
+        }
+        let mut parent = unsafe { walker.GetParentElement(&element) }.ok();
+        for _ in 0..6 {
+            let Some(p) = parent else { break };
+            parent = unsafe { walker.GetParentElement(&p) }.ok();
+            candidates.push(p);
+        }
+        candidates.into_iter().find_map(|c| {
+            let pattern = unsafe { c.GetCurrentPatternAs::<IUIAutomationScrollPattern>(UIA_ScrollPatternId) }.ok()?;
+            if !unsafe { pattern.CurrentVerticallyScrollable() }.is_ok_and(|v| v.as_bool()) {
+                return None;
+            }
+            let r = unsafe { c.CurrentBoundingRectangle() }.ok()?;
+            let rect = Rect::new(r.left, r.top, (r.right - r.left).max(0) as u32, (r.bottom - r.top).max(0) as u32);
+            (rect.width >= 60 && rect.height >= 60).then_some(rect)
+        })
+    }
+
     fn msaa_query(&mut self, point: Point) -> Vec<ElementRect> {
         if self.msaa.is_none() {
             match ElementRegionService::with_backend_excluding_ids(AccessibilityBackend::Msaa, &self.excluded) {
@@ -135,6 +213,30 @@ impl Worker {
             .and_then(|r| r.path)
             .unwrap_or_default()
     }
+}
+
+/// The deepest visible child window under a screen point (a browser's page, an editor's
+/// document pane).
+fn deepest_child(top: HWND, x: i32, y: i32) -> HWND {
+    let mut hwnd = top;
+    for _ in 0..16 {
+        let mut pt = POINT { x, y };
+        if !unsafe { ScreenToClient(hwnd, &mut pt) }.as_bool() {
+            break;
+        }
+        let child = unsafe { ChildWindowFromPointEx(hwnd, pt, CWP_SKIPINVISIBLE | CWP_SKIPTRANSPARENT) };
+        if child.is_invalid() || child == hwnd {
+            break;
+        }
+        hwnd = child;
+    }
+    hwnd
+}
+
+fn window_rect(hwnd: HWND) -> Option<Rect> {
+    let mut r = RECT::default();
+    unsafe { GetWindowRect(hwnd, &mut r) }.ok()?;
+    Some(Rect::new(r.left, r.top, (r.right - r.left).max(0) as u32, (r.bottom - r.top).max(0) as u32))
 }
 
 /// Paths are deepest first: the smaller deepest element is the more precise answer.
@@ -212,12 +314,17 @@ impl UiSelector {
     pub fn spawn() -> Self {
         let (tx, rx) = mpsc::channel::<Request>();
         let spawned = std::thread::Builder::new().name("ui-selector".into()).spawn(move || {
+            // The thread's own UI Automation client (scroll areas) needs COM for its whole life.
+            let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
             let mut worker = Worker::new();
             while let Ok(request) = rx.recv() {
                 match request {
                     Request::Refresh(excluded) => worker.refresh(excluded),
                     Request::Query { x, y, reply } => {
                         let _ = reply.send(worker.query(x, y));
+                    }
+                    Request::ScrollTarget { x, y, reply } => {
+                        let _ = reply.send(worker.scroll_target(x, y));
                     }
                     Request::Release => worker.release(),
                 }
@@ -238,6 +345,15 @@ impl UiSelector {
     pub async fn query(&self, x: i32, y: i32) -> Vec<Rect> {
         let (reply, rx) = tokio::sync::oneshot::channel();
         if self.tx.lock().unwrap().send(Request::Query { x, y, reply }).is_err() {
+            return Vec::new();
+        }
+        rx.await.unwrap_or_default()
+    }
+
+    /// The scrolling area under the point (see [`Worker::scroll_target`]).
+    pub async fn scroll_target(&self, x: i32, y: i32) -> Vec<Rect> {
+        let (reply, rx) = tokio::sync::oneshot::channel();
+        if self.tx.lock().unwrap().send(Request::ScrollTarget { x, y, reply }).is_err() {
             return Vec::new();
         }
         rx.await.unwrap_or_default()

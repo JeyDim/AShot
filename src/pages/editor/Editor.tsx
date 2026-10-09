@@ -1,5 +1,5 @@
-// Screenshot editor: annotate (shapes, arrows, text, steps, marker, pixelation), crop,
-// then copy / save / upload. The document is stored with the history item, so
+// Screenshot editor: annotate (shapes, arrows, text, steps, marker, pixelation, watermark or
+// copyright), crop, then copy / save / upload. The document is stored with the history item, so
 // annotations remain editable when the screenshot is opened again.
 // Drawing itself lives in `useAnnotator` (shared with the capture overlay).
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -13,6 +13,7 @@ import { sizeLabel } from '../../lib/format';
 import { useTauriEvent } from '../../lib/hooks';
 import { api, errorText, shotUrl } from '../../lib/ipc';
 import type { Action, AppSettings, HistoryItem, ResizeSettings } from '../../lib/types';
+import { useWatermark } from './Watermark';
 import {
   clampCrop,
   DEFAULT_RESIZE,
@@ -119,6 +120,7 @@ export default function Editor({ id }: { id: string }) {
     setColorState(s.editor.color || '#FF3B30');
     setSizeState(s.editor.size ?? 1);
     if (s.resize) setResizeState(s.resize);
+    wm.init(s.watermark);
   };
 
   // The overlay and other editors share the "downscale to" setting. Echoes of our own
@@ -206,6 +208,18 @@ export default function Editor({ id }: { id: string }) {
     savePrefs(color, s);
     ann.setStyle({ size: s });
   };
+
+  // ------------------------------------------------------------ watermark & copyright
+  const wm = useWatermark({
+    doc,
+    host: ann,
+    frame: (d) => {
+      if (!img) return null;
+      const area = visibleArea(d, W, H);
+      return { area, full: { x: 0, y: 0, w: W, h: H }, scale: thickenFactor(resize, area.w, area.h) };
+    },
+    onError: (text) => setStatus({ kind: 'error', text }),
+  });
 
   // ------------------------------------------------------------ pointer
   const imagePoint = () => stageRef.current!.getRelativePointerPosition() ?? { x: 0, y: 0 };
@@ -450,6 +464,7 @@ export default function Editor({ id }: { id: string }) {
         redo={ann.redo}
         busy={busy}
         act={act}
+        extra={(size) => wm.picker(size)}
       />
 
       <div

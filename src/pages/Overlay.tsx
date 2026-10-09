@@ -4,7 +4,8 @@
 // text, steps, marker, pixelation — and copy / save / get a link without opening the editor.
 //
 // Mouse: drag — free region; click — the highlighted window / UI element; wheel — bigger /
-// smaller UI element; handles — resize; drag inside the selection (Move tool) — move;
+// smaller UI element (window mode: whole windows only, no free region; screen mode with several
+// monitors: a click takes the monitor); handles — resize; drag inside the selection (Move tool) — move;
 // with a drawing tool — draw inside the selection (text tool dragged — an arrow to the press
 // point with the text at its tail); double click — editor;
 // right click — reset selection / cancel.
@@ -19,14 +20,14 @@ import { Copy, Download, Link2, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Group, Layer, Stage } from 'react-konva';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { IconButton } from '../components/ui';
 import { useTauriEvent } from '../lib/hooks';
 import { api, shotUrl } from '../lib/ipc';
 import type { Action, AppSettings, OverlayPrepare, Rect, ResizeSettings } from '../lib/types';
 import { DEFAULT_RESIZE, emptyDoc, historyOf, imageScaleFor, outputSize, thickenFactor, translate, type History, type Tool } from './editor/model';
 import type { PixelSource } from './editor/pixelate';
-import { ColorPicker, ResizePicker, SizePicker, StepPicker, TOOLS } from './editor/Toolbar';
+import { ColorPicker, ResizePicker, SizePicker, StepPicker, ToolButtons, TOOLS } from './editor/Toolbar';
 import { isHandle, shapeIdOf, useAnnotator } from './editor/useAnnotator';
+import { useWatermark } from './editor/Watermark';
 import {
   actionBarPosition,
   clamp,
@@ -135,6 +136,13 @@ export default function Overlay() {
   const [source, setSource] = useState<PixelSource | null>(null);
   const [selectionRev, setSelectionRev] = useState(0);
 
+  /** Window mode: only whole windows are highlighted and picked (no UI elements, no free region). */
+  const windowsOnly = () => s.current.prep?.mode === 'windowPick';
+  /** Screen mode (several monitors): the monitor under the mouse is lit, a click takes it. */
+  const screensOnly = () => s.current.prep?.mode === 'fullscreen';
+  /** Something is picked by a click; no free region, crosshair or magnifier. */
+  const pickOnly = () => windowsOnly() || screensOnly();
+
   /** Physical pixels per CSS pixel. */
   const scale = () => {
     const img = s.current.img;
@@ -174,11 +182,31 @@ export default function Overlay() {
   });
   const annRef = useRef(ann);
   annRef.current = ann;
+  // Watermark / copyright over the selection (the settings are shared with the editor).
+  const wm = useWatermark({
+    doc: hist.present,
+    host: ann,
+    frame: () => {
+      const r = s.current.selection;
+      if (!r) return null;
+      const area = { x: r.x, y: r.y, w: r.width, h: r.height };
+      return { area, full: area, scale: thickenFactor(downscaleRef.current, r.width, r.height) };
+    },
+    onError: (text) => {
+      setToast(text);
+      window.setTimeout(() => setToast(null), 2500);
+    },
+  });
   const docRef = useRef(hist.present);
   docRef.current = hist.present;
   const toolRef = useRef(tool);
   toolRef.current = tool;
   void selectionRev; // re-render trigger for the selection-dependent props above
+  // The watermark / copyright follows the selection when it is moved or resized.
+  useEffect(() => {
+    wm.refit(docRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectionRev]);
 
   const resetDrawing = () => {
     annRef.current.reset();
@@ -216,8 +244,10 @@ export default function Overlay() {
         setColor(v.settings.editor.color || '#FF3B30');
         setSize(v.settings.editor.size ?? 1);
         if (v.settings.resize) setDownscale(v.settings.resize);
+        wm.init(v.settings.watermark);
       })
       .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   // Shared with the editor (and the other monitors' overlays); echoes of changes made
   // here are ignored (they could arrive after a newer value typed here).
@@ -252,7 +282,8 @@ export default function Overlay() {
     const k = scale();
     ctx.clearRect(0, 0, W, H);
 
-    const focus = st.selection ?? (st.phase === 'idle' ? st.hover : null);
+    // The hovered window / element stays highlighted while the button is down (a click takes it).
+    const focus = st.selection ?? (st.phase === 'idle' || st.phase === 'pending' ? st.hover : null);
     // Dim everything except the focused area.
     ctx.fillStyle = 'rgba(8, 10, 16, 0.5)';
     if (focus) {
@@ -264,8 +295,8 @@ export default function Overlay() {
       ctx.fillRect(0, 0, W, H);
     }
 
-    // Crosshair while choosing.
-    if (st.phase === 'idle' || st.phase === 'drawing' || st.phase === 'pending') {
+    // Crosshair while choosing a region.
+    if ((st.phase === 'idle' || st.phase === 'drawing' || st.phase === 'pending') && !pickOnly()) {
       ctx.save();
       ctx.strokeStyle = 'rgba(255,255,255,0.28)';
       ctx.lineWidth = 1;
@@ -323,7 +354,8 @@ export default function Overlay() {
       }
     }
 
-    if (st.prep?.showMagnifier && st.phase !== 'selected' && st.phase !== 'moving' && st.mouse.x >= 0) {
+    // The magnifier is for precise region edges — not needed to pick a window.
+    if (st.prep?.showMagnifier && !pickOnly() && st.phase !== 'selected' && st.phase !== 'moving' && st.mouse.x >= 0) {
       drawMagnifier(ctx, st, k, W, H);
     }
 
@@ -428,11 +460,20 @@ export default function Overlay() {
 
   function updateHover() {
     const st = s.current;
-    if (st.phase !== 'idle') return;
+    if (st.phase !== 'idle' && st.phase !== 'pending') return;
     const { x, y } = st.mouse;
+    if (screensOnly()) {
+      st.hover = contains(st.bounds, x, y) ? st.bounds : null;
+      st.hoverIsElement = false;
+      return;
+    }
     const pathRect = st.path.length ? st.path[Math.min(st.level, st.path.length - 1)] : null;
     if (pathRect && contains(pathRect, x, y)) {
-      st.hover = clamp(pathRect, st.bounds);
+      // Only what is seen of it: the window list holds the visible part of each window (not
+      // the part under the taskbar), the element or window from UI Automation does not.
+      const w = topmostAt(st.windows, x, y);
+      const seen = w ? clamp(pathRect, w) : pathRect;
+      st.hover = clamp(seen.width >= 4 && seen.height >= 4 ? seen : pathRect, st.bounds);
       st.hoverIsElement = st.level < st.path.length - 1;
     } else {
       const w = topmostAt(st.windows, x, y);
@@ -454,7 +495,9 @@ export default function Overlay() {
     st.lastQuery = { x, y };
     const b = st.prep.monitor.bounds;
     try {
-      const rects = await api.overlayHitTest(Math.round(x + b.x), Math.round(y + b.y));
+      // Scroll mode: the scrolling area (a browser's page) instead of UI elements.
+      const query = st.prep.mode === 'scroll' ? api.overlayScrollTarget : api.overlayHitTest;
+      const rects = await query(Math.round(x + b.x), Math.round(y + b.y));
       const path = rects.map(local).filter((r) => r.width >= 6 && r.height >= 6);
       // Keep the chosen level when only the deepest element changed size slightly.
       const changed = path.length !== st.path.length || path.some((r, i) => r.x !== st.path[i]?.x || r.width !== st.path[i]?.width);
@@ -651,11 +694,16 @@ export default function Overlay() {
       case 'idle':
         updateHover();
         if (Math.abs(p.x - st.lastQuery.x) + Math.abs(p.y - st.lastQuery.y) > 2) queryElements();
-        setCursor('crosshair');
+        setCursor(pickOnly() ? 'default' : 'crosshair');
         break;
       case 'pending':
       case 'drawing':
         if (st.phase === 'pending') {
+          // Window mode: no free region — the release takes the window under the cursor.
+          if (pickOnly()) {
+            updateHover();
+            break;
+          }
           if (Math.abs(p.x - st.start.x) <= 4 * k && Math.abs(p.y - st.start.y) <= 4 * k) break;
           st.phase = 'drawing';
           setHint(false);
@@ -965,13 +1013,25 @@ export default function Overlay() {
 
       {hint && imageSrc && (
         <div className="animate-fade-in pointer-events-none absolute top-6 left-1/2 flex -translate-x-1/2 items-center gap-3 rounded-full bg-surface/95 px-5 py-2.5 text-[13px] text-text shadow-(--shadow-pop)">
-          <span className="font-medium">{mode === 'windowPick' ? 'Кликните по окну или элементу' : 'Выделите область или кликните по окну'}</span>
+          <span className="font-medium">
+            {mode === 'windowPick'
+              ? 'Кликните по окну'
+              : mode === 'fullscreen'
+                ? 'Кликните по экрану, который снять'
+                : mode === 'scroll'
+                ? 'Кликните по странице или выделите область — AShot прокрутит её сам'
+                : 'Выделите область или кликните по окну'}
+          </span>
           <span className="text-subtle">·</span>
-          <span className="text-muted">колесо — уровень элемента</span>
-          <span className="text-subtle">·</span>
-          <span className="kbd">C</span>
-          <span className="text-muted">цвет</span>
-          <span className="text-subtle">·</span>
+          {mode === 'region' && (
+            <>
+              <span className="text-muted">колесо — уровень элемента</span>
+              <span className="text-subtle">·</span>
+              <span className="kbd">C</span>
+              <span className="text-muted">цвет</span>
+              <span className="text-subtle">·</span>
+            </>
+          )}
           <span className="kbd">Esc</span>
           <span className="text-muted">отмена</span>
         </div>
@@ -991,11 +1051,9 @@ export default function Overlay() {
           onMouseDown={(e) => e.stopPropagation()}
         >
           <div className="flex items-center" role="toolbar" aria-label="Инструменты">
-            {OVERLAY_TOOLS.map((t) => (
-              <IconButton key={t.id} tip={`${t.label} · ${t.key}`} tipPos="top" active={tool === t.id} size={34} onClick={() => setTool(t.id)}>
-                {t.icon}
-              </IconButton>
-            ))}
+            <ToolButtons tools={OVERLAY_TOOLS} tool={tool} setTool={setTool} size={34} up={barUp} tipsUp />
+            <div className="mx-0.5 h-5 w-px shrink-0 bg-border-strong" />
+            {wm.picker(34, barUp, true)}
           </div>
           <BarDivider />
           <ColorPicker color={color} setColor={changeColor} compact up={barUp} />

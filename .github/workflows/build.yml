@@ -1,36 +1,45 @@
 name: Build
 
-# Every push is built; builds of the default branch become GitHub releases, which the
-# installed apps update to (see README → Установка).
+# Every push is built. Builds of the default branch become GitHub releases, which the
+# installed apps update to; builds of a branch with an open pull request become «AShot Dev» —
+# a separate app (installs next to AShot) published as the prerelease `dev-pr-<N>` and linked
+# from the pull request (see README → Установка).
 on:
   push:
     branches: ['**']
     paths-ignore: ['**.md', 'docs/**', 'proxy/**', 'deploy/**', 'LICENSE*']
+  pull_request:
+    # Opened after its last push — the dev build comes right away; closed — it is removed.
+    types: [opened, reopened, closed]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  # A newer push cancels the build still running for the same branch.
-  group: build-${{ github.ref }}
+  # A newer build of the same branch (a push or its pull request) cancels the one still running.
+  group: build-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
   NODE_VERSION: 24
   # Caches are written only by the default branch; other branches reuse them.
-  SAVE_CACHE: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+  SAVE_CACHE: ${{ github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
   # Pushes to the default branch and manual runs on it (e.g. after changing secrets).
-  IS_RELEASE: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+  IS_RELEASE: ${{ github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
 
 jobs:
   checks:
     name: Tests (core + UI)
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Pull requests: the branch itself, not the merge with the base.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -62,15 +71,19 @@ jobs:
 
   windows:
     name: Windows build
+    if: github.event.action != 'closed'
     runs-on: windows-latest
     timeout-minutes: 45
     permissions:
-      contents: write # draft release
+      contents: write # draft release, dev prerelease
+      pull-requests: write # the dev build comment in the pull request
+      issues: write
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0 # tags and history for the release notes
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -82,16 +95,48 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
+      - name: Dev build of a pull request?
+        id: dev
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SAME_REPO: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          pr=""
+          if [ "$EVENT" = "pull_request" ]; then
+            pr="$PR_NUMBER"
+          elif [ "$EVENT" = "push" ] && [ "$IS_RELEASE" != "true" ]; then
+            pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open --json number --jq '.[0].number // empty' || true)
+          fi
+          # Forks and Dependabot get no write token (nor secrets): their pull requests build like a branch.
+          if [ "$SAME_REPO" != "true" ] || [ "$GITHUB_ACTOR" = "dependabot[bot]" ]; then pr=""; fi
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+          if [ -n "$pr" ]; then echo "AShot Dev for pull request #$pr"; else echo "Regular build"; fi
       - name: Version (major.minor from Cargo.toml, patch = run number)
         id: version
         shell: pwsh
+        env:
+          PR: ${{ steps.dev.outputs.pr }}
         run: |
           $m = (Select-String -Path Cargo.toml -Pattern '^version = "(\d+)\.(\d+)\.\d+"' | Select-Object -First 1).Matches[0]
           $v = "$($m.Groups[1].Value).$($m.Groups[2].Value).${{ github.run_number }}"
-          Set-Content -Path "${{ runner.temp }}/version.json" -Value ('{"version":"' + $v + '"}') -Encoding utf8NoBOM
+          $config = [ordered]@{ version = $v }
+          if ($env:PR) {
+            # AShot Dev: installs next to AShot (own settings, history, sign-in, autostart entry),
+            # no self-update; only the NSIS installer.
+            $config.productName = 'AShot Dev'
+            $config.mainBinaryName = 'AShot-Dev'
+            $config.identifier = 'one.advant.shoter.dev'
+            $config.bundle = [ordered]@{ targets = @('nsis') }
+          }
+          $config | ConvertTo-Json -Depth 5 | Set-Content -Path "${{ runner.temp }}/version.json" -Encoding utf8NoBOM
+          Get-Content "${{ runner.temp }}/version.json"
           "version=$v" >> $env:GITHUB_OUTPUT
           Write-Host "Version $v"
-      - name: Build installer (NSIS + MSI)
+      - name: Build installer (NSIS + MSI; AShot Dev — NSIS)
         run: npx tauri build --config "${{ runner.temp }}/version.json"
         env:
           # Built-in Box app: users only press "Sign in with Box" (see README).
@@ -102,27 +147,40 @@ jobs:
           # Links: https://<PROXY_DOMAIN>/{id}; empty – Box embed links.
           SHOTER_PROXY_DOMAIN: ${{ secrets.PROXY_DOMAIN }}
           # Self-update: latest.json on an own server (e.g. IIS, see README), else the
-          # releases of this repository.
-          SHOTER_UPDATE_URL: ${{ secrets.UPDATE_URL }}
-          SHOTER_UPDATE_REPO: ${{ github.repository }}
+          # releases of this repository. AShot Dev does not update itself.
+          SHOTER_UPDATE_URL: ${{ steps.dev.outputs.pr == '' && secrets.UPDATE_URL || '' }}
+          SHOTER_UPDATE_REPO: ${{ steps.dev.outputs.pr == '' && github.repository || '' }}
+          # AShot Dev shows which pull request it is.
+          # (quoted: an unquoted " #" would start a YAML comment)
+          SHOTER_CHANNEL: "${{ steps.dev.outputs.pr != '' && format('PR #{0}', steps.dev.outputs.pr) || '' }}"
       - name: Release notes (commits since the previous release)
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # HEAD — the commit built (a pull request's own head, not the merge commit of github.sha)
           prev=$(gh release view --json tagName --jq .tagName 2>/dev/null || true)
-          range="${{ github.sha }}"
-          if [ -n "$prev" ] && git rev-parse -q --verify "refs/tags/$prev" >/dev/null; then range="$prev..${{ github.sha }}"; fi
+          range=HEAD
+          if [ -n "$prev" ] && git rev-parse -q --verify "refs/tags/$prev" >/dev/null; then range="$prev..HEAD"; fi
           git log --no-merges --format='- %s' "$range" | head -n 40 > "${{ runner.temp }}/notes.md"
-          [ -s "${{ runner.temp }}/notes.md" ] || git log -1 --format='- %s' "${{ github.sha }}" > "${{ runner.temp }}/notes.md"
+          [ -s "${{ runner.temp }}/notes.md" ] || git log -1 --format='- %s' HEAD > "${{ runner.temp }}/notes.md"
           cat "${{ runner.temp }}/notes.md"
       - name: Collect artifacts and the update manifest
         shell: pwsh
         run: |
           $v = "${{ steps.version.outputs.version }}"
-          $exeVersion = (Get-Item target/release/AShot.exe).VersionInfo.ProductVersion
-          if (-not $exeVersion.StartsWith($v)) { throw "AShot.exe has version $exeVersion, expected $v" }
+          $pr = "${{ steps.dev.outputs.pr }}"
+          $exe = if ($pr) { 'AShot-Dev.exe' } else { 'AShot.exe' }
+          $exeVersion = (Get-Item "target/release/$exe").VersionInfo.ProductVersion
+          if (-not $exeVersion.StartsWith($v)) { throw "$exe has version $exeVersion, expected $v" }
           New-Item -ItemType Directory -Force out | Out-Null
+          if ($pr) {
+            # Stable names: the links in the pull request stay the same from build to build.
+            Copy-Item (Get-ChildItem target/release/bundle/nsis/*.exe | Select-Object -First 1).FullName "out/AShot-Dev-PR$pr-setup.exe"
+            Copy-Item "target/release/$exe" "out/AShot-Dev-PR$pr-portable.exe"
+            Get-ChildItem out | Format-Table Name, Length
+            exit 0
+          }
           Copy-Item target/release/bundle/nsis/*.exe out/
           Copy-Item target/release/bundle/msi/*.msi out/
           Copy-Item target/release/AShot.exe "out/AShot_${v}_x64-portable.exe"
@@ -146,7 +204,7 @@ jobs:
           Get-ChildItem out | Format-Table Name, Length
       - uses: actions/upload-artifact@v7
         with:
-          name: AShot-windows-${{ steps.version.outputs.version }}
+          name: ${{ steps.dev.outputs.pr != '' && 'AShot-Dev' || 'AShot' }}-windows-${{ steps.version.outputs.version }}
           path: out/*
           if-no-files-found: error
           retention-days: 14
@@ -166,6 +224,71 @@ jobs:
             gh release create "v$v" $files --draft --target "${{ github.sha }}" --title "AShot $v" --notes-file "${{ runner.temp }}/notes.md"
           }
           if ($LASTEXITCODE -ne 0) { exit 1 }
+      # Pull requests: one prerelease per pull request, replaced by every build. Never
+      # "latest" — the apps and the update mirror read only the latest release.
+      - name: Dev build → prerelease and a comment in the pull request
+        if: steps.dev.outputs.pr != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.dev.outputs.pr }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -eu
+          tag="dev-pr-$PR"
+          short="${SHA:0:7}"
+          gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes 2>/dev/null || true
+          gh release create "$tag" out/* --repo "$GITHUB_REPOSITORY" --prerelease --latest=false --target "$SHA" \
+            --title "AShot Dev — PR #$PR" \
+            --notes "Dev-сборка $VERSION ($short) для #$PR. Ставится рядом с AShot как «AShot Dev»: свои настройки и история, сама не обновляется. Заменяется при каждом пуше в pull request и удаляется, когда он закрыт."
+          base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$tag"
+          marker='<!-- ashot-dev-build -->'
+          body=$(cat <<EOF
+          $marker
+          ### Dev-сборка для проверки
+          **AShot Dev $VERSION** · коммит \`$short\` · [сборка]($RUN_URL)
+
+          - [Установщик]($base/AShot-Dev-PR$PR-setup.exe) — ставится рядом с AShot как «AShot Dev»
+          - [Portable]($base/AShot-Dev-PR$PR-portable.exe) — без установки
+
+          AShot Dev — отдельная программа: свои настройки, история и вход в Box, метка «DEV» в панели, сама не обновляется. Горячие клавиши те же, что у AShot, — на время проверки выйдите из AShot (трей → «Выход»).
+          Ссылки не меняются: сборка заменяется при каждом пуше в этот pull request и удаляется, когда он закрыт.
+          EOF
+          )
+          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate --jq ".[] | select(.body | contains(\"$marker\")) | .id" | head -n1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -f body="$body" > /dev/null
+          else
+            gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -f body="$body" > /dev/null
+          fi
+          echo "### AShot Dev $VERSION — $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$tag" >> "$GITHUB_STEP_SUMMARY"
+
+  dev-cleanup:
+    name: Remove the dev build of a closed pull request
+    if: >-
+      github.event_name == 'pull_request' && github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Delete the prerelease, update the comment
+        run: |
+          if gh release delete "dev-pr-$PR" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes; then echo "removed dev-pr-$PR"; else echo "no dev build"; fi
+          marker='<!-- ashot-dev-build -->'
+          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate --jq ".[] | select(.body | contains(\"$marker\")) | .id" | head -n1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -f body="$marker
+          Dev-сборка удалена: pull request закрыт." > /dev/null || true
+          fi
 
   release:
     name: Publish release
@@ -187,7 +310,8 @@ jobs:
           export GH_REPO="$GITHUB_REPOSITORY"
           gh release list --limit 200 --json tagName,isDraft --jq '.[] | select(.isDraft) | .tagName' |
             while read -r t; do if [ "$t" != "$TAG" ]; then gh release delete "$t" --yes; fi; done
-          gh release list --exclude-drafts --limit 200 --json tagName,createdAt \
+          # Dev builds of pull requests (prereleases) are left to their pull requests.
+          gh release list --exclude-drafts --exclude-pre-releases --limit 200 --json tagName,createdAt \
             --jq "sort_by(.createdAt) | reverse | .[$KEEP:] | .[].tagName" |
             while read -r t; do gh release delete "$t" --yes --cleanup-tag; done
       - name: Summary

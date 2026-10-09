@@ -1,6 +1,6 @@
 // Editor document model. Everything is in image pixel coordinates; the document is
 // stored next to the original screenshot so annotations stay editable later.
-import type { ResizeSettings } from '../../lib/types';
+import type { ResizeSettings, WatermarkPosition, WatermarkSettings } from '../../lib/types';
 
 export type Tool = 'select' | 'rect' | 'ellipse' | 'arrow' | 'line' | 'pen' | 'marker' | 'text' | 'step' | 'pixelate' | 'crop';
 
@@ -53,7 +53,51 @@ export interface StepShape extends Base {
   size: number;
 }
 
-export type Shape = BoxShape | LineShape | PathShape | TextShape | StepShape;
+/** Copyright: a text or a picture (data URL, so the document keeps it even when the picture
+ *  is changed later) placed once; it can be moved and resized. Put with the © button. */
+export interface StampShape extends Base {
+  type: 'stamp';
+  x: number;
+  y: number;
+  text?: string;
+  fontSize?: number;
+  src?: string;
+  w?: number;
+  h?: number;
+  color: string;
+  size: number;
+  /** 0..1 */
+  opacity: number;
+}
+
+/** Watermark: the text or the picture repeated over the whole image (`x, y, w, h`) in
+ *  slanted rows, under the drawings; clicks go through it. Put with the same button. */
+export interface WatermarkShape extends Base {
+  type: 'watermark';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  text?: string;
+  fontSize?: number;
+  src?: string;
+  /** Size of one repeat of the picture. */
+  itemW?: number;
+  itemH?: number;
+  color: string;
+  size: number;
+  /** 0..1 */
+  opacity: number;
+  /** Slope of the rows, degrees. */
+  angle: number;
+  /** 0 – dense … 2 – sparse. */
+  spacing: number;
+}
+
+export type Shape = BoxShape | LineShape | PathShape | TextShape | StepShape | StampShape | WatermarkShape;
+
+/** The watermark or the copyright of a document (there is at most one). */
+export const isMark = (s: Shape): s is StampShape | WatermarkShape => s.type === 'stamp' || s.type === 'watermark';
 
 export interface Crop {
   x: number;
@@ -92,6 +136,76 @@ export function pixelCell(size: number, imageScale = 1): number {
 }
 export function textFontSize(t: TextShape, imageScale = 1): number {
   return t.fontSize ?? fontSize(t.size, imageScale);
+}
+
+// ---------------------------------------------------------------- watermark & copyright
+
+export const DEFAULT_WATERMARK: WatermarkSettings = {
+  kind: 'text',
+  layout: 'tile',
+  text: 'AShot',
+  color: '#FFFFFF',
+  size: 1,
+  opacity: 25,
+  angle: 30,
+  spacing: 1,
+  position: 'bottomRight',
+};
+
+/** Opacity a layout starts with: a watermark is faint, a copyright is clearly visible. */
+export const MARK_OPACITY = { tile: 25, corner: 80 } as const;
+
+/** Font size of a watermark repeat for a picture of `area`. */
+export function watermarkFontSize(area: Crop, size: number): number {
+  return Math.round(Math.min(160, Math.max(14, Math.min(area.w, area.h) * [0.035, 0.05, 0.075][size ?? 1])));
+}
+
+/** Size of one picture repeat of a watermark (× `scale`), at most 45% of the picture wide. */
+export function watermarkItemSize(area: Crop, size: number, logoW: number, logoH: number, scale = 1): { w: number; h: number } {
+  const k = Math.min((Math.min(area.w, area.h) * [0.08, 0.12, 0.18][size ?? 1] * scale) / logoH, (area.w * 0.45) / logoW);
+  return { w: Math.max(1, Math.round(logoW * k)), h: Math.max(1, Math.round(logoH * k)) };
+}
+
+/** Pattern tile for repeats of `w × h`: a brick layout (every other row shifted by half a
+ *  repeat), gaps by `spacing`. Returns the tile size and the centers of the repeats in it
+ *  (the shifted one is drawn at both edges, so the pattern has no seams). */
+export function watermarkTile(w: number, h: number, spacing: number): { tw: number; th: number; centers: [number, number][] } {
+  const s = spacing ?? 1;
+  const gapX = h * 1.5 + w * [0.25, 0.6, 1.1][s];
+  const gapY = h * [1.4, 2.4, 3.8][s];
+  const tw = Math.ceil(w + gapX);
+  const th = Math.ceil(2 * (h + gapY));
+  return { tw, th, centers: [[tw / 2, th / 4], [0, (3 * th) / 4], [tw, (3 * th) / 4]] };
+}
+
+/** Font size of a text stamp for a picture of `area` (grows with the picture, preset 0..2). */
+export function stampFontSize(area: Crop, size: number): number {
+  return Math.round(Math.min(72, Math.max(12, Math.min(area.w, area.h) * [0.022, 0.03, 0.045][size ?? 1])));
+}
+
+/** Height of a picture stamp for a picture of `area`. */
+export function stampImageHeight(area: Crop, size: number): number {
+  return Math.round(Math.min(400, Math.max(16, Math.min(area.w, area.h) * [0.06, 0.09, 0.14][size ?? 1])));
+}
+
+/** Gap between the stamp and the edges of the picture. */
+export function stampMargin(area: Crop): number {
+  return Math.round(Math.max(6, Math.min(area.w, area.h) * 0.025));
+}
+
+/** Top-left corner of a `w × h` stamp at `pos` inside `area`. */
+export function placeStamp(area: Crop, w: number, h: number, pos: WatermarkPosition, margin = stampMargin(area)): { x: number; y: number } {
+  const col = pos.endsWith('Left') || pos === 'left' ? 0 : pos.endsWith('Right') || pos === 'right' ? 2 : 1;
+  const row = pos.startsWith('top') ? 0 : pos.startsWith('bottom') ? 2 : 1;
+  const x = [area.x + margin, area.x + (area.w - w) / 2, area.x + area.w - margin - w][col];
+  const y = [area.y + margin, area.y + (area.h - h) / 2, area.y + area.h - margin - h][row];
+  return { x: Math.round(x), y: Math.round(y) };
+}
+
+/** Picture stamp size: `stampImageHeight` tall (× `scale`), at most 40% of the picture wide. */
+export function stampImageSize(area: Crop, size: number, logoW: number, logoH: number, scale = 1): { w: number; h: number } {
+  const k = Math.min((stampImageHeight(area, size) * scale) / logoH, (area.w * 0.4) / logoW);
+  return { w: Math.max(1, Math.round(logoW * k)), h: Math.max(1, Math.round(logoH * k)) };
 }
 
 // ---------------------------------------------------------------- "downscale to N px"

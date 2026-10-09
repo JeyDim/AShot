@@ -11,12 +11,12 @@ use shoter_core::Rect;
 #[cfg(windows)]
 mod win;
 #[cfg(windows)]
-pub use win::{cursor_position, monitors};
+pub use win::{cursor_position, grab, monitors};
 
 #[cfg(not(windows))]
 mod other;
 #[cfg(not(windows))]
-pub use other::{cursor_position, monitors};
+pub use other::{cursor_position, grab, monitors};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,8 +47,6 @@ pub struct CaptureSession {
     /// Top-level windows in z-order (topmost first).
     pub windows: Vec<WindowInfo>,
     pub cursor: (i32, i32),
-    /// Foreground window at capture time (for "capture active window").
-    pub foreground: Option<Rect>,
     bmp_cache: Mutex<HashMap<usize, Arc<Vec<u8>>>>,
 }
 
@@ -59,9 +57,8 @@ impl CaptureSession {
         shots: Vec<MonitorShot>,
         windows: Vec<WindowInfo>,
         cursor: (i32, i32),
-        foreground: Option<Rect>,
     ) -> Self {
-        Self { id, monitors, shots, windows, cursor, foreground, bmp_cache: Mutex::new(HashMap::new()) }
+        Self { id, monitors, shots, windows, cursor, bmp_cache: Mutex::new(HashMap::new()) }
     }
 
     /// BMP of one monitor for the overlay (encoded once, cached).
