@@ -158,11 +158,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # HEAD — the commit built (a pull request's own head, not the merge commit of github.sha)
           prev=$(gh release view --json tagName --jq .tagName 2>/dev/null || true)
-          range="${{ github.sha }}"
-          if [ -n "$prev" ] && git rev-parse -q --verify "refs/tags/$prev" >/dev/null; then range="$prev..${{ github.sha }}"; fi
+          range=HEAD
+          if [ -n "$prev" ] && git rev-parse -q --verify "refs/tags/$prev" >/dev/null; then range="$prev..HEAD"; fi
           git log --no-merges --format='- %s' "$range" | head -n 40 > "${{ runner.temp }}/notes.md"
-          [ -s "${{ runner.temp }}/notes.md" ] || git log -1 --format='- %s' "${{ github.sha }}" > "${{ runner.temp }}/notes.md"
+          [ -s "${{ runner.temp }}/notes.md" ] || git log -1 --format='- %s' HEAD > "${{ runner.temp }}/notes.md"
           cat "${{ runner.temp }}/notes.md"
       - name: Collect artifacts and the update manifest
         shell: pwsh
