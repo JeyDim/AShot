@@ -66,6 +66,14 @@ pub fn thumbnail(img: &RgbaImage, max_w: u32, max_h: u32) -> RgbaImage {
     image::imageops::resize(img, tw, th, image::imageops::FilterType::Triangle)
 }
 
+/// Downscaled copy (Lanczos — keeps text sharp); the same picture when the size matches.
+pub fn resize(img: &RgbaImage, width: u32, height: u32) -> RgbaImage {
+    if img.dimensions() == (width, height) || width == 0 || height == 0 {
+        return img.clone();
+    }
+    image::imageops::resize(img, width, height, image::imageops::FilterType::Lanczos3)
+}
+
 /// PNG with a good speed/size trade-off for screenshots.
 pub fn encode_png(img: &RgbaImage) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(img.len() / 4);
@@ -155,6 +163,9 @@ mod tests {
             assert_eq!(back.dimensions(), (400, 200));
             assert_eq!(back.get_pixel(5, 5).0, [10, 20, 30, 255]);
         }
+        assert_eq!(resize(&img, 74, 37).dimensions(), (74, 37));
+        assert_eq!(resize(&img, 74, 37).get_pixel(10, 10).0, [10, 20, 30, 255]);
+        assert_eq!(resize(&img, 400, 200).dimensions(), (400, 200));
         let jpg = encode_jpeg(&img, 90).unwrap();
         assert_eq!(&jpg[..2], &[0xFF, 0xD8]);
     }

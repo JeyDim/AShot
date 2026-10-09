@@ -12,8 +12,22 @@ import { Button, IconButton, Spinner } from '../../components/ui';
 import { sizeLabel } from '../../lib/format';
 import { useTauriEvent } from '../../lib/hooks';
 import { api, errorText, shotUrl } from '../../lib/ipc';
-import type { Action, AppSettings, HistoryItem } from '../../lib/types';
-import { clampCrop, emptyDoc, historyOf, imageScaleFor, parseDoc, visibleArea, type Crop, type Doc, type History, type Tool } from './model';
+import type { Action, AppSettings, HistoryItem, ResizeSettings } from '../../lib/types';
+import {
+  clampCrop,
+  DEFAULT_RESIZE,
+  emptyDoc,
+  historyOf,
+  imageScaleFor,
+  outputSize,
+  parseDoc,
+  thickenFactor,
+  visibleArea,
+  type Crop,
+  type Doc,
+  type History,
+  type Tool,
+} from './model';
 import { sourceFromImage, type PixelSource } from './pixelate';
 import { Toolbar, TOOLS } from './Toolbar';
 import { useAnnotator } from './useAnnotator';
@@ -44,6 +58,7 @@ export default function Editor({ id }: { id: string }) {
   const [tool, setToolState] = useState<Tool>(() => (localStorage.getItem('editor.tool') as Tool) || 'arrow');
   const [color, setColorState] = useState('#FF3B30');
   const [size, setSizeState] = useState(1);
+  const [resize, setResizeState] = useState<ResizeSettings>(DEFAULT_RESIZE);
   const [cropDraft, setCropDraft] = useState<Crop | null>(null);
   const [view, setView] = useState<View>({ zoom: 1, x: 0, y: 0 });
   const [stageSize, setStageSize] = useState({ w: 800, h: 600 });
@@ -59,7 +74,11 @@ export default function Editor({ id }: { id: string }) {
   const W = img?.naturalWidth ?? 1;
   const H = img?.naturalHeight ?? 1;
   // Documents drawn on the capture overlay keep the stroke scale of the full screen.
-  const k = doc.scale ?? imageScaleFor(W, H);
+  const kBase = doc.scale ?? imageScaleFor(W, H);
+  const shownArea = visibleArea(doc, W, H);
+  // "Downscale to N px" + "thicken": drawings are made thicker so they look normal after it.
+  const k = kBase * thickenFactor(resize, shownArea.w, shownArea.h);
+  const outSize = outputSize(resize, Math.round(shownArea.w), Math.round(shownArea.h));
   const dpr = window.devicePixelRatio || 1;
   const dirty = savedDoc !== null && doc !== savedDoc;
   const cursor = space || panStart.current ? 'grab' : tool === 'select' ? 'default' : tool === 'text' ? 'text' : 'crosshair';
@@ -99,7 +118,14 @@ export default function Editor({ id }: { id: string }) {
     prefsLoaded.current = true;
     setColorState(s.editor.color || '#FF3B30');
     setSizeState(s.editor.size ?? 1);
+    if (s.resize) setResizeState(s.resize);
   };
+
+  // The overlay and other editors share the "downscale to" setting. Echoes of our own
+  // changes are ignored (they could arrive after a newer value typed here).
+  useTauriEvent<AppSettings>('settings:changed', (e) => {
+    if (e.payload.resize && !document.hasFocus()) setResizeState(e.payload.resize);
+  });
 
   useTauriEvent('history:changed', () => {
     api.historyGet(id).then(setItem).catch(() => {});
@@ -166,6 +192,10 @@ export default function Editor({ id }: { id: string }) {
   };
 
   const savePrefs = (c: string, s: number) => api.settingsPatch({ editor: { color: c, size: s } }).catch(() => {});
+  const setResize = (r: ResizeSettings) => {
+    setResizeState(r);
+    api.settingsPatch({ resize: r }).catch(() => {});
+  };
   const setColor = (c: string) => {
     setColorState(c);
     savePrefs(c, size);
@@ -290,7 +320,7 @@ export default function Editor({ id }: { id: string }) {
     try {
       const current = docRef.current;
       const png = await renderPng();
-      const res = await api.editorCommit(id, action, png, JSON.stringify({ ...current, scale: k }));
+      const res = await api.editorCommit(id, action, png, JSON.stringify({ ...current, scale: kBase }));
       setSavedDoc(current);
       if (action === 'upload' && res.shareUrl) setStatus({ kind: 'ok', text: 'Ссылка скопирована' });
       if (action === 'copy') setStatus({ kind: 'ok', text: 'Скопировано в буфер обмена' });
@@ -386,7 +416,6 @@ export default function Editor({ id }: { id: string }) {
 
   // ------------------------------------------------------------ render
   const clip = tool === 'crop' ? null : doc.crop;
-  const shownArea = visibleArea(doc, W, H);
 
   const cropBar =
     tool === 'crop' && cropDraft
@@ -407,6 +436,9 @@ export default function Editor({ id }: { id: string }) {
         setSize={setSize}
         stepNext={ann.stepNext}
         setStepNext={ann.setStepNext}
+        resize={resize}
+        setResize={setResize}
+        source={img ? { w: Math.round(shownArea.w), h: Math.round(shownArea.h) } : null}
         canUndo={hist.past.length > 0}
         canRedo={hist.future.length > 0}
         undo={ann.undo}
@@ -510,6 +542,11 @@ export default function Editor({ id }: { id: string }) {
       {/* Status bar */}
       <div className="flex h-9 shrink-0 items-center gap-3 border-t border-border bg-surface px-3 text-[12px] text-muted">
         <span>{img ? sizeLabel(Math.round(shownArea.w), Math.round(shownArea.h)) : '…'}</span>
+        {img && (outSize.w !== Math.round(shownArea.w) || outSize.h !== Math.round(shownArea.h)) && (
+          <span className="text-text" data-tip="Так будет при копировании, сохранении и в ссылке" data-tip-pos="top">
+            → {sizeLabel(outSize.w, outSize.h)}
+          </span>
+        )}
         {doc.crop && <span className="text-subtle">обрезано из {sizeLabel(W, H)}</span>}
         <span className="truncate text-subtle">{hintFor(tool)}</span>
         <div className="flex-1" />
@@ -573,7 +610,7 @@ function hintFor(tool: Tool): string {
     case 'marker':
       return 'Shift — прямая линия';
     case 'text':
-      return 'Клик — новый текст, Enter — готово, Shift+Enter — новая строка';
+      return 'Клик — новый текст, протянуть — стрелка к точке нажатия и текст, Enter — готово, Shift+Enter — новая строка';
     case 'step':
       return 'Клик — следующий номер; с какого начать — выберите номер на панели';
     case 'pixelate':

@@ -184,6 +184,57 @@ impl Default for EditorPrefs {
     }
 }
 
+/// Which side of the picture the "downscale to" limit applies to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ResizeSide {
+    #[default]
+    Width,
+    Height,
+    Longest,
+}
+
+/// "Downscale to N px": every picture that leaves the app (copy, save, link) is made
+/// smaller, keeping proportions; the history keeps the full size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ResizeSettings {
+    pub enabled: bool,
+    pub side: ResizeSide,
+    pub size: u32,
+    /// Draw lines and text thicker so they look normal after downscaling (editor, overlay).
+    pub thicken: bool,
+}
+
+impl Default for ResizeSettings {
+    fn default() -> Self {
+        Self { enabled: false, side: ResizeSide::Width, size: 740, thicken: true }
+    }
+}
+
+pub const MIN_RESIZE: u32 = 16;
+pub const MAX_RESIZE: u32 = 20_000;
+
+impl ResizeSettings {
+    /// Size of a `width × height` picture on output: never upscaled, proportions kept.
+    pub fn output_size(&self, width: u32, height: u32) -> (u32, u32) {
+        if !self.enabled || width == 0 || height == 0 {
+            return (width, height);
+        }
+        let limited = match self.side {
+            ResizeSide::Width => width,
+            ResizeSide::Height => height,
+            ResizeSide::Longest => width.max(height),
+        };
+        if limited <= self.size {
+            return (width, height);
+        }
+        let k = self.size as f64 / limited as f64;
+        let scale = |v: u32| ((v as f64 * k).round() as u32).max(1);
+        (scale(width), scale(height))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {
@@ -206,6 +257,7 @@ pub struct AppSettings {
     pub box_: BoxSettings,
     pub links: LinkSettings,
     pub editor: EditorPrefs,
+    pub resize: ResizeSettings,
     pub last_region: Option<Rect>,
     /// Set after the welcome notification has been shown once.
     pub welcomed: bool,
@@ -235,6 +287,7 @@ impl Default for AppSettings {
             box_: BoxSettings::default(),
             links: LinkSettings::default(),
             editor: EditorPrefs::default(),
+            resize: ResizeSettings::default(),
             last_region: None,
             welcomed: false,
             auto_update: true,
@@ -253,6 +306,7 @@ impl AppSettings {
         self.history_limit = self.history_limit.clamp(1, MAX_HISTORY_LIMIT);
         self.jpeg_quality = self.jpeg_quality.clamp(10, 100);
         self.editor.size = self.editor.size.min(2);
+        self.resize.size = self.resize.size.clamp(MIN_RESIZE, MAX_RESIZE);
         self.box_.folder_id = self.box_.folder_id.trim().to_string();
         self.box_.redirect_uri = self.box_.redirect_uri.trim().to_string();
         self.box_.folder_name = if self.box_.folder_name.trim().is_empty() {
@@ -411,6 +465,24 @@ mod tests {
         assert_eq!(s.history_limit, 1);
         assert_eq!(s.box_.shared_link_access, "open");
         assert_eq!(s.links.template, "https://advant.one/{id}");
+    }
+
+    #[test]
+    fn resize_output_size() {
+        let mut r = ResizeSettings::default();
+        assert_eq!(r.output_size(1920, 1080), (1920, 1080), "off by default");
+        r.enabled = true;
+        assert_eq!(r.size, 740);
+        assert_eq!(r.output_size(1920, 1080), (740, 416));
+        assert_eq!(r.output_size(500, 900), (500, 900), "never upscales");
+        r.side = ResizeSide::Height;
+        assert_eq!(r.output_size(500, 900), (411, 740));
+        assert_eq!(r.output_size(1920, 700), (1920, 700));
+        r.side = ResizeSide::Longest;
+        assert_eq!(r.output_size(1080, 1920), (416, 740));
+        assert_eq!(r.output_size(3000, 2), (740, 1), "at least one pixel");
+        let s = AppSettings { resize: ResizeSettings { size: 0, ..r }, ..AppSettings::default() }.sanitized();
+        assert_eq!(s.resize.size, MIN_RESIZE);
     }
 
     #[test]

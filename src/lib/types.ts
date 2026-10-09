@@ -45,6 +45,17 @@ export interface EditorPrefs {
   size: number;
 }
 
+export type ResizeSide = 'width' | 'height' | 'longest';
+
+/** "Downscale to N px": applies to everything that leaves the app; history keeps the full size. */
+export interface ResizeSettings {
+  enabled: boolean;
+  side: ResizeSide;
+  size: number;
+  /** Draw lines and text thicker so they look normal after downscaling. */
+  thicken: boolean;
+}
+
 export interface AppSettings {
   showCursor: boolean;
   showMagnifier: boolean;
@@ -61,6 +72,7 @@ export interface AppSettings {
   box: BoxSettings;
   links: LinkSettings;
   editor: EditorPrefs;
+  resize: ResizeSettings;
   lastRegion: Rect | null;
   welcomed: boolean;
   autoUpdate: boolean;

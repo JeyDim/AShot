@@ -1,5 +1,6 @@
 import clsx from 'clsx';
 import {
+  Check,
   ChevronDown,
   Circle,
   Copy,
@@ -7,9 +8,12 @@ import {
   Grid3x3,
   Highlighter,
   Link2,
+  Maximize2,
   Minus,
   MousePointer2,
+  MoveHorizontal,
   MoveUpRight,
+  MoveVertical,
   PenLine,
   Plus,
   Redo2,
@@ -18,10 +22,11 @@ import {
   Type,
   Undo2,
 } from 'lucide-react';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Button, IconButton } from '../../components/ui';
-import type { Action } from '../../lib/types';
-import { contrastText, MAX_STEP, PALETTE, type Tool } from './model';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
+import { Button, IconButton, Segmented } from '../../components/ui';
+import type { Action, ResizeSettings, ResizeSide } from '../../lib/types';
+import { contrastText, MAX_RESIZE, MAX_STEP, MIN_RESIZE, outputSize, PALETTE, type Tool } from './model';
 
 export const TOOLS: { id: Tool; label: string; key: string; icon: ReactNode }[] = [
   { id: 'select', label: 'Выбор и перемещение', key: 'V', icon: <MousePointer2 size={19} /> },
@@ -51,6 +56,10 @@ export function Toolbar(props: {
   setSize: (s: number) => void;
   stepNext: number;
   setStepNext: (n: number) => void;
+  resize: ResizeSettings;
+  setResize: (r: ResizeSettings) => void;
+  /** Size of the picture being exported (crop), for the downscaling preview. */
+  source: { w: number; h: number } | null;
   canUndo: boolean;
   canRedo: boolean;
   undo: () => void;
@@ -95,6 +104,8 @@ export function Toolbar(props: {
       </IconButton>
 
       <div className="min-w-4 flex-1" data-tauri-drag-region />
+
+      <ResizePicker value={props.resize} onChange={props.setResize} source={props.source} />
 
       <Button variant="secondary" icon={<Copy size={16} />} loading={busy === 'copy'} tip="Копировать в буфер · Ctrl+C" onClick={() => act('copy')}>
         {width >= 1560 && 'Копировать'}
@@ -154,53 +165,85 @@ function Swatches({ color, setColor }: { color: string; setColor: (c: string) =>
   );
 }
 
-/** Button with a pop-up panel (color, stroke size). `up`: open above the button. */
+/** Button with a pop-up panel (color, stroke size, step number, downscaling). The panel
+ *  lives in <body>, so neither a scrolling toolbar nor a blurred bar clips or shifts it;
+ *  it stays on screen and prefers to open above the button when `up`. `before` — a control
+ *  in front of the button (the downscaling check box). */
 function Dropdown({
   tip,
   face,
   up,
+  before,
   panelClassName = 'flex items-center gap-2 rounded-full p-2',
   children,
 }: {
   tip: string;
   face: ReactNode;
   up?: boolean;
+  before?: ReactNode;
   panelClassName?: string;
   children: (close: () => void) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (!ref.current?.contains(t) && !panelRef.current?.contains(t)) setOpen(false);
+    };
+    // Esc closes the panel only (in the overlay it would cancel the whole capture).
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      setOpen(false);
     };
     window.addEventListener('mousedown', close);
-    return () => window.removeEventListener('mousedown', close);
+    window.addEventListener('keydown', esc, true);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', esc, true);
+    };
   }, [open]);
+  useLayoutEffect(() => {
+    if (!open) return setPos(null);
+    const anchor = ref.current?.getBoundingClientRect();
+    const panel = panelRef.current?.getBoundingClientRect();
+    if (!anchor || !panel) return;
+    const gap = 8;
+    const left = Math.max(gap, Math.min(anchor.left, window.innerWidth - panel.width - gap));
+    const below = anchor.bottom + gap;
+    const above = anchor.top - gap - panel.height;
+    const fitsBelow = below + panel.height <= window.innerHeight - gap;
+    setPos({ left, top: Math.max(gap, (up || !fitsBelow) && above >= gap ? above : below) });
+  }, [open, up]);
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="relative flex items-center">
+      {before}
       <button
         aria-label={tip}
         aria-expanded={open}
         data-tip={open ? undefined : tip}
         data-tip-pos={up ? 'top' : undefined}
         onClick={() => setOpen((o) => !o)}
-        className="flex h-9 items-center gap-1 rounded-full pr-1.5 pl-2 transition-colors hover:bg-text/6"
+        className={clsx('flex h-9 items-center gap-1 rounded-full pr-1.5 transition-colors hover:bg-text/6', before ? 'pl-1.5' : 'pl-2')}
       >
         {face}
         <ChevronDown size={14} className={clsx('text-muted transition-transform', open && 'rotate-180')} />
       </button>
-      {open && (
-        <div
-          className={clsx('animate-pop-in fixed z-40 mt-2 bg-elevated shadow-(--shadow-pop) ring-1 ring-border', panelClassName)}
-          // `fixed` escapes the scrolling toolbar; `up`: toolbar near the bottom of the screen.
-          // `translate`, not `transform`: the pop-in animation owns `transform`.
-          style={up ? { translate: '0 calc(-100% - 52px)' } : undefined}
-        >
-          {children(() => setOpen(false))}
-        </div>
-      )}
+      {open &&
+        createPortal(
+          <div
+            ref={panelRef}
+            className={clsx('animate-pop-in fixed z-50 bg-elevated text-text shadow-(--shadow-pop) ring-1 ring-border', panelClassName)}
+            style={pos ? { left: pos.left, top: pos.top } : { left: 0, top: 0, visibility: 'hidden' }}
+          >
+            {children(() => setOpen(false))}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
@@ -356,5 +399,158 @@ function StepInput({ value, onChange, onDone }: { value: number; onChange: (n: n
         <Plus size={14} />
       </button>
     </div>
+  );
+}
+
+const SIDES: { value: ResizeSide; label: string; short: string; icon: ReactNode }[] = [
+  { value: 'width', label: 'по ширине', short: 'Ширина', icon: <MoveHorizontal size={14} /> },
+  { value: 'height', label: 'по высоте', short: 'Высота', icon: <MoveVertical size={14} /> },
+  { value: 'longest', label: 'по длинной стороне', short: 'Длинная', icon: <Maximize2 size={13} /> },
+];
+const RESIZE_PRESETS = [640, 740, 1024, 1280, 1920];
+
+function CheckMark({ checked }: { checked: boolean }) {
+  return (
+    <span
+      className={clsx(
+        'flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] transition-colors',
+        checked ? 'bg-primary text-on-primary' : 'ring-1 ring-border-strong ring-inset',
+      )}
+    >
+      {checked && <Check size={13} strokeWidth={3} />}
+    </span>
+  );
+}
+
+/** "Downscale to N px": a check box on the toolbar plus a drop-down with the side, the size
+ *  and "thicken drawings". `source` — the size of the picture being made (for the preview). */
+export function ResizePicker({
+  value,
+  onChange,
+  source,
+  up,
+}: {
+  value: ResizeSettings;
+  onChange: (r: ResizeSettings) => void;
+  source: { w: number; h: number } | null;
+  up?: boolean;
+}) {
+  const side = SIDES.find((x) => x.value === value.side) ?? SIDES[0];
+  const set = (patch: Partial<ResizeSettings>) => onChange({ ...value, ...patch });
+  const summary = `Уменьшать до ${value.size} px ${side.label}`;
+  const out = source ? outputSize({ ...value, enabled: true }, source.w, source.h) : null;
+  return (
+    <Dropdown
+      tip={summary}
+      up={up}
+      panelClassName="rounded-[18px] p-3"
+      before={
+        <button
+          role="checkbox"
+          aria-checked={value.enabled}
+          aria-label="Уменьшать картинку"
+          data-tip={value.enabled ? `${summary} — включено` : summary}
+          data-tip-pos={up ? 'top' : undefined}
+          onClick={() => set({ enabled: !value.enabled })}
+          className="flex h-9 items-center rounded-full pr-0.5 pl-2"
+        >
+          <CheckMark checked={value.enabled} />
+        </button>
+      }
+      face={
+        <span className={clsx('flex items-center gap-1 text-[12.5px] font-semibold tabular-nums', !value.enabled && 'text-muted')}>
+          {side.icon}
+          {value.size}
+        </span>
+      }
+    >
+      {() => (
+        <div className="flex w-[292px] flex-col gap-3 text-[13px]">
+          <button role="checkbox" aria-checked={value.enabled} onClick={() => set({ enabled: !value.enabled })} className="flex items-center gap-2.5 text-left font-medium">
+            <CheckMark checked={value.enabled} />
+            Уменьшать картинку
+          </button>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[12px] text-muted">По стороне</span>
+            <Segmented
+              value={value.side}
+              onChange={(v) => set({ side: v })}
+              options={SIDES.map((x) => ({
+                value: x.value,
+                label: (
+                  <>
+                    {x.icon}
+                    {x.short}
+                  </>
+                ),
+              }))}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[12px] text-muted">Не больше, px</span>
+            <div className="flex items-center gap-1">
+              <ResizeInput value={value.size} onChange={(size) => set({ size })} />
+              {RESIZE_PRESETS.map((n) => (
+                <button
+                  key={n}
+                  onClick={() => set({ size: n })}
+                  className={clsx(
+                    'h-7 rounded-full px-1.5 text-[12px] tabular-nums transition-colors',
+                    value.size === n ? 'bg-primary text-on-primary' : 'text-muted hover:bg-text/8 hover:text-text',
+                  )}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+          </div>
+          <button role="checkbox" aria-checked={value.thicken} onClick={() => set({ thicken: !value.thicken })} className="flex items-start gap-2.5 text-left">
+            <CheckMark checked={value.thicken} />
+            <span>
+              Утолщать линии и текст
+              <span className="block text-[12px] text-muted">чтобы после уменьшения они не стали тонкими</span>
+            </span>
+          </button>
+          {source && out && (
+            <div className="rounded-[10px] bg-surface-2 px-2.5 py-1.5 text-[12px] text-muted tabular-nums">
+              {out.w === source.w && out.h === source.h
+                ? `${source.w} × ${source.h} — меньше ${value.size} px, останется как есть`
+                : `${source.w} × ${source.h} → ${out.w} × ${out.h}`}
+              {!value.enabled && ' (выключено)'}
+            </div>
+          )}
+        </div>
+      )}
+    </Dropdown>
+  );
+}
+
+/** Size limit field: applied as you type once the number is big enough. */
+function ResizeInput({ value, onChange }: { value: number; onChange: (n: number) => void }) {
+  const [text, setText] = useState(String(value));
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (document.activeElement !== ref.current) setText(String(value));
+  }, [value]);
+  return (
+    <input
+      ref={ref}
+      aria-label="Не больше, px"
+      inputMode="numeric"
+      value={text}
+      onChange={(e) => {
+        const digits = e.target.value.replace(/\D/g, '').slice(0, 5);
+        setText(digits);
+        const n = parseInt(digits, 10);
+        if (n >= MIN_RESIZE) onChange(Math.min(MAX_RESIZE, n));
+      }}
+      onFocus={(e) => e.currentTarget.select()}
+      onBlur={() => setText(String(value))}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') e.currentTarget.blur();
+      }}
+      className="h-7 w-[58px] shrink-0 rounded-full bg-surface-2 text-center text-[13px] font-semibold tabular-nums outline-none focus:ring-1 focus:ring-border-strong"
+    />
   );
 }

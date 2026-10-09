@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, ty
 import { Circle as KCircle, Transformer } from 'react-konva';
 import {
   addShape,
+  calloutTextPosition,
   clampStep,
   commit,
   fontSize as fontSizeFor,
@@ -24,6 +25,7 @@ import {
   type Crop,
   type Doc,
   type History,
+  type LineShape,
   type Shape,
   type TextShape,
   type Tool,
@@ -41,7 +43,34 @@ export interface TextEdit {
   color: string;
   size: number;
   fontSize?: number;
+  /** Callout: the arrow dragged out with the text tool; the text sits at its tail and both
+   *  are added together (one undo step). */
+  callout?: LineShape;
 }
+
+const TEXT_LINE_HEIGHT = 1.2;
+let measureCtx: CanvasRenderingContext2D | null = null;
+
+/** Size of a text shape as Konva draws it (bold, line height 1.2). */
+function measureTextBox(text: string, fs: number): { w: number; h: number } {
+  measureCtx ??= document.createElement('canvas').getContext('2d');
+  const lines = text.split('\n');
+  if (!measureCtx) return { w: Math.max(...lines.map((l) => l.length)) * fs * 0.62, h: lines.length * fs * TEXT_LINE_HEIGHT };
+  measureCtx.font = `bold ${fs}px ${FONT_FAMILY}`;
+  const ctx = measureCtx;
+  return { w: Math.max(...lines.map((l) => ctx.measureText(l).width)), h: lines.length * fs * TEXT_LINE_HEIGHT };
+}
+
+/** Where a callout's text goes, given what has been typed so far. */
+function calloutTextAt(te: TextEdit, text: string, k: number): { x: number; y: number; w: number; h: number } {
+  const fs = te.fontSize ?? fontSizeFor(te.size, k);
+  const box = measureTextBox(text, fs);
+  const pos = calloutTextPosition(te.callout!.points, box.w, box.h, fs * 0.35);
+  return { ...pos, ...box };
+}
+
+/** The callout arrow follows the color / size chosen while typing. */
+const calloutArrow = (te: TextEdit): LineShape => ({ ...te.callout!, color: te.color, size: te.size });
 
 export interface AnnotatorView {
   /** CSS pixels per image pixel. */
@@ -90,6 +119,8 @@ export function useAnnotator(o: AnnotatorOptions) {
   const [textEdit, setTextEdit] = useState<TextEdit | null>(null);
   const trRef = useRef<Konva.Transformer>(null);
   const drawStart = useRef<{ x: number; y: number } | null>(null);
+  // Text tool: where the button went down — a click places text, a drag makes a callout.
+  const textDrag = useRef<{ x: number; y: number } | null>(null);
   const gestureStart = useRef<Doc | null>(null);
   const docRef = useRef(doc);
   docRef.current = doc;
@@ -132,7 +163,16 @@ export function useAnnotator(o: AnnotatorOptions) {
     if (!te) return;
     textRef.current = null;
     const value = te.text.replace(/\s+$/, '');
-    if (te.id) {
+    if (te.callout) {
+      const arrow = calloutArrow(te);
+      const added: Shape[] = [arrow];
+      if (value) {
+        const at = calloutTextAt(te, value, k);
+        added.push({ id: newId(), type: 'text', x: at.x, y: at.y, text: value, color: te.color, size: te.size });
+      }
+      applyFn((d) => added.reduce(addShape, d));
+      setSelectedId(added[added.length - 1].id);
+    } else if (te.id) {
       const id = te.id;
       applyFn((d) => (value ? updateShape(d, id, { text: value, color: te.color, size: te.size, fontSize: te.fontSize }) : removeShape(d, id)));
     } else if (value) {
@@ -179,6 +219,10 @@ export function useAnnotator(o: AnnotatorOptions) {
   const pointer = () => stageRef.current?.getRelativePointerPosition() ?? { x: 0, y: 0 };
   const inArea = (p: { x: number; y: number }) =>
     !o.drawArea || (p.x >= o.drawArea.x && p.y >= o.drawArea.y && p.x <= o.drawArea.x + o.drawArea.w && p.y <= o.drawArea.y + o.drawArea.h);
+  const clampToArea = (p: { x: number; y: number }) => {
+    const a = o.drawArea;
+    return a ? { x: Math.min(Math.max(p.x, a.x), a.x + a.w), y: Math.min(Math.max(p.y, a.y), a.y + a.h) } : p;
+  };
 
   const onMouseDown = (e: Konva.KonvaEventObject<MouseEvent>): boolean => {
     if (o.disabled || e.evt.button !== 0) return false;
@@ -206,7 +250,8 @@ export function useAnnotator(o: AnnotatorOptions) {
         return true;
       }
       setSelectedId(null);
-      setTextEdit({ id: null, x: p.x, y: p.y - fontSizeFor(size, k) * 0.6, text: '', color, size });
+      // Decided on release: a click — text here; a drag — an arrow to this point + text.
+      textDrag.current = p;
       return true;
     }
     if (tool === 'step') {
@@ -238,6 +283,16 @@ export function useAnnotator(o: AnnotatorOptions) {
   };
 
   const onMouseMove = (e: Konva.KonvaEventObject<MouseEvent>): boolean => {
+    const target = textDrag.current;
+    if (target) {
+      const p = clampToArea(pointer());
+      const [x, y] = e.evt.shiftKey ? snapAngle(target.x, target.y, p.x, p.y) : [p.x, p.y];
+      // A few screen pixels of jitter is still a click.
+      if (draft || Math.hypot(x - target.x, y - target.y) * view.zoom > 8) {
+        setDraft({ id: draft?.id ?? newId(), type: 'arrow', points: [x, y, target.x, target.y], color, size });
+      }
+      return true;
+    }
     const start = drawStart.current;
     if (!start || !draft) return false;
     const p = pointer();
@@ -267,6 +322,18 @@ export function useAnnotator(o: AnnotatorOptions) {
   };
 
   const onMouseUp = (): boolean => {
+    const target = textDrag.current;
+    if (target) {
+      textDrag.current = null;
+      const arrow = draft?.type === 'arrow' ? draft : null;
+      setDraft(null);
+      setTextEdit(
+        arrow
+          ? { id: null, x: arrow.points[0], y: arrow.points[1], text: '', color, size, callout: arrow }
+          : { id: null, x: target.x, y: target.y - fontSizeFor(size, k) * 0.6, text: '', color, size },
+      );
+      return true;
+    }
     const start = drawStart.current;
     drawStart.current = null;
     if (!start || !draft) return false;
@@ -376,7 +443,7 @@ export function useAnnotator(o: AnnotatorOptions) {
   }, [selected, doc, textEdit, stageRef]);
 
   // ------------------------------------------------------------ render pieces
-  const shapes = draft ? [...doc.shapes, draft] : doc.shapes;
+  const shapes = [...doc.shapes, ...(draft ? [draft] : []), ...(textEdit?.callout ? [calloutArrow(textEdit)] : [])];
   const shapeElements: ReactNode[] = shapes.map((s) => (
     <ShapeView
       key={s.id}
@@ -448,7 +515,11 @@ export function useAnnotator(o: AnnotatorOptions) {
   const textBox = useMemo(() => {
     if (!textEdit) return null;
     const fs = textEdit.fontSize ?? fontSizeFor(textEdit.size, k);
-    return { left: view.x + textEdit.x * view.zoom, top: view.y + textEdit.y * view.zoom, fs: fs * view.zoom };
+    // A callout's text grows away from its arrow (to the left when the arrow points right).
+    const at = textEdit.callout ? calloutTextAt(textEdit, textEdit.text || 'Текст', k) : null;
+    const x = at?.x ?? textEdit.x;
+    const y = at?.y ?? textEdit.y;
+    return { left: view.x + x * view.zoom, top: view.y + y * view.zoom, fs: fs * view.zoom, width: at ? (at.w + fs * 0.6) * view.zoom : null };
   }, [textEdit, view.x, view.y, view.zoom, k]);
 
   const textArea =
@@ -464,8 +535,11 @@ export function useAnnotator(o: AnnotatorOptions) {
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
             e.preventDefault();
+            // A callout keeps its arrow (one Ctrl+Z removes it).
+            const arrow = textEdit.callout ? calloutArrow(textEdit) : null;
             textRef.current = null;
             setTextEdit(null);
+            if (arrow) applyFn((d) => addShape(d, arrow));
           } else if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             commitText();
@@ -482,8 +556,8 @@ export function useAnnotator(o: AnnotatorOptions) {
           lineHeight: 1.2,
           fontFamily: FONT_FAMILY,
           color: textEdit.color,
-          minWidth: textBox.fs * 4,
-          width: Math.max(textBox.fs * 4, ...textEdit.text.split('\n').map((l) => l.length * textBox.fs * 0.62 + textBox.fs)),
+          minWidth: textBox.width ? undefined : textBox.fs * 4,
+          width: textBox.width ?? Math.max(textBox.fs * 4, ...textEdit.text.split('\n').map((l) => l.length * textBox.fs * 0.62 + textBox.fs)),
           caretColor: textEdit.color,
         }}
       />
@@ -492,6 +566,7 @@ export function useAnnotator(o: AnnotatorOptions) {
   /** Drops drafts, selection and text editing (new capture). */
   const reset = () => {
     drawStart.current = null;
+    textDrag.current = null;
     textRef.current = null;
     setDraft(null);
     setTextEdit(null);
@@ -520,7 +595,7 @@ export function useAnnotator(o: AnnotatorOptions) {
     onMouseDown,
     onMouseMove,
     onMouseUp,
-    isDrawing: () => drawStart.current !== null,
+    isDrawing: () => drawStart.current !== null || textDrag.current !== null,
     shapeElements,
     uiElements,
     textArea,

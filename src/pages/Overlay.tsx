@@ -5,7 +5,8 @@
 //
 // Mouse: drag — free region; click — the highlighted window / UI element; wheel — bigger /
 // smaller UI element; handles — resize; drag inside the selection (Move tool) — move;
-// with a drawing tool — draw inside the selection; double click — editor;
+// with a drawing tool — draw inside the selection (text tool dragged — an arrow to the press
+// point with the text at its tail); double click — editor;
 // right click — reset selection / cancel.
 // Keys: Enter — editor, Ctrl+C — copy, Ctrl+S — save as (cancelling the dialog returns
 // here), Ctrl+U — upload & copy link,
@@ -21,10 +22,10 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { IconButton } from '../components/ui';
 import { useTauriEvent } from '../lib/hooks';
 import { api, shotUrl } from '../lib/ipc';
-import type { Action, OverlayPrepare, Rect } from '../lib/types';
-import { emptyDoc, historyOf, imageScaleFor, translate, type History, type Tool } from './editor/model';
+import type { Action, AppSettings, OverlayPrepare, Rect, ResizeSettings } from '../lib/types';
+import { DEFAULT_RESIZE, emptyDoc, historyOf, imageScaleFor, outputSize, thickenFactor, translate, type History, type Tool } from './editor/model';
 import type { PixelSource } from './editor/pixelate';
-import { ColorPicker, SizePicker, StepPicker, TOOLS } from './editor/Toolbar';
+import { ColorPicker, ResizePicker, SizePicker, StepPicker, TOOLS } from './editor/Toolbar';
 import { isHandle, shapeIdOf, useAnnotator } from './editor/useAnnotator';
 import {
   actionBarPosition,
@@ -127,6 +128,9 @@ export default function Overlay() {
   const [tool, setToolState] = useState<Tool>(lastTool);
   const [color, setColor] = useState('#FF3B30');
   const [size, setSize] = useState(1);
+  const [downscale, setDownscale] = useState<ResizeSettings>(DEFAULT_RESIZE);
+  const downscaleRef = useRef(downscale);
+  downscaleRef.current = downscale;
   const [hist, setHist] = useState<History>(historyOf(emptyDoc()));
   const [source, setSource] = useState<PixelSource | null>(null);
   const [selectionRev, setSelectionRev] = useState(0);
@@ -160,7 +164,8 @@ export default function Overlay() {
     tool,
     color,
     size,
-    k: strokeScale(),
+    // "Downscale to N px" + "thicken": thicker drawings that look normal after downscaling.
+    k: strokeScale() * (sel ? thickenFactor(downscale, sel.width, sel.height) : 1),
     source,
     stageRef,
     view: { zoom: 1 / scale(), x: 0, y: 0 },
@@ -210,9 +215,21 @@ export default function Overlay() {
       .then((v) => {
         setColor(v.settings.editor.color || '#FF3B30');
         setSize(v.settings.editor.size ?? 1);
+        if (v.settings.resize) setDownscale(v.settings.resize);
       })
       .catch(() => {});
   }, []);
+  // Shared with the editor (and the other monitors' overlays); echoes of changes made
+  // here are ignored (they could arrive after a newer value typed here).
+  useTauriEvent<AppSettings>('settings:changed', (e) => {
+    if (e.payload.resize && !document.hasFocus()) setDownscale(e.payload.resize);
+  });
+  const changeDownscale = (r: ResizeSettings) => {
+    setDownscale(r);
+    api.settingsPatch({ resize: r }).catch(() => {});
+  };
+  // The size label over the selection shows the output size.
+  useEffect(() => redraw(), [downscale, redraw]);
   const changeColor = (c: string) => {
     setColor(c);
     ann.setStyle({ color: c });
@@ -272,8 +289,10 @@ export default function Overlay() {
       ctx.strokeRect(focus.x - lw / 2, focus.y - lw / 2, focus.width + lw, focus.height + lw);
       ctx.restore();
 
-      // Size label above the area (or inside when there is no room).
-      const label = `${focus.width} × ${focus.height}`;
+      // Size label above the area (or inside when there is no room), with the output size
+      // when "downscale to" makes the picture smaller.
+      const out = isSelection ? outputSize(downscaleRef.current, focus.width, focus.height) : null;
+      const label = `${focus.width} × ${focus.height}${out && (out.w !== focus.width || out.h !== focus.height) ? `  →  ${out.w} × ${out.h}` : ''}`;
       ctx.font = `500 ${Math.round(12 * k)}px ${SANS}`;
       const tw = ctx.measureText(label).width;
       const ph = Math.round(22 * k);
@@ -977,6 +996,8 @@ export default function Overlay() {
           <ColorPicker color={color} setColor={changeColor} compact up={barUp} />
           <SizePicker size={size} setSize={changeSize} color={color} compact up={barUp} />
           {tool === 'step' && <StepPicker value={ann.stepNext} onChange={ann.setStepNext} color={color} up={barUp} />}
+          <BarDivider />
+          <ResizePicker value={downscale} onChange={changeDownscale} source={bar ? { w: Math.round(bar.sel.width), h: Math.round(bar.sel.height) } : null} up={barUp} />
           <BarDivider />
           <BarButton tip="Копировать · Ctrl+C" onClick={() => finish('copy')}>
             <Copy size={18} />

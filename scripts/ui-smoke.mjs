@@ -187,6 +187,21 @@ const check = (cond, msg) => {
   check((await next.textContent()) === '42', `custom step number (next: ${await next.textContent()})`);
   await next.click();
   await page.getByRole('option', { name: '7', exact: true }).click();
+  // text tool dragged: an arrow to the press point + the text at its tail (one step each)
+  await page.keyboard.press('t');
+  await page.mouse.move(600, 250);
+  await page.mouse.down();
+  await page.mouse.move(450, 330, { steps: 6 });
+  await page.mouse.up();
+  await page.keyboard.type('Выноска');
+  await page.keyboard.press('Enter');
+  // "downscale to": the check box on the toolbar, the output size in the drop-down
+  await page.getByRole('checkbox', { name: 'Уменьшать картинку' }).click();
+  await page.getByRole('button', { name: /Уменьшать до/ }).click();
+  const preview = await page.getByText(/→ \d+ × \d+/).textContent().catch(() => '');
+  check(/→ 740 × \d+/.test(preview ?? ''), `downscaling preview (${preview})`);
+  await page.keyboard.press('Escape');
+  check(await page.getByRole('toolbar', { name: 'Инструменты' }).isVisible(), 'Esc closes the drop-down, not the capture');
   // "Save as…" cancelled (the mock dialog returns null): the capture stays open
   await page.keyboard.press('Control+s');
   await page.waitForTimeout(300);
@@ -198,7 +213,7 @@ const check = (cond, msg) => {
   const k = 1920 / 1440;
   const last = c[c.length - 1];
   check(last?.cmd === 'overlay_finish_annotated', 'Ctrl+C sends the annotated image');
-  check(last?.shapes === 4, `drawings inside the selection only (got ${last?.shapes}, want 4)`);
+  check(last?.shapes === 6, `drawings inside the selection only, callout = arrow + text (got ${last?.shapes}, want 6)`);
   check(last && Math.abs(last.width - Math.round(560 * k)) <= 2 && Math.abs(last.height - Math.round(390 * k)) <= 2, `image has the resized selection size (${last?.width}×${last?.height})`);
   check(errors.length === 0, `no page errors ${errors.join('; ')}`);
   await page.screenshot({ path: process.env.OUT_OVERLAY || '/tmp/overlay-smoke.png' });

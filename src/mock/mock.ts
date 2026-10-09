@@ -24,6 +24,7 @@ const settings: AppSettings = {
   box: { authMode: 'oAuth', clientId: 'k2x8v1n0q9example', enterpriseId: '', userId: '', folderId: '', folderName: 'AShot', sharedLinkAccess: 'open', redirectUri: '' },
   links: { rewrite: true, template: '', copyAfterUpload: true, openAfterUpload: false },
   editor: { color: '#FF3B30', size: 1 },
+  resize: { enabled: false, side: 'width', size: 740, thicken: true },
   lastRegion: { x: 200, y: 120, width: 1280, height: 720 },
   welcomed: true,
   autoUpdate: true,
@@ -127,11 +128,12 @@ export async function installMocks() {
             logDir: 'C:\\Users\\ivan\\AppData\\Local\\one.advant.shoter\\logs',
           };
         case 'settings_get':
-          return { settings, defaultSaveFolder: 'C:\\Users\\ivan\\Pictures\\AShot', historyFolder: 'C:\\Users\\ivan\\AppData\\Local\\one.advant.shoter\\history', defaultLinkTemplate: 'https://app.box.com/embed/s/{id}' };
+          return { settings: structuredClone(settings), defaultSaveFolder: 'C:\\Users\\ivan\\Pictures\\AShot', historyFolder: 'C:\\Users\\ivan\\AppData\\Local\\one.advant.shoter\\history', defaultLinkTemplate: 'https://app.box.com/embed/s/{id}' };
         case 'settings_patch':
           deepAssign(settings as unknown as Record<string, unknown>, a.patch as Record<string, unknown>);
-          emit('settings:changed', settings);
-          return { settings, problems: [] };
+          // Copies, like the real IPC: pages must never share (and mutate) one object.
+          emit('settings:changed', structuredClone(settings));
+          return { settings: structuredClone(settings), problems: [] };
         case 'pick_folder':
           return 'D:\\Screenshots';
         case 'history_list':

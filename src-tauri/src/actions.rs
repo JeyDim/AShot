@@ -8,7 +8,7 @@ use serde::Serialize;
 use shoter_core::history::HistoryItem;
 use shoter_core::boxapi::{self, BoxError, BoxUser, UploadResult};
 use shoter_core::oauth;
-use shoter_core::settings::{BoxAuthMode, ImageFormat};
+use shoter_core::settings::{BoxAuthMode, ImageFormat, ResizeSettings};
 use shoter_core::{filename, imaging, links};
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
@@ -77,8 +77,9 @@ pub async fn process_capture(
     match action {
         Action::Edit => ui::open_editor(app, &item.id),
         Action::Copy => {
-            let (fw, fh) = final_image.dimensions();
-            clipboard::set_image(final_image).await?;
+            let out = output_image(app, final_image).await?;
+            let (fw, fh) = out.dimensions();
+            clipboard::set_image(out).await?;
             ui::toast(app, Toast::success("Скопировано в буфер обмена").message(format!("{fw} × {fh}")).item(&item.id));
         }
         Action::Save => {
@@ -108,28 +109,51 @@ fn read_current(app: &AppHandle, id: &str) -> Result<(HistoryItem, Vec<u8>), Str
     Ok((item, bytes))
 }
 
-/// Encodes the image in the configured format; PNG bytes are reused as-is.
-fn encode_as(png: Vec<u8>, format: ImageFormat, quality: u8) -> Result<Vec<u8>, String> {
-    match format {
-        ImageFormat::Png => Ok(png),
-        ImageFormat::Jpeg => {
-            let img = imaging::decode(&png).map_err(|e| e.to_string())?;
-            imaging::encode_jpeg(&img, quality).map_err(|e| e.to_string())
-        }
-        ImageFormat::Webp => {
-            let img = imaging::decode(&png).map_err(|e| e.to_string())?;
-            imaging::encode_webp(&img).map_err(|e| e.to_string())
-        }
+/// "Downscale to N px" (when on) for a picture that leaves the app.
+fn downscaled(img: RgbaImage, resize: &ResizeSettings) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let (tw, th) = resize.output_size(w, h);
+    if (tw, th) == (w, h) { img } else { imaging::resize(&img, tw, th) }
+}
+
+/// The picture as it is copied: downscaled when "Downscale to" is on.
+async fn output_image(app: &AppHandle, img: RgbaImage) -> Result<RgbaImage, String> {
+    let resize = app.state::<AppState>().settings().resize;
+    tauri::async_runtime::spawn_blocking(move || downscaled(img, &resize)).await.map_err(|e| e.to_string())
+}
+
+/// Size of a history picture on output (copy, save, link).
+fn output_size(app: &AppHandle, width: u32, height: u32) -> (u32, u32) {
+    app.state::<AppState>().settings().resize.output_size(width, height)
+}
+
+/// Encodes the image in the configured format, downscaled when "Downscale to" is on;
+/// PNG bytes of the original size are reused as-is.
+fn encode_as(png: Vec<u8>, format: ImageFormat, quality: u8, resize: &ResizeSettings) -> Result<Vec<u8>, String> {
+    if format == ImageFormat::Png && !resize.enabled {
+        return Ok(png);
     }
+    let img = imaging::decode(&png).map_err(|e| e.to_string())?;
+    let original = img.dimensions();
+    let img = downscaled(img, resize);
+    match format {
+        ImageFormat::Png if img.dimensions() == original => Ok(png),
+        ImageFormat::Png => imaging::encode_png(&img),
+        ImageFormat::Jpeg => imaging::encode_jpeg(&img, quality),
+        ImageFormat::Webp => imaging::encode_webp(&img),
+    }
+    .map_err(|e| e.to_string())
 }
 
 pub async fn copy_item(app: &AppHandle, id: &str) -> Result<(), String> {
-    let (item, bytes) = read_current(app, id)?;
+    let (_, bytes) = read_current(app, id)?;
     let img = tauri::async_runtime::spawn_blocking(move || imaging::decode(&bytes).map_err(|e| e.to_string()))
         .await
         .map_err(|e| e.to_string())??;
+    let img = output_image(app, img).await?;
+    let (w, h) = img.dimensions();
     clipboard::set_image(img).await?;
-    ui::toast(app, Toast::success("Скопировано в буфер обмена").message(format!("{} × {}", item.width, item.height)).item(id));
+    ui::toast(app, Toast::success("Скопировано в буфер обмена").message(format!("{w} × {h}")).item(id));
     Ok(())
 }
 
@@ -141,11 +165,12 @@ pub async fn copy_link(app: &AppHandle, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The current image of a history item in the given format.
+/// The current image of a history item in the given format (and output size).
 async fn encode_current(app: &AppHandle, id: &str, format: ImageFormat) -> Result<Vec<u8>, String> {
-    let quality = app.state::<AppState>().settings().jpeg_quality;
+    let settings = app.state::<AppState>().settings();
+    let (quality, resize) = (settings.jpeg_quality, settings.resize);
     let (_, png) = read_current(app, id)?;
-    tauri::async_runtime::spawn_blocking(move || encode_as(png, format, quality))
+    tauri::async_runtime::spawn_blocking(move || encode_as(png, format, quality, &resize))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -182,7 +207,8 @@ pub async fn save_item(app: &AppHandle, id: &str, dir: Option<PathBuf>) -> Resul
     let item = state.history.get(id).map_err(|e| e.to_string())?;
     let dir = dir.unwrap_or_else(|| state.save_dir());
     std::fs::create_dir_all(&dir).map_err(|e| format!("не удалось создать папку {}: {e}", dir.display()))?;
-    let name = filename::format(&settings.file_name_pattern, item.created_at, item.width, item.height);
+    let (w, h) = settings.resize.output_size(item.width, item.height);
+    let name = filename::format(&settings.file_name_pattern, item.created_at, w, h);
     let target = filename::numbered_path(&dir, &name, settings.image_format.extension());
     write_image(app, id, target, settings.image_format).await
 }
@@ -198,9 +224,9 @@ pub async fn save_item_as(app: &AppHandle, id: &str) -> Result<Option<PathBuf>, 
     save_item_to(app, id, path).await.map(Some)
 }
 
-/// The "Save as…" dialog, opened in the last chosen folder with a name from the pattern.
-/// `parent` keeps it above that window (the capture overlay is always on top).
-/// `None` — cancelled.
+/// The "Save as…" dialog, opened in the last chosen folder with a name from the pattern
+/// (`width × height` — the picture before "Downscale to"). `parent` keeps it above that
+/// window (the capture overlay is always on top). `None` — cancelled.
 pub async fn pick_save_path(
     app: &AppHandle,
     created_at: DateTime<Local>,
@@ -212,6 +238,7 @@ pub async fn pick_save_path(
     let settings = state.settings();
     let save_dir = state.save_dir();
     let start_dir = Some(PathBuf::from(&settings.last_save_as_dir)).filter(|d| d.is_dir()).unwrap_or(save_dir);
+    let (width, height) = output_size(app, width, height);
     let name = filename::format(&settings.file_name_pattern, created_at, width, height);
     let format = settings.image_format;
     let suggested = filename::numbered_path(&start_dir, &name, format.extension());
@@ -276,11 +303,12 @@ pub async fn upload_item(app: &AppHandle, id: &str) -> Result<String, String> {
     let state = app.state::<AppState>();
     let settings = state.settings();
     let (item, png) = read_current(app, id)?;
+    let (out_w, out_h) = settings.resize.output_size(item.width, item.height);
     let progress = || {
         let hint = if settings.links.copy_after_upload {
             "Ссылка скопируется автоматически".to_string()
         } else {
-            format!("{} × {}", item.width, item.height)
+            format!("{out_w} × {out_h}")
         };
         Toast::progress("Загрузка в Box…").message(hint).item(id)
     };
@@ -288,12 +316,13 @@ pub async fn upload_item(app: &AppHandle, id: &str) -> Result<String, String> {
 
     let format = settings.image_format;
     let quality = settings.jpeg_quality;
-    let data = tauri::async_runtime::spawn_blocking(move || encode_as(png, format, quality))
+    let resize = settings.resize;
+    let data = tauri::async_runtime::spawn_blocking(move || encode_as(png, format, quality, &resize))
         .await
         .map_err(|e| e.to_string())??;
     let name = format!(
         "{}.{}",
-        filename::first_number(&filename::format(&settings.file_name_pattern, Local::now(), item.width, item.height)),
+        filename::first_number(&filename::format(&settings.file_name_pattern, Local::now(), out_w, out_h)),
         format.extension()
     );
     let mime = format.mime();

@@ -1,5 +1,6 @@
 // Editor document model. Everything is in image pixel coordinates; the document is
 // stored next to the original screenshot so annotations stay editable later.
+import type { ResizeSettings } from '../../lib/types';
 
 export type Tool = 'select' | 'rect' | 'ellipse' | 'arrow' | 'line' | 'pen' | 'marker' | 'text' | 'step' | 'pixelate' | 'crop';
 
@@ -93,6 +94,27 @@ export function textFontSize(t: TextShape, imageScale = 1): number {
   return t.fontSize ?? fontSize(t.size, imageScale);
 }
 
+// ---------------------------------------------------------------- "downscale to N px"
+
+export const DEFAULT_RESIZE: ResizeSettings = { enabled: false, side: 'width', size: 740, thicken: true };
+export const MIN_RESIZE = 16;
+export const MAX_RESIZE = 20000;
+
+/** Output size of a `width × height` picture (same rule as `ResizeSettings::output_size` in Rust). */
+export function outputSize(r: ResizeSettings, width: number, height: number): { w: number; h: number } {
+  const limited = r.side === 'width' ? width : r.side === 'height' ? height : Math.max(width, height);
+  if (!r.enabled || width <= 0 || height <= 0 || limited <= r.size) return { w: width, h: height };
+  const k = r.size / limited;
+  return { w: Math.max(1, Math.round(width * k)), h: Math.max(1, Math.round(height * k)) };
+}
+
+/** Stroke multiplier that makes drawings look normal after downscaling ("thicken" option). */
+export function thickenFactor(r: ResizeSettings, width: number, height: number): number {
+  if (!r.enabled || !r.thicken || width <= 0) return 1;
+  const out = outputSize(r, width, height);
+  return Math.min(8, width / out.w);
+}
+
 /** Helps big screenshots (4K) get proportionally thicker strokes. */
 export function imageScaleFor(width: number, height: number): number {
   const longest = Math.max(width, height);
@@ -141,6 +163,16 @@ export function normalizeBox(x1: number, y1: number, x2: number, y2: number, squ
     h = Math.sign(h || 1) * s;
   }
   return { x: Math.min(x1, x1 + w), y: Math.min(y1, y1 + h), w: Math.abs(w), h: Math.abs(h) };
+}
+
+/** Top-left corner of a callout's text (`w × h`): the box sits at the arrow's tail
+ *  (points[0..1]), on the side away from where the arrow points (points[2..3]). */
+export function calloutTextPosition(points: [number, number, number, number], w: number, h: number, gap: number): { x: number; y: number } {
+  const [tx, ty, px, py] = points;
+  const dx = px - tx;
+  const dy = py - ty;
+  if (Math.abs(dx) >= Math.abs(dy)) return { x: dx > 0 ? tx - gap - w : tx + gap, y: ty - h / 2 };
+  return { x: tx - w / 2, y: dy > 0 ? ty - gap - h : ty + gap };
 }
 
 /** Snaps the end point to multiples of 45° (Shift while drawing lines/arrows). */

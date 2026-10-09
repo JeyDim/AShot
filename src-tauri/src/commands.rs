@@ -395,10 +395,7 @@ pub async fn editor_commit(app: AppHandle, request: Request<'_>) -> CmdResult<Ac
 
     let mut result = ActionResult::default();
     match action.as_str() {
-        "copy" => {
-            crate::clipboard::set_image(img).await?;
-            ui::toast(&app, Toast::success("Скопировано в буфер обмена").item(&id));
-        }
+        "copy" => actions::copy_item(&app, &id).await?,
         "save" => result.saved_path = Some(actions::save_item(&app, &id, None).await?.display().to_string()),
         "saveAs" => result.saved_path = actions::save_item_as(&app, &id).await?.map(|p| p.display().to_string()),
         "upload" => result.share_url = Some(actions::upload_item(&app, &id).await?),

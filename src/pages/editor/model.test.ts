@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   addShape,
+  calloutTextPosition,
   clampCrop,
   clampStep,
   commit,
@@ -9,6 +10,9 @@ import {
   historyOf,
   nextStep,
   normalizeBox,
+  outputSize,
+  thickenFactor,
+  DEFAULT_RESIZE,
   parseDoc,
   redo,
   simplify,
@@ -53,6 +57,29 @@ describe('editor model', () => {
     expect(clampStep(12.4)).toBe(12);
     expect(clampStep(5000)).toBe(999);
     expect(clampStep(NaN)).toBe(1);
+  });
+
+  it('downscales like the Rust side', () => {
+    const on = { ...DEFAULT_RESIZE, enabled: true };
+    expect(outputSize(DEFAULT_RESIZE, 1920, 1080)).toEqual({ w: 1920, h: 1080 });
+    expect(outputSize(on, 1920, 1080)).toEqual({ w: 740, h: 416 });
+    expect(outputSize(on, 500, 900)).toEqual({ w: 500, h: 900 });
+    expect(outputSize({ ...on, side: 'height' }, 500, 900)).toEqual({ w: 411, h: 740 });
+    expect(outputSize({ ...on, side: 'longest' }, 1080, 1920)).toEqual({ w: 416, h: 740 });
+    expect(outputSize(on, 3000, 2)).toEqual({ w: 740, h: 1 });
+    expect(thickenFactor(on, 1480, 800)).toBe(2);
+    expect(thickenFactor({ ...on, thicken: false }, 1480, 800)).toBe(1);
+    expect(thickenFactor(on, 600, 400)).toBe(1);
+  });
+
+  it('places callout text away from the arrow head', () => {
+    // arrow pointing right: text ends before the tail
+    expect(calloutTextPosition([100, 100, 300, 120], 50, 20, 5)).toEqual({ x: 45, y: 90 });
+    // pointing left: text starts after the tail
+    expect(calloutTextPosition([100, 100, 0, 90], 50, 20, 5)).toEqual({ x: 105, y: 90 });
+    // pointing down: text above the tail; up: below
+    expect(calloutTextPosition([100, 100, 110, 300], 50, 20, 5)).toEqual({ x: 75, y: 75 });
+    expect(calloutTextPosition([100, 100, 90, 0], 50, 20, 5)).toEqual({ x: 75, y: 105 });
   });
 
   it('geometry helpers', () => {
