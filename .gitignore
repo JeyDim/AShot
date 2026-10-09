@@ -21,3 +21,7 @@ Thumbs.db
 /test-results/
 /playwright-report/
 /docs/screenshots/.tmp/
+
+# `tauri icon` also writes mobile icons; the app is Windows-only
+src-tauri/icons/android/
+src-tauri/icons/ios/

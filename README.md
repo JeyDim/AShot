@@ -277,7 +277,8 @@ npm run tauri build      # установщики в target/release/bundle
 
 Шрифты встроены в сборку: заголовки — Rare (variable, [`src/assets/fonts`](src/assets/fonts)),
 текст — Roboto, моноширинный — Roboto Mono. Логотип — [`assets/logo-black.svg`](assets/logo-black.svg) /
-[`logo-white.svg`](assets/logo-white.svg); иконка приложения — [`assets/logo.svg`](assets/logo.svg)
+[`logo-white.svg`](assets/logo-white.svg); иконка приложения (вариант 09 «Захват курсором»: буква A,
+рамка выделения и курсор) — [`assets/logo.svg`](assets/logo.svg)
 (`npm run icons` пересобирает все размеры).
 
 ### Структура

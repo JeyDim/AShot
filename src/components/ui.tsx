@@ -241,16 +241,18 @@ export function Range({
   );
 }
 
-/** AShot mark (assets/logo-*.svg), 30.33 × 19.5 units. */
-export const LOGO_PATH =
-  'M7.09596 2.84774C7.83144 1.1235 9.57386 -0.00143435 11.5069 1.37266e-06L30.3333 0.0139846L27.505 6.60244H17.1063L23.5949 15.7635L23.5957 15.7628L22.0093 19.4956H18.014L11.3494 10.0864L7.29877 19.5L0 19.4834L7.09596 2.84774Z';
-
-/** App logo: the mark on an ink tile — white on dark in the light theme, inverted in the dark one. */
+/** App logo (icon 09 «Захват курсором»: the A, a selection frame and the pointer) on an ink
+ *  tile — white on dark in the light theme, inverted in the dark one. Same drawing as
+ *  assets/logo.svg, on a 100-unit grid. */
 export function Logo({ size = 28, className, radius }: { size?: number; className?: string; radius?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 1024 1024" className={clsx('shrink-0', className)} aria-hidden>
-      <rect width="1024" height="1024" rx={radius ?? 292} fill="var(--color-text)" />
-      <path d={LOGO_PATH} transform="translate(202 313) scale(20.44)" fill="var(--color-surface)" />
+      <rect width="1024" height="1024" rx={radius ?? 232} fill="var(--color-text)" />
+      <g transform="scale(10.24)" fill="none" stroke="var(--color-surface)" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M22 74L42 26L62 74M28.5 58.5H55.5" strokeWidth={7} />
+        <rect x="46" y="40" width="34" height="34" strokeWidth={3} strokeDasharray="5 5" />
+        <path d="M76 70L92 77L84 79L81 87Z" fill="var(--color-surface)" strokeWidth={2} />
+      </g>
     </svg>
   );
 }
