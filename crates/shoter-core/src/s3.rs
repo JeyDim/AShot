@@ -3,7 +3,8 @@
 //!
 //! Docs: <https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html>,
 //! <https://yandex.cloud/ru/docs/storage/s3/>
-//! * upload: `PUT {endpoint}/{bucket}/{prefix}{id}` (path-style: bucket names with dots work too)
+//! * upload: `PUT {endpoint}/{bucket}/{prefix}{id}` (path-style: bucket names with dots work too),
+//!   with `If-None-Match: *` — never over an existing object
 //!
 //! The object key has no extension: the link proxy serves `/{id}` (and `/{id}.png`) by it, and
 //! the stored `Content-Type` tells what it is.
@@ -42,6 +43,8 @@ fn hint(code: &str, message: &str) -> String {
         "NoSuchBucket" => "бакет не найден",
         "RequestTimeTooSkewed" => "часы компьютера расходятся с точным временем",
         "EntityTooLarge" => "файл слишком большой",
+        "PreconditionFailed" => "объект с таким кодом уже есть",
+        "NotImplemented" => "хранилище не поддерживает эту операцию",
         _ if !message.is_empty() => message,
         _ => "без описания",
     };
@@ -90,25 +93,58 @@ pub struct Uploaded {
     pub url: String,
 }
 
+/// Ids tried before giving up when they turn out taken.
+const ATTEMPTS: usize = 3;
+
 /// Uploads a screenshot under a new random id. `file_name` is what a browser offers when the
 /// picture is saved (the `Content-Disposition` of the object).
+///
+/// Never over an existing object: the write is conditional (`If-None-Match: *`), and a taken id
+/// (practically impossible with 80 random bits) gets another one. A storage without conditional
+/// writes (501) gets a plain write.
 pub async fn upload(http: &Client, config: &S3Config, file_name: &str, bytes: Vec<u8>, mime: &str) -> Result<Uploaded> {
-    let id = crate::random_id(ID_LEN);
-    let key = format!("{}{id}", config.prefix);
     let disposition = format!("inline; filename*=UTF-8''{}", crate::links::encode_component(file_name));
-    put_object(http, config, &key, bytes, mime, &disposition, Utc::now()).await?;
-    Ok(Uploaded { url: config.object_url(&key), id, key })
+    let mut conditional = true;
+    let mut taken = 0;
+    loop {
+        let id = crate::random_id(ID_LEN);
+        let key = format!("{}{id}", config.prefix);
+        match put_object(http, config, &key, bytes.clone(), mime, &disposition, conditional, Utc::now()).await {
+            Ok(()) => return Ok(Uploaded { url: config.object_url(&key), id, key }),
+            // 412: the id is taken; 409: a write of the same id is going on.
+            Err(S3Error::Api { status: 412 | 409, .. }) if taken + 1 < ATTEMPTS => {
+                taken += 1;
+                log::warn!("S3: id {id} is taken, trying another one");
+            }
+            Err(S3Error::Api { status: 501, .. }) if conditional => {
+                log::warn!("S3: the storage has no conditional writes, uploading without If-None-Match");
+                conditional = false;
+            }
+            Err(e) => return Err(e),
+        }
+    }
 }
 
-/// Checks the settings by writing a tiny object (`{prefix}ashot-check.txt`): the key of AShot
-/// may only write, so nothing can be read back.
+/// Checks the settings by writing a tiny object (`{prefix}ashot-check.txt`, overwritten every
+/// time): the key of AShot may only write, so nothing can be read back.
 pub async fn check(http: &Client, config: &S3Config) -> Result<()> {
     let key = format!("{}ashot-check.txt", config.prefix);
     let body = b"AShot: connection check".to_vec();
-    put_object(http, config, &key, body, "text/plain; charset=utf-8", "inline", Utc::now()).await
+    put_object(http, config, &key, body, "text/plain; charset=utf-8", "inline", false, Utc::now()).await
 }
 
-async fn put_object(http: &Client, config: &S3Config, key: &str, bytes: Vec<u8>, mime: &str, disposition: &str, now: DateTime<Utc>) -> Result<()> {
+/// `PUT` of an object; `if_absent` — only when there is no object with that key yet.
+#[allow(clippy::too_many_arguments)]
+async fn put_object(
+    http: &Client,
+    config: &S3Config,
+    key: &str,
+    bytes: Vec<u8>,
+    mime: &str,
+    disposition: &str,
+    if_absent: bool,
+    now: DateTime<Utc>,
+) -> Result<()> {
     for (value, what) in [(&config.bucket, "бакет"), (&config.access_key_id, "ключ доступа"), (&config.secret_access_key, "секретный ключ")] {
         if value.trim().is_empty() {
             return Err(S3Error::NotConfigured(format!("не указан {what}")));
@@ -125,13 +161,16 @@ async fn put_object(http: &Client, config: &S3Config, key: &str, bytes: Vec<u8>,
     };
     let payload_hash = hex(&Sha256::digest(&bytes));
     // Sorted by name: the order of the canonical request.
-    let headers = [
+    let mut headers = vec![
         ("content-disposition", disposition.to_string()),
         ("content-type", mime.to_string()),
         ("host", host),
-        ("x-amz-content-sha256", payload_hash.clone()),
-        ("x-amz-date", now.format("%Y%m%dT%H%M%SZ").to_string()),
     ];
+    if if_absent {
+        headers.push(("if-none-match", "*".to_string()));
+    }
+    headers.push(("x-amz-content-sha256", payload_hash.clone()));
+    headers.push(("x-amz-date", now.format("%Y%m%dT%H%M%SZ").to_string()));
     let authorization = authorization(config, "PUT", url.path(), "", &headers, &payload_hash, now);
     let mut request = http.put(url).header("authorization", authorization).body(bytes);
     for (name, value) in headers.iter().filter(|(n, _)| *n != "host") {
@@ -286,10 +325,13 @@ mod tests {
             .and(header("content-type", "image/png"))
             .and(header("x-amz-content-sha256", hex(&Sha256::digest(&body)).as_str()))
             .and(header("content-disposition", "inline; filename*=UTF-8''%D0%A1%D0%BD%D0%B8%D0%BC%D0%BE%D0%BA%201.png"))
+            .and(header("if-none-match", "*"))
             .and(|r: &Request| {
                 let auth = r.headers.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or_default();
                 auth.starts_with("AWS4-HMAC-SHA256 Credential=YCAJEexample/")
-                    && auth.contains("/ru-central1/s3/aws4_request, SignedHeaders=content-disposition;content-type;host;x-amz-content-sha256;x-amz-date, Signature=")
+                    && auth.contains(
+                        "/ru-central1/s3/aws4_request, SignedHeaders=content-disposition;content-type;host;if-none-match;x-amz-content-sha256;x-amz-date, Signature=",
+                    )
             })
             .respond_with(ResponseTemplate::new(200))
             .expect(1)
@@ -300,6 +342,60 @@ mod tests {
         assert_eq!(up.id.len(), ID_LEN);
         assert_eq!(up.key, format!("shots/{}", up.id));
         assert_eq!(up.url, format!("{}/ashot/shots/{}", server.uri(), up.id));
+    }
+
+    fn s3_error(status: u16, code: &str) -> ResponseTemplate {
+        ResponseTemplate::new(status).set_body_string(format!("<?xml version=\"1.0\"?><Error><Code>{code}</Code><Message>{code}</Message></Error>"))
+    }
+
+    fn put_paths(requests: &[Request]) -> Vec<String> {
+        requests.iter().map(|r| r.url.path().to_string()).collect()
+    }
+
+    #[tokio::test]
+    async fn never_overwrites_a_taken_id() {
+        let server = MockServer::start().await;
+        // The first id is taken: another one is tried, and that one is written.
+        Mock::given(method("PUT")).respond_with(s3_error(412, "PreconditionFailed")).up_to_n_times(1).mount(&server).await;
+        Mock::given(method("PUT")).and(header("if-none-match", "*")).respond_with(ResponseTemplate::new(200)).mount(&server).await;
+        let http = crate::boxapi::http_client();
+        let up = upload(&http, &config(&server), "a.png", b"png".to_vec(), "image/png").await.unwrap();
+        let paths = put_paths(&server.received_requests().await.unwrap());
+        assert_eq!(paths.len(), 2);
+        assert_ne!(paths[0], paths[1], "a new id after a taken one");
+        assert_eq!(paths[1], format!("/ashot/shots/{}", up.id));
+
+        // Every id taken: an error after a few tries, nothing overwritten.
+        let server = MockServer::start().await;
+        Mock::given(method("PUT")).respond_with(s3_error(412, "PreconditionFailed")).mount(&server).await;
+        let err = upload(&http, &config(&server), "a.png", b"png".to_vec(), "image/png").await.unwrap_err();
+        assert_eq!(err.to_string(), "хранилище вернуло ошибку 412: объект с таким кодом уже есть (PreconditionFailed)");
+        assert_eq!(server.received_requests().await.unwrap().len(), ATTEMPTS);
+    }
+
+    #[tokio::test]
+    async fn storage_without_conditional_writes() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT")).and(header("if-none-match", "*")).respond_with(s3_error(501, "NotImplemented")).mount(&server).await;
+        Mock::given(method("PUT"))
+            .and(|r: &Request| !r.headers.contains_key("if-none-match"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let up = upload(&crate::boxapi::http_client(), &config(&server), "a.png", b"png".to_vec(), "image/png").await;
+        assert!(up.is_ok(), "{up:?}");
+
+        // The connection check overwrites its own file: no condition.
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path_regex(r"^/ashot/shots/ashot-check\.txt$"))
+            .and(|r: &Request| !r.headers.contains_key("if-none-match"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        check(&crate::boxapi::http_client(), &config(&server)).await.unwrap();
     }
 
     #[tokio::test]
