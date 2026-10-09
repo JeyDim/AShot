@@ -3,7 +3,9 @@
 //! Each new frame is compared with the previous one by row *profiles* — the average
 //! brightness of a few column blocks per row, which tolerates the moving scrollbar thumb and
 //! slightly different re-rendering. The vertical shift with the smallest difference over the
-//! overlap is how far the content moved. Rows that stay in place (a sticky header or footer,
+//! overlap is how far the content moved. A shift is judged by the share of rows with content
+//! that match, so a header that turns sticky after scrolling, a hover highlight or an animated
+//! banner do not spoil it, while a shift that is a row or two off loses to the true one. Rows that stay in place (a sticky header or footer,
 //! or the browser toolbar caught in the selection) are kept out of the matching: the first
 //! frame gives the header, the last one the footer, and the content in between is appended as
 //! it moves up.
@@ -16,14 +18,18 @@ const BLOCKS: usize = 32;
 const SCALE: u32 = 16;
 /// Rows whose brightness differs by at most this (0–255, mean over the blocks) are "the same".
 const SAME_ROW: f32 = 1.0;
-/// A match is accepted when the overlap differs by at most this on average.
-const MAX_COST: f32 = 6.0;
-/// Candidates this close to the best one are ties (broken by the expected shift).
-const TIE: f32 = 0.35;
+/// Candidates whose share of matching rows is this close to the best one are ties (broken by
+/// the expected shift).
+const TIE: f32 = 0.01;
 /// A row with less contrast than this across its blocks carries no information (blank).
 const INFORMATIVE: u32 = 6 * SCALE;
-/// The overlap must contain at least this many informative rows.
+/// The overlap must contain at least this many informative rows that match.
 const MIN_INFORMATIVE: usize = 4;
+/// At least this share of the overlap's rows with content must match (the rest may differ:
+/// a header that turned sticky, a hover highlight).
+const MIN_MATCH: f32 = 0.5;
+/// An informative row this close counts as matching.
+const GOOD_ROW: f32 = 3.0;
 /// Fixed bands (sticky header / footer) are at most this share of the frame.
 const MAX_BAND: f32 = 0.3;
 
@@ -101,9 +107,13 @@ impl Stitcher {
         if next.iter().zip(&self.prev_profiles).all(|(a, b)| diff(a, b) <= SAME_ROW) {
             return Step::Unchanged;
         }
-        let (header, footer) = self.bands.unwrap_or_else(|| fixed_bands(&self.prev_profiles, &next));
+        let now = fixed_bands(&self.prev_profiles, &next);
+        let (header, footer) = self.bands.unwrap_or(now);
+        // A header that became sticky only after the first step is left out of the search too
+        // (the appended rows come from the bottom, it never gets into the picture).
+        let search_header = header.max(now.0);
         let expected = expected.or(self.last_shift);
-        match find_shift(&self.prev_profiles, &next, header, footer, expected) {
+        match find_shift(&self.prev_profiles, &next, search_header, footer, expected) {
             Some(shift) => self.append(frame, next, (header, footer), shift),
             None => Step::NoMatch,
         }
@@ -222,6 +232,11 @@ fn fixed_bands(prev: &[Profile], next: &[Profile]) -> (u32, u32) {
 
 /// The shift (rows the content moved up) that matches `next` to `prev` best inside the
 /// scrolling band; `None` when nothing matches well enough.
+///
+/// A shift scores the share of `next`'s rows with content (blank rows match anything) that
+/// match the rows `shift` lower in `prev`. The true shift matches all of them but a sticky
+/// element or a hover highlight; a shift a row or two off fails wherever the content changes
+/// from row to row.
 fn find_shift(prev: &[Profile], next: &[Profile], header: u32, footer: u32, expected: Option<u32>) -> Option<u32> {
     let h = prev.len();
     let (top, bottom) = (header as usize, h - footer as usize);
@@ -230,38 +245,47 @@ fn find_shift(prev: &[Profile], next: &[Profile], header: u32, footer: u32, expe
     if band <= min_overlap {
         return None;
     }
-    // (shift, mean cost)
+    // informative rows of `next` before each row, to know a shift's total up front
+    let mut before = vec![0usize; h + 1];
+    for y in 0..h {
+        before[y + 1] = before[y] + informative(&next[y]) as usize;
+    }
+    // (shift, share of the informative rows that match)
     let mut scored: Vec<(usize, f32)> = Vec::new();
-    let mut best = f32::MAX;
+    let mut best = 0.0f32;
     for shift in 1..=band - min_overlap {
-        let rows = band - shift;
-        let budget = best.min(MAX_COST) * rows as f32;
-        let mut sum = 0.0f32;
-        let mut info = 0;
-        let mut pruned = false;
-        for y in top..bottom - shift {
-            sum += diff(&next[y], &prev[y + shift]);
-            if sum > budget + TIE * rows as f32 {
-                pruned = true;
-                break;
-            }
-            if informative(&next[y]) {
-                info += 1;
-            }
-        }
-        if pruned || info < MIN_INFORMATIVE {
+        let end = bottom - shift;
+        let total = before[end] - before[top];
+        if total < MIN_INFORMATIVE {
             continue;
         }
-        let cost = sum / rows as f32;
-        best = best.min(cost);
-        scored.push((shift, cost));
+        // Misses allowed before this shift cannot reach the best one (or the minimum).
+        let need = (MIN_MATCH.max(best - TIE) * total as f32).ceil() as usize;
+        let allowed = total.saturating_sub(need.max(MIN_INFORMATIVE));
+        let (mut ok, mut missed) = (0, 0);
+        for y in (top..end).filter(|&y| informative(&next[y])) {
+            if diff(&next[y], &prev[y + shift]) <= GOOD_ROW {
+                ok += 1;
+            } else {
+                missed += 1;
+                if missed > allowed {
+                    break;
+                }
+            }
+        }
+        if missed > allowed {
+            continue;
+        }
+        let score = ok as f32 / total as f32;
+        best = best.max(score);
+        scored.push((shift, score));
     }
-    if best > MAX_COST {
+    if best < MIN_MATCH {
         return None;
     }
-    // Equally good shifts (repeating content, blank stretches): the one closest to the
-    // expected shift, otherwise the smallest (the largest overlap).
-    let ties = scored.into_iter().filter(|&(_, c)| c <= best + TIE);
+    // Equally good shifts (repeating content): the one closest to the expected shift,
+    // otherwise the smallest (the largest overlap).
+    let ties = scored.into_iter().filter(|&(_, sc)| sc >= best - TIE);
     let pick = match expected {
         Some(e) => ties.min_by_key(|&(s, _)| (s as i64 - e as i64).unsigned_abs()),
         None => ties.min_by_key(|&(s, _)| s),
@@ -422,6 +446,38 @@ mod tests {
     }
 
     #[test]
+    fn a_header_that_turns_sticky_and_hover_changes_do_not_break_gluing() {
+        // At the top the page has its own header; once scrolled, a compact sticky header covers
+        // the top rows, and a hovered row somewhere in the middle changes color.
+        let (w, view) = (400, 320);
+        let pg = page(w, 2400);
+        let sticky = band(w, 44, 50);
+        let shot = |o: u32| {
+            let mut f = frame(&pg, o, view, if o > 0 { Some(&sticky) } else { None }, None);
+            if o > 0 {
+                for x in 0..w {
+                    for y in 200..208 {
+                        f.put_pixel(x, y, Rgba([255, 230, 0, 255]));
+                    }
+                }
+            }
+            f
+        };
+        let mut s = Stitcher::new(shot(0), 50_000);
+        let mut offset = 0;
+        for _ in 0..6 {
+            offset += 180;
+            let r = s.push(shot(offset), None);
+            assert_eq!(r, Step::Added { shift: 180, added: 180 }, "offset {offset}");
+        }
+        // The sticky header and the hover never make it into the picture: it is the page.
+        let out = s.finish();
+        let want = image::imageops::crop_imm(&pg, 0, 0, w, offset + view).to_image();
+        assert!(same(&image::imageops::crop_imm(&out, 0, 0, w, 200).to_image(), &image::imageops::crop_imm(&want, 0, 0, w, 200).to_image()));
+        assert_eq!(out.height(), offset + view);
+    }
+
+    #[test]
     fn settled_frames_are_nearly_the_same() {
         let pg = page(200, 600);
         let a = frame(&pg, 0, 200, None, None);
@@ -444,4 +500,5 @@ mod tests {
         assert_eq!(fixed_bands(&p, &q), (0, 0));
     }
 }
+
 

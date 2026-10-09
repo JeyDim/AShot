@@ -20,10 +20,9 @@ use crate::secrets::Secrets;
 pub enum CaptureMode {
     /// Interactive selection (drag or click a window / UI element).
     Region,
-    /// Active (foreground) window.
-    Window,
-    /// Interactive selection with the "click a window" hint (tray button).
+    /// Hover a window and click it (whole windows only).
     WindowPick,
+    /// The monitor with the cursor or all monitors; with several monitors the user clicks one.
     Fullscreen,
     /// Select an area, then AShot scrolls it and glues the frames (whole web pages).
     Scroll,
@@ -33,7 +32,7 @@ impl CaptureMode {
     pub fn source(self) -> &'static str {
         match self {
             CaptureMode::Region => "region",
-            CaptureMode::Window | CaptureMode::WindowPick => "window",
+            CaptureMode::WindowPick => "window",
             CaptureMode::Fullscreen => "fullscreen",
             CaptureMode::Scroll => "scroll",
         }
@@ -258,6 +257,11 @@ pub fn default_link_template() -> String {
 /// Template for rewriting Box links with the current settings.
 pub fn link_template(links: &shoter_core::settings::LinkSettings) -> String {
     if links.template.trim().is_empty() { default_link_template() } else { links.template.clone() }
+}
+
+/// Dev build of a pull request ("AShot Dev"): its label, e.g. "PR #12"; empty otherwise.
+pub fn channel() -> &'static str {
+    option_env!("SHOTER_CHANNEL").map(str::trim).unwrap_or_default()
 }
 
 /// The Box app compiled into this build, if any.

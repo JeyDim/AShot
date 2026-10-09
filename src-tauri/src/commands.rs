@@ -41,6 +41,8 @@ pub struct AppInfo {
     config_dir: String,
     data_dir: String,
     log_dir: String,
+    /// Dev build of a pull request ("PR #12"); empty for releases and local builds.
+    channel: String,
 }
 
 #[tauri::command]
@@ -57,6 +59,7 @@ pub fn app_info(app: AppHandle) -> AppInfo {
         config_dir: state.paths.config_dir.display().to_string(),
         data_dir: state.paths.data_dir.display().to_string(),
         log_dir: state.paths.log_dir.display().to_string(),
+        channel: crate::state::channel().to_string(),
     }
 }
 

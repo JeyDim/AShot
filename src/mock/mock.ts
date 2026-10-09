@@ -97,7 +97,8 @@ export async function installMocks() {
     return desktop;
   };
 
-  // `&mode=windowPick` — the window mode (whole windows only); `&mode=scroll` — scrolling capture.
+  // `&mode=windowPick` — the window mode (whole windows only); `&mode=fullscreen` — pick a screen;
+  // `&mode=scroll` — scrolling capture.
   const mode = (query.get('mode') as CaptureMode | null) ?? 'region';
   const overlay: OverlayPrepare = {
     label: 'overlay-0',
@@ -112,7 +113,7 @@ export async function installMocks() {
     mode,
     preselect: new URLSearchParams(location.search).has('selected') ? { x: 560, y: 120, width: 1100, height: 700 } : null,
     // The scroll mode starts scrolling right after the area is chosen.
-    autoAction: mode === 'scroll' ? 'edit' : null,
+    autoAction: mode === 'scroll' || mode === 'fullscreen' ? 'edit' : null,
     showMagnifier: true,
     uiElements: mode === 'region' || mode === 'scroll',
     cursor: [1250, 560],
@@ -133,6 +134,8 @@ export async function installMocks() {
             configDir: 'C:\\Users\\ivan\\AppData\\Roaming\\one.advant.shoter',
             dataDir: 'C:\\Users\\ivan\\AppData\\Local\\one.advant.shoter',
             logDir: 'C:\\Users\\ivan\\AppData\\Local\\one.advant.shoter\\logs',
+            // `&channel=PR%20%2312` — a dev build of a pull request.
+            channel: query.get('channel') ?? '',
           };
         case 'settings_get':
           return { settings: structuredClone(settings), defaultSaveFolder: 'C:\\Users\\ivan\\Pictures\\AShot', historyFolder: 'C:\\Users\\ivan\\AppData\\Local\\one.advant.shoter\\history', defaultLinkTemplate: 'https://app.box.com/embed/s/{id}' };

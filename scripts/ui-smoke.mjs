@@ -203,6 +203,35 @@ const check = (cond, msg) => {
   await page.close();
 }
 
+// ---------------------------------------------------------------- screen mode (several monitors): a click takes the screen
+{
+  const page = await browser.newPage({ viewport: { width: 1440, height: 810 } });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const calls = [];
+  await page.exposeFunction('__record', (c) => calls.push(c));
+  await page.goto(`${base}?mock&mode=fullscreen#/overlay`);
+  await page.waitForTimeout(900);
+  await page.evaluate(() => {
+    const { __TAURI_INTERNALS__: t } = window;
+    const orig = t.invoke;
+    t.invoke = (cmd, args, opts) => {
+      if (cmd === 'overlay_finish') window.__record({ cmd, args });
+      return orig(cmd, args, opts);
+    };
+  });
+  // A drag over a window still takes the whole screen.
+  await page.mouse.move(300, 300);
+  await page.mouse.down();
+  await page.mouse.move(500, 450, { steps: 6 });
+  await page.mouse.up();
+  for (let i = 0; i < 50 && !calls.length; i++) await page.waitForTimeout(100);
+  const fin = calls[0]?.args;
+  check(fin?.action === 'edit' && JSON.stringify(fin?.rect) === JSON.stringify({ x: 0, y: 0, width: 1920, height: 1080 }), `screen mode takes the whole monitor (${JSON.stringify(fin)})`);
+  check(errors.length === 0, `no page errors ${errors.join('; ')}`);
+  await page.close();
+}
+
 // ---------------------------------------------------------------- scroll mode: a click on the page starts it
 {
   const page = await browser.newPage({ viewport: { width: 1440, height: 810 } });

@@ -244,17 +244,37 @@ export function Range({
   );
 }
 
-/** App logo (icon 9h «Пунктир вокруг A»: the A in a dashed lime frame and the lime pointer) on an
- *  ink tile — white on dark in the light theme, inverted in the dark one. Same drawing as
- *  assets/logo.svg, on a 100-unit grid; the pointer's dark outline parts it from the frame. */
+/** "DEV · PR #12": this is AShot Dev, the build of a pull request (installed next to AShot). */
+export function DevBadge({ channel, className }: { channel: string; className?: string }) {
+  return (
+    <span
+      className={clsx('inline-flex h-[20px] items-center rounded-full bg-lime px-2 font-sans text-[11px] font-semibold tracking-wide whitespace-nowrap text-on-lime', className)}
+      data-tip="Dev-сборка из pull request: ставится рядом с AShot, свои настройки и история"
+    >
+      DEV · {channel}
+    </span>
+  );
+}
+
+/** App logo (icon 9h «Пунктир вокруг A») on an ink tile that inverts with the theme, in the
+ *  two variants of the design: on the dark tile (light theme) — lime dashes and a white
+ *  pointer; on the light tile (dark theme) — lime dashes with a dark outline and a lime
+ *  pointer. Same drawing as assets/logo.svg / logo-dev.svg, on a 100-unit grid. */
 export function Logo({ size = 28, className, radius }: { size?: number; className?: string; radius?: number }) {
+  const frame = { x: 16, y: 16, width: 64, height: 64, fill: 'none' };
+  const pointer = 'M68 64L95 76L83 80L78 93Z';
   return (
     <svg width={size} height={size} viewBox="0 0 1024 1024" className={clsx('shrink-0', className)} aria-hidden>
       <rect width="1024" height="1024" rx={radius ?? 232} fill="var(--color-text)" />
       <g transform="scale(10.24)" strokeLinejoin="round">
-        <rect x="12" y="12" width="64" height="64" fill="none" stroke="var(--color-lime)" strokeWidth={7} strokeDasharray="11.2 4.8" strokeDashoffset={5.6} />
-        <path d="M30 64L44 28L58 64M35 52H53" fill="none" stroke="var(--color-surface)" strokeWidth={10} strokeLinecap="round" />
-        <path d="M62 58L94 72L80 77L74 92Z" fill="var(--color-lime)" stroke="#111111" strokeWidth={6} />
+        <g className="logo-on-light">
+          <rect {...frame} stroke="#111111" strokeWidth={11} strokeDasharray="13.6 2.4" strokeDashoffset={6.8} />
+          <rect {...frame} stroke="#B5F000" strokeWidth={6} strokeDasharray="11.2 4.8" strokeDashoffset={5.6} />
+        </g>
+        <rect className="logo-on-dark" {...frame} stroke="#B5F000" strokeWidth={7} strokeDasharray="11.2 4.8" strokeDashoffset={5.6} />
+        <path d="M34 68L48 32L62 68M39 56H57" fill="none" stroke="var(--color-surface)" strokeWidth={10} strokeLinecap="round" />
+        <path className="logo-on-dark" d={pointer} fill="#FFFFFF" stroke="#111111" strokeWidth={5} />
+        <path className="logo-on-light" d={pointer} fill="#B5F000" stroke="#111111" strokeWidth={5} />
       </g>
     </svg>
   );

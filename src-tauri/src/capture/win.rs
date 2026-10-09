@@ -19,7 +19,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DrawIconEx, EnumWindows, GetClassNameW, GetCursorInfo, GetCursorPos, GetForegroundWindow, GetIconInfo,
+    DrawIconEx, EnumWindows, GetClassNameW, GetCursorInfo, GetCursorPos, GetIconInfo,
     GetWindowLongW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
     CURSORINFO, CURSOR_SHOWING, DI_NORMAL, GWL_EXSTYLE, ICONINFO, MONITORINFOF_PRIMARY, WS_EX_TRANSPARENT,
 };
@@ -106,18 +106,6 @@ fn class_name(hwnd: HWND) -> String {
     let mut buf = [0u16; 128];
     let n = unsafe { GetClassNameW(hwnd, &mut buf) };
     String::from_utf16_lossy(&buf[..n.max(0) as usize])
-}
-
-pub fn foreground_window_rect() -> Option<Rect> {
-    let hwnd = unsafe { GetForegroundWindow() };
-    if hwnd.is_invalid() || is_own_window(hwnd) {
-        return None;
-    }
-    let class = class_name(hwnd);
-    if matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd") {
-        return None;
-    }
-    window_bounds(hwnd)
 }
 
 fn is_own_window(hwnd: HWND) -> bool {
@@ -285,5 +273,5 @@ pub fn capture_session(id: u64, include_cursor: bool) -> Result<CaptureSession, 
     }
     let virtual_screen = shoter_core::imaging::virtual_bounds(&shots);
     let windows = windows_list(virtual_screen);
-    Ok(CaptureSession::new(id, monitors, shots, windows, at, foreground_window_rect()))
+    Ok(CaptureSession::new(id, monitors, shots, windows, at))
 }

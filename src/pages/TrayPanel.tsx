@@ -21,7 +21,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { Button, IconButton, Kbd, Logo, Spinner } from '../components/ui';
+import { Button, DevBadge, IconButton, Kbd, Logo, Spinner } from '../components/ui';
 import { hotkeyParts, relativeTime, sizeLabel } from '../lib/format';
 import { useKeyDown, useTauriEvent } from '../lib/hooks';
 import { api, errorText, shotUrl } from '../lib/ipc';
@@ -39,6 +39,14 @@ export default function TrayPanel() {
   const [showAll, setShowAll] = useState(false);
   const [, setTick] = useState(0);
   const [animKey, setAnimKey] = useState(0);
+  // Dev build of a pull request: shown next to the name.
+  const [channel, setChannel] = useState('');
+  useEffect(() => {
+    api
+      .appInfo()
+      .then((i) => setChannel(i.channel ?? ''))
+      .catch(() => {});
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -105,6 +113,7 @@ export default function TrayPanel() {
           <span className="font-display text-[15px] font-semibold" data-tauri-drag-region>
             AShot
           </span>
+          {channel && <DevBadge channel={channel} />}
           <div className="flex-1" data-tauri-drag-region />
           <BoxPill box={box} refresh={refresh} />
           <IconButton tip="Настройки" tipPos="left" size={30} onClick={() => api.openSettings()}>
@@ -125,7 +134,7 @@ export default function TrayPanel() {
                 label="Экран"
                 keys={hk?.fullscreen}
                 onClick={() => capture('fullscreen')}
-                tip={settings?.fullscreenMode === 'allMonitors' ? 'Все мониторы — сразу в редактор' : 'Весь экран — сразу в редактор'}
+                tip={settings?.fullscreenMode === 'allMonitors' ? 'Все мониторы — сразу в редактор' : 'Экран — сразу в редактор\nНесколько экранов — кликните по нужному'}
               />
               <ModeTile
                 icon={<ChevronsDown size={22} />}

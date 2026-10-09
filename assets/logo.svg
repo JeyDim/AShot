@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <rect x="32" y="32" width="960" height="960" rx="218" fill="#111111"/>
-  <!-- 9h «Пунктир вокруг A»: the A in a dashed lime selection frame, the lime pointer (100-unit grid). -->
+  <!-- 9h «Пунктир вокруг A», dark tile: the A in a dashed lime selection frame, a white pointer (100-unit grid). -->
   <g transform="translate(32 32) scale(9.6)" stroke-linejoin="round">
-    <rect x="12" y="12" width="64" height="64" fill="none" stroke="#B5F000" stroke-width="7" stroke-dasharray="11.2 4.8" stroke-dashoffset="5.6"/>
-    <path d="M30 64L44 28L58 64M35 52H53" fill="none" stroke="#FFFFFF" stroke-width="10" stroke-linecap="round"/>
-    <path d="M62 58L94 72L80 77L74 92Z" fill="#B5F000" stroke="#111111" stroke-width="7"/>
+    <rect x="16" y="16" width="64" height="64" fill="none" stroke="#B5F000" stroke-width="7" stroke-dasharray="11.2 4.8" stroke-dashoffset="5.6"/>
+    <path d="M34 68L48 32L62 68M39 56H57" fill="none" stroke="#FFFFFF" stroke-width="10" stroke-linecap="round"/>
+    <path d="M68 64L95 76L83 80L78 93Z" fill="#FFFFFF" stroke="#111111" stroke-width="5"/>
   </g>
 </svg>

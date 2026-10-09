@@ -78,9 +78,10 @@ async fn run(app: &AppHandle, mode: CaptureMode) -> Result<(), String> {
     let auto = action_for(settings.after_capture);
 
     match mode {
-        // Nothing to choose on a whole screen: straight to the editor (or the action chosen
-        // in the settings), for one monitor as for all of them.
-        CaptureMode::Fullscreen => {
+        // The whole screen goes straight to the editor (or the action chosen in the settings):
+        // all monitors, or the only one. With several monitors the user clicks the one to take
+        // (the overlay of each monitor knows its own, no matter where the cursor was).
+        CaptureMode::Fullscreen if settings.fullscreen_mode == FullscreenMode::AllMonitors || session.monitors.len() == 1 => {
             let rect = match settings.fullscreen_mode {
                 FullscreenMode::CurrentMonitor => monitor_under_cursor,
                 FullscreenMode::AllMonitors => Some(virtual_screen),
@@ -89,19 +90,7 @@ async fn run(app: &AppHandle, mode: CaptureMode) -> Result<(), String> {
             .ok_or("не найден монитор")?;
             complete(app, rect, auto.unwrap_or(Action::Edit)).await
         }
-        // The active window, pre-selected on the overlay so it can be adjusted.
-        CaptureMode::Window => match session.foreground.or(monitor_under_cursor).and_then(|r| r.intersect(&virtual_screen)) {
-            Some(rect) => {
-                let fits_one_monitor = session.monitors.iter().any(|m| m.bounds.intersect(&rect) == Some(rect));
-                match auto {
-                    None if fits_one_monitor => overlay::open(app, &session, mode, Some(rect), None),
-                    // The window spans several monitors – the overlay works per monitor, go to the editor.
-                    None => complete(app, rect, Action::Edit).await,
-                    Some(action) => complete(app, rect, action).await,
-                }
-            }
-            None => overlay::open(app, &session, mode, None, auto),
-        },
+        CaptureMode::Fullscreen => overlay::open(app, &session, mode, None, Some(auto.unwrap_or(Action::Edit))),
         CaptureMode::Region | CaptureMode::WindowPick | CaptureMode::Scroll => {
             // UI elements (buttons, panels…) are highlighted in the region mode, scrolling areas
             // in the scroll mode; the window mode highlights whole windows.
@@ -159,7 +148,14 @@ async fn complete_scrolling(app: &AppHandle, rect: Rect, action: Action) -> Resu
     state.ui_selector.release();
     let outcome = scroll::run(app, rect).await;
     release(app);
-    let outcome = outcome?;
+    let outcome = match outcome {
+        // Esc while the page was loading: nothing taken, nothing to report but that.
+        Err(e) if e == scroll::CANCELLED => {
+            ui::toast(app, Toast::info("Снимок с прокруткой отменён"));
+            return Ok(());
+        }
+        other => other?,
+    };
     let note = match outcome.ending {
         Ending::NotScrollable => Some("Область не прокручивается — снят один экран".to_string()),
         Ending::Lost => Some("Дальше склеить не удалось: страница сильно менялась при прокрутке. Снимок — до этого места".to_string()),

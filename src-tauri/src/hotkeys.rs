@@ -20,7 +20,7 @@ pub fn apply(app: &AppHandle) -> Vec<String> {
     let mut errors = Vec::new();
     let entries = [
         (CaptureMode::Region, hk.region, "Снимок области"),
-        (CaptureMode::Window, hk.window, "Снимок окна"),
+        (CaptureMode::WindowPick, hk.window, "Снимок окна"),
         (CaptureMode::Fullscreen, hk.fullscreen, "Весь экран"),
         (CaptureMode::Scroll, hk.scroll, "Снимок с прокруткой"),
     ];

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Dev builds (AShot Dev, pull requests): icon 9h on the light tile, to tell it from AShot in the tray. -->
+  <rect x="36" y="36" width="952" height="952" rx="215" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="8"/>
+  <g transform="translate(32 32) scale(9.6)" stroke-linejoin="round">
+    <rect x="16" y="16" width="64" height="64" fill="none" stroke="#111111" stroke-width="11" stroke-dasharray="13.6 2.4" stroke-dashoffset="6.8"/>
+    <rect x="16" y="16" width="64" height="64" fill="none" stroke="#B5F000" stroke-width="6" stroke-dasharray="11.2 4.8" stroke-dashoffset="5.6"/>
+    <path d="M34 68L48 32L62 68M39 56H57" fill="none" stroke="#111111" stroke-width="10" stroke-linecap="round"/>
+    <path d="M68 64L95 76L83 80L78 93Z" fill="#B5F000" stroke="#111111" stroke-width="5"/>
+  </g>
+</svg>

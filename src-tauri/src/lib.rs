@@ -33,7 +33,7 @@ fn handle_args(app: &AppHandle, args: &[String], from_second_instance: bool) {
         match arg.as_str() {
             "--capture" => {
                 let mode = match iter.next().map(String::as_str) {
-                    Some("window") => CaptureMode::Window,
+                    Some("window") => CaptureMode::WindowPick,
                     Some("fullscreen") => CaptureMode::Fullscreen,
                     Some("scroll") => CaptureMode::Scroll,
                     _ => CaptureMode::Region,
@@ -158,7 +158,7 @@ pub fn run() {
                 let first = if keys.is_empty() { String::new() } else { format!("{}. ", keys.join(", ")) };
                 ui::toast(
                     &handle,
-                    Toast::info("AShot работает в трее")
+                    Toast::info(format!("{} работает в трее", handle.package_info().name))
                         .message(format!("{first}Клик по иконке в трее — меню и последние снимки."))
                         .timeout(9000),
                 );

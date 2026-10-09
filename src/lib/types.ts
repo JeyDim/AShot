@@ -5,7 +5,7 @@ export type FullscreenMode = 'currentMonitor' | 'allMonitors';
 export type ThemeSetting = 'system' | 'light' | 'dark';
 export type ImageFormat = 'png' | 'jpeg' | 'webp';
 export type BoxAuthMode = 'oAuth' | 'clientCredentials' | 'developerToken';
-export type CaptureMode = 'region' | 'window' | 'windowPick' | 'fullscreen' | 'scroll';
+export type CaptureMode = 'region' | 'windowPick' | 'fullscreen' | 'scroll';
 export type Action = 'edit' | 'copy' | 'save' | 'saveAs' | 'upload' | 'store';
 
 export interface Rect {
@@ -188,6 +188,8 @@ export interface AppInfo {
   configDir: string;
   dataDir: string;
   logDir: string;
+  /** Dev build of a pull request ("PR #12"); empty for releases. */
+  channel: string;
 }
 
 export interface BoxStatus {

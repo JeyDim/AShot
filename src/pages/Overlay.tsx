@@ -4,7 +4,8 @@
 // text, steps, marker, pixelation — and copy / save / get a link without opening the editor.
 //
 // Mouse: drag — free region; click — the highlighted window / UI element; wheel — bigger /
-// smaller UI element (window mode: whole windows only, no free region); handles — resize; drag inside the selection (Move tool) — move;
+// smaller UI element (window mode: whole windows only, no free region; screen mode with several
+// monitors: a click takes the monitor); handles — resize; drag inside the selection (Move tool) — move;
 // with a drawing tool — draw inside the selection (text tool dragged — an arrow to the press
 // point with the text at its tail); double click — editor;
 // right click — reset selection / cancel.
@@ -135,10 +136,11 @@ export default function Overlay() {
   const [selectionRev, setSelectionRev] = useState(0);
 
   /** Window mode: only whole windows are highlighted and picked (no UI elements, no free region). */
-  const windowsOnly = () => {
-    const m = s.current.prep?.mode;
-    return m === 'windowPick' || m === 'window';
-  };
+  const windowsOnly = () => s.current.prep?.mode === 'windowPick';
+  /** Screen mode (several monitors): the monitor under the mouse is lit, a click takes it. */
+  const screensOnly = () => s.current.prep?.mode === 'fullscreen';
+  /** Something is picked by a click; no free region, crosshair or magnifier. */
+  const pickOnly = () => windowsOnly() || screensOnly();
 
   /** Physical pixels per CSS pixel. */
   const scale = () => {
@@ -271,7 +273,7 @@ export default function Overlay() {
     }
 
     // Crosshair while choosing a region.
-    if ((st.phase === 'idle' || st.phase === 'drawing' || st.phase === 'pending') && !windowsOnly()) {
+    if ((st.phase === 'idle' || st.phase === 'drawing' || st.phase === 'pending') && !pickOnly()) {
       ctx.save();
       ctx.strokeStyle = 'rgba(255,255,255,0.28)';
       ctx.lineWidth = 1;
@@ -330,7 +332,7 @@ export default function Overlay() {
     }
 
     // The magnifier is for precise region edges — not needed to pick a window.
-    if (st.prep?.showMagnifier && !windowsOnly() && st.phase !== 'selected' && st.phase !== 'moving' && st.mouse.x >= 0) {
+    if (st.prep?.showMagnifier && !pickOnly() && st.phase !== 'selected' && st.phase !== 'moving' && st.mouse.x >= 0) {
       drawMagnifier(ctx, st, k, W, H);
     }
 
@@ -437,6 +439,11 @@ export default function Overlay() {
     const st = s.current;
     if (st.phase !== 'idle' && st.phase !== 'pending') return;
     const { x, y } = st.mouse;
+    if (screensOnly()) {
+      st.hover = contains(st.bounds, x, y) ? st.bounds : null;
+      st.hoverIsElement = false;
+      return;
+    }
     const pathRect = st.path.length ? st.path[Math.min(st.level, st.path.length - 1)] : null;
     if (pathRect && contains(pathRect, x, y)) {
       st.hover = clamp(pathRect, st.bounds);
@@ -660,13 +667,13 @@ export default function Overlay() {
       case 'idle':
         updateHover();
         if (Math.abs(p.x - st.lastQuery.x) + Math.abs(p.y - st.lastQuery.y) > 2) queryElements();
-        setCursor(windowsOnly() ? 'default' : 'crosshair');
+        setCursor(pickOnly() ? 'default' : 'crosshair');
         break;
       case 'pending':
       case 'drawing':
         if (st.phase === 'pending') {
           // Window mode: no free region — the release takes the window under the cursor.
-          if (windowsOnly()) {
+          if (pickOnly()) {
             updateHover();
             break;
           }
@@ -980,9 +987,11 @@ export default function Overlay() {
       {hint && imageSrc && (
         <div className="animate-fade-in pointer-events-none absolute top-6 left-1/2 flex -translate-x-1/2 items-center gap-3 rounded-full bg-surface/95 px-5 py-2.5 text-[13px] text-text shadow-(--shadow-pop)">
           <span className="font-medium">
-            {mode === 'windowPick' || mode === 'window'
+            {mode === 'windowPick'
               ? 'Кликните по окну'
-              : mode === 'scroll'
+              : mode === 'fullscreen'
+                ? 'Кликните по экрану, который снять'
+                : mode === 'scroll'
                 ? 'Кликните по странице или выделите область — AShot прокрутит её сам'
                 : 'Выделите область или кликните по окну'}
           </span>

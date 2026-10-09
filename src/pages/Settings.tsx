@@ -24,7 +24,7 @@ import {
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type InputHTMLAttributes, type ReactNode } from 'react';
-import { Button, IconButton, Input, Logo, Range, Segmented, Select, Spinner, Switch } from '../components/ui';
+import { Button, DevBadge, IconButton, Input, Logo, Range, Segmented, Select, Spinner, Switch } from '../components/ui';
 import { acceleratorFromEvent, hotkeyLabel, plural } from '../lib/format';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useTauriEvent } from '../lib/hooks';
@@ -338,8 +338,8 @@ const DEFAULT_HOTKEYS: Hotkeys = { region: 'Control+PrintScreen', window: 'Alt+P
 function HotkeysSection({ value, onChange }: { value: Hotkeys; onChange: (h: Hotkeys) => void }) {
   const rows: { key: keyof Hotkeys; label: string; hint: string; icon: ReactNode }[] = [
     { key: 'region', label: 'Снимок области', hint: 'Выделение мышью, клик — окно или элемент', icon: <Scan size={20} /> },
-    { key: 'window', label: 'Снимок активного окна', hint: 'Окно в фокусе сразу выделено, можно подправить', icon: <AppWindow size={20} /> },
-    { key: 'fullscreen', label: 'Весь экран', hint: 'Сразу в редактор: монитор под курсором или все мониторы', icon: <Monitor size={20} /> },
+    { key: 'window', label: 'Снимок окна', hint: 'Наведите на окно и кликните', icon: <AppWindow size={20} /> },
+    { key: 'fullscreen', label: 'Весь экран', hint: 'Сразу в редактор; если экранов несколько — кликните по нужному', icon: <Monitor size={20} /> },
     { key: 'scroll', label: 'Снимок с прокруткой', hint: 'Страница целиком: AShot прокрутит область и склеит', icon: <ChevronsDown size={20} /> },
   ];
   const isDefault = (Object.keys(DEFAULT_HOTKEYS) as (keyof Hotkeys)[]).every((k) => value[k] === DEFAULT_HOTKEYS[k]);
@@ -840,9 +840,12 @@ function About({ s, update }: { s: AppSettings; update: Update }) {
   useEffect(() => {
     api.appInfo().then(setInfo).catch(() => {});
   }, []);
-  const versionLine = info ? `AShot ${info.version} (${info.commit}, ${info.buildDate}) · Tauri ${info.tauriVersion} · ${info.os}` : '';
+  const name = info?.channel ? 'AShot Dev' : 'AShot';
+  const versionLine = info
+    ? `${name} ${info.version}${info.channel ? ` (${info.channel})` : ''} (${info.commit}, ${info.buildDate}) · Tauri ${info.tauriVersion} · ${info.os}`
+    : '';
   const rows: [string, string][] = [
-    ['Версия', info?.version ?? '…'],
+    ['Версия', info ? `${info.version}${info.channel ? ` · Dev, ${info.channel}` : ''}` : '…'],
     ['Сборка', info ? `${info.commit} · ${info.buildDate}` : '…'],
     ['Платформа', info ? `${info.os} · Tauri ${info.tauriVersion}` : '…'],
   ];
@@ -858,7 +861,10 @@ function About({ s, update }: { s: AppSettings; update: Update }) {
       <div className="flex items-center gap-3.5">
         <Logo size={52} radius={284} />
         <div className="flex flex-col gap-0.5">
-          <h1 className="font-display text-[22px] leading-tight font-normal">AShot</h1>
+          <h1 className="flex items-center gap-2 font-display text-[22px] leading-tight font-normal">
+            AShot
+            {info?.channel && <DevBadge channel={info.channel} />}
+          </h1>
           <div className="text-[13.5px] text-muted">Скриншоты с редактором и ссылками Box</div>
         </div>
       </div>
@@ -912,7 +918,7 @@ function About({ s, update }: { s: AppSettings; update: Update }) {
           <Switch checked={s.autostart} onChange={(v) => update({ autostart: v })} label="Запускать вместе с Windows" />
         </div>
       </div>
-      <Updates autoUpdate={s.autoUpdate} onAutoUpdate={(v) => update({ autoUpdate: v })} />
+      <Updates autoUpdate={s.autoUpdate} onAutoUpdate={(v) => update({ autoUpdate: v })} channel={info?.channel ?? ''} />
       <div className="flex flex-col gap-2 px-1">
         <div className="flex gap-5 text-[13px]">
           <button className="flex items-center gap-1.5 transition-colors hover:text-muted" onClick={() => api.openFolder('logs')}>
@@ -933,7 +939,7 @@ function About({ s, update }: { s: AppSettings; update: Update }) {
 }
 
 /** Update check / install from GitHub Releases. */
-function Updates({ autoUpdate, onAutoUpdate }: { autoUpdate: boolean; onAutoUpdate: (v: boolean) => void }) {
+function Updates({ autoUpdate, onAutoUpdate, channel }: { autoUpdate: boolean; onAutoUpdate: (v: boolean) => void; channel: string }) {
   const [st, setSt] = useState<UpdateState>({ phase: 'idle' });
   useEffect(() => {
     api.updateState().then(setSt).catch(() => {});
@@ -945,7 +951,11 @@ function Updates({ autoUpdate, onAutoUpdate }: { autoUpdate: boolean; onAutoUpda
   const install = () => api.updateInstall().catch((e) => setSt({ phase: 'error', message: errorText(e) }));
 
   if (st.phase === 'disabled') {
-    return <div className="text-[12.5px] text-muted">Обновления недоступны в локальной сборке</div>;
+    return (
+      <div className="text-[12.5px] text-muted">
+        {channel ? `Dev-сборка (${channel}) не обновляется сама — новая появляется в PR после каждого пуша` : 'Обновления недоступны в локальной сборке'}
+      </div>
+    );
   }
 
   let text: ReactNode;

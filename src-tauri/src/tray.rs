@@ -35,7 +35,10 @@ pub fn create(app: &App) -> tauri::Result<()> {
     let icon = app.default_window_icon().cloned().expect("bundle icon");
     TrayIconBuilder::with_id("main")
         .icon(icon)
-        .tooltip("AShot — скриншоты")
+        .tooltip(match crate::state::channel() {
+            "" => "AShot — скриншоты".to_string(),
+            channel => format!("AShot Dev — {channel}"),
+        })
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app: &AppHandle, event| match event.id().as_ref() {
