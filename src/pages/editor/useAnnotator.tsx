@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, ty
 import { Circle as KCircle, Transformer } from 'react-konva';
 import {
   addShape,
+  clampStep,
   commit,
   fontSize as fontSizeFor,
   newId,
@@ -94,6 +95,11 @@ export function useAnnotator(o: AnnotatorOptions) {
   docRef.current = doc;
   const textRef = useRef<TextEdit | null>(null);
   textRef.current = textEdit;
+  // Number typed into the "next number" field; null — continue after the last step.
+  const [stepOverride, setStepOverride] = useState<number | null>(null);
+  const stepNext = stepOverride ?? nextStep(doc.shapes);
+  const stepNextRef = useRef(stepNext);
+  stepNextRef.current = stepNext;
 
   const selected = doc.shapes.find((s) => s.id === selectedId) ?? null;
 
@@ -204,8 +210,9 @@ export function useAnnotator(o: AnnotatorOptions) {
       return true;
     }
     if (tool === 'step') {
-      const s: Shape = { id: newId(), type: 'step', x: p.x, y: p.y, n: nextStep(docRef.current.shapes), color, size };
+      const s: Shape = { id: newId(), type: 'step', x: p.x, y: p.y, n: stepNextRef.current, color, size };
       applyFn((d) => addShape(d, s));
+      setStepOverride(null);
       setSelectedId(s.id);
       return true;
     }
@@ -489,6 +496,7 @@ export function useAnnotator(o: AnnotatorOptions) {
     setDraft(null);
     setTextEdit(null);
     setSelectedId(null);
+    setStepOverride(null);
   };
 
   return {
@@ -503,6 +511,9 @@ export function useAnnotator(o: AnnotatorOptions) {
     setStyle,
     removeSelected,
     nudgeSelected,
+    /** Number the step tool places next. */
+    stepNext,
+    setStepNext: (n: number) => setStepOverride(clampStep(n)),
     undo,
     redo,
     apply,

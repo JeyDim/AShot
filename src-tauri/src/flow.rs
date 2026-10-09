@@ -1,5 +1,6 @@
 //! Capture flow: hotkey/tray → freeze the screen → overlay (or direct action) → result.
 
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -106,11 +107,18 @@ async fn run(app: &AppHandle, mode: CaptureMode) -> Result<(), String> {
 
 /// Finishes the capture with a selected rectangle (virtual-screen coordinates).
 pub async fn complete(app: &AppHandle, rect: Rect, action: Action) -> Result<(), String> {
-    complete_with(app, rect, action, None).await
+    complete_with(app, rect, action, None, None).await
 }
 
-/// Same as [`complete`], with drawings made on the overlay.
-pub async fn complete_with(app: &AppHandle, rect: Rect, action: Action, annotated: Option<actions::Annotated>) -> Result<(), String> {
+/// Same as [`complete`], with drawings made on the overlay and / or the file already
+/// chosen for "Save as…".
+pub async fn complete_with(
+    app: &AppHandle,
+    rect: Rect,
+    action: Action,
+    annotated: Option<actions::Annotated>,
+    save_to: Option<PathBuf>,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     let session: Option<Arc<CaptureSession>> = state.session.lock().unwrap().take();
     let mode = state.flow.lock().unwrap().mode;
@@ -124,7 +132,7 @@ pub async fn complete_with(app: &AppHandle, rect: Rect, action: Action, annotate
         .map_err(|e| e.to_string())??;
     state.update_settings(|s| s.last_region = Some(rect));
     let source = mode.map(|m| m.source()).unwrap_or("region");
-    actions::process_capture(app, image, source, action, annotated).await
+    actions::process_capture(app, image, source, action, annotated, save_to).await
 }
 
 /// Aborts the capture (Esc / right click / error).

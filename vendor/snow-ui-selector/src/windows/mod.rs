@@ -153,6 +153,18 @@ impl ElementRegionService {
         self.backend.release_cache();
     }
 
+    /// Native handle (HWND) of the topmost snapshot window under the point.
+    pub fn window_at(&self, point: Point) -> Option<usize> {
+        let point = POINT {
+            x: point.x,
+            y: point.y,
+        };
+        match &self.backend {
+            BackendImpl::Uia(b) => b.window_at(point),
+            BackendImpl::Msaa(b) => b.window_at(point),
+        }
+    }
+
     pub fn window_snapshot(&self) -> Option<WindowSnapshot> {
         match &self.backend {
             BackendImpl::Uia(b) => Some(b.snapshot()),

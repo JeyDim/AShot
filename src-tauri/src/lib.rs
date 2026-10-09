@@ -79,6 +79,7 @@ pub fn run() {
             commands::capture,
             commands::overlay_pending,
             commands::overlay_ready,
+            commands::overlay_save_path,
             commands::overlay_finish,
             commands::overlay_finish_annotated,
             commands::overlay_cancel,

@@ -105,8 +105,20 @@ export function newId(): string {
   return `${Date.now().toString(36)}${counter.toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
 
+/** The number after the most recently added step: numbering can restart or jump (see the
+ *  "next number" field) and still continue from there; undo steps it back. */
 export function nextStep(shapes: Shape[]): number {
-  return shapes.reduce((m, s) => (s.type === 'step' ? Math.max(m, s.n) : m), 0) + 1;
+  for (let i = shapes.length - 1; i >= 0; i--) {
+    const s = shapes[i];
+    if (s.type === 'step') return s.n + 1;
+  }
+  return 1;
+}
+
+export const MAX_STEP = 999;
+
+export function clampStep(n: number): number {
+  return Math.min(MAX_STEP, Math.max(1, Math.round(n) || 1));
 }
 
 /** Black or white text depending on the background luminance. */

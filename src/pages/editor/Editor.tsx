@@ -405,6 +405,8 @@ export default function Editor({ id }: { id: string }) {
         setColor={setColor}
         size={size}
         setSize={setSize}
+        stepNext={ann.stepNext}
+        setStepNext={ann.setStepNext}
         canUndo={hist.past.length > 0}
         canRedo={hist.future.length > 0}
         undo={ann.undo}
@@ -573,7 +575,7 @@ function hintFor(tool: Tool): string {
     case 'text':
       return 'Клик — новый текст, Enter — готово, Shift+Enter — новая строка';
     case 'step':
-      return 'Клик — следующий номер';
+      return 'Клик — следующий номер; с какого начать — в поле на панели';
     case 'pixelate':
       return 'Выделите область, которую нужно скрыть';
     case 'crop':

@@ -21,7 +21,7 @@ import {
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, IconButton } from '../../components/ui';
 import type { Action } from '../../lib/types';
-import { PALETTE, type Tool } from './model';
+import { MAX_STEP, PALETTE, type Tool } from './model';
 
 export const TOOLS: { id: Tool; label: string; key: string; icon: ReactNode }[] = [
   { id: 'select', label: 'Выбор и перемещение', key: 'V', icon: <MousePointer2 size={19} /> },
@@ -49,6 +49,8 @@ export function Toolbar(props: {
   setColor: (c: string) => void;
   size: number;
   setSize: (s: number) => void;
+  stepNext: number;
+  setStepNext: (n: number) => void;
   canUndo: boolean;
   canRedo: boolean;
   undo: () => void;
@@ -74,18 +76,14 @@ export function Toolbar(props: {
 
       <Divider />
 
-      <div className="flex items-center gap-0.5 rounded-full bg-surface-2 p-0.5">
-        {[0, 1, 2].map((s) => (
-          <button
-            key={s}
-            data-tip={['Тонко · 1', 'Средне · 2', 'Толсто · 3'][s]}
-            onClick={() => setSize(s)}
-            className={clsx('flex h-8 w-8 items-center justify-center rounded-full transition-colors', size === s ? 'bg-surface ring-1 ring-inset ring-border-strong' : 'hover:bg-text/6')}
-          >
-            <span className="rounded-full" style={{ width: [5, 9, 14][s], height: [5, 9, 14][s], background: color }} />
-          </button>
-        ))}
-      </div>
+      <SizePicker size={size} setSize={setSize} color={color} compact={width < 1440} />
+
+      {tool === 'step' && (
+        <>
+          <Divider />
+          <StepCounter value={props.stepNext} onChange={props.setStepNext} />
+        </>
+      )}
 
       <Divider />
 
@@ -156,7 +154,8 @@ function Swatches({ color, setColor }: { color: string; setColor: (c: string) =>
   );
 }
 
-export function ColorPicker({ color, setColor, compact, up }: { color: string; setColor: (c: string) => void; compact: boolean; up?: boolean }) {
+/** Button with a pop-up panel (color, stroke size). `up`: open above the button. */
+function Dropdown({ tip, face, up, children }: { tip: string; face: ReactNode; up?: boolean; children: (close: () => void) => ReactNode }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -167,7 +166,27 @@ export function ColorPicker({ color, setColor, compact, up }: { color: string; s
     window.addEventListener('mousedown', close);
     return () => window.removeEventListener('mousedown', close);
   }, [open]);
+  return (
+    <div ref={ref} className="relative">
+      <button data-tip={open ? undefined : tip} data-tip-pos={up ? 'top' : undefined} onClick={() => setOpen((o) => !o)} className="flex h-9 items-center gap-1 rounded-full pr-1.5 pl-2 transition-colors hover:bg-text/6">
+        {face}
+        <ChevronDown size={14} className={clsx('text-muted transition-transform', open && 'rotate-180')} />
+      </button>
+      {open && (
+        <div
+          className="animate-pop-in fixed z-40 mt-2 flex items-center gap-2 rounded-full bg-elevated p-2 shadow-(--shadow-pop) ring-1 ring-border"
+          // `fixed` escapes the scrolling toolbar; `up`: toolbar near the bottom of the screen.
+          // `translate`, not `transform`: the pop-in animation owns `transform`.
+          style={up ? { translate: '0 calc(-100% - 52px)' } : undefined}
+        >
+          {children(() => setOpen(false))}
+        </div>
+      )}
+    </div>
+  );
+}
 
+export function ColorPicker({ color, setColor, compact, up }: { color: string; setColor: (c: string) => void; compact: boolean; up?: boolean }) {
   if (!compact) {
     return (
       <div className="flex items-center gap-1.5" role="radiogroup" aria-label="Цвет">
@@ -176,30 +195,111 @@ export function ColorPicker({ color, setColor, compact, up }: { color: string; s
     );
   }
   return (
-    <div ref={ref} className="relative">
-      <button
-        data-tip="Цвет"
-        onClick={() => setOpen((o) => !o)}
-        className="flex h-9 items-center gap-1.5 rounded-full px-2 transition-colors hover:bg-text/6"
-      >
-        <span className="h-[22px] w-[22px] rounded-full ring-2 ring-text/80" style={{ background: color }} />
-        <ChevronDown size={14} className="text-muted" />
-      </button>
-      {open && (
-        <div
-          className="animate-pop-in fixed z-40 mt-2 flex items-center gap-2 rounded-full bg-elevated p-2.5 shadow-(--shadow-pop) ring-1 ring-border"
-          // `up`: open above the button (toolbar near the bottom of the screen).
-          style={up ? { transform: 'translateY(calc(-100% - 52px))' } : undefined}
-        >
+    <Dropdown tip="Цвет" up={up} face={<span className="h-[22px] w-[22px] rounded-full ring-2 ring-text/80" style={{ background: color }} />}>
+      {(close) => (
+        <div className="flex items-center gap-2 px-0.5">
           <Swatches
             color={color}
             setColor={(c) => {
               setColor(c);
-              setOpen(false);
+              close();
             }}
           />
         </div>
       )}
+    </Dropdown>
+  );
+}
+
+const SIZES = [
+  { label: 'Тонко', key: '1', dot: 5 },
+  { label: 'Средне', key: '2', dot: 9 },
+  { label: 'Толсто', key: '3', dot: 14 },
+];
+
+function SizeDot({ size, color }: { size: number; color: string }) {
+  const d = SIZES[size]?.dot ?? 9;
+  return <span className="rounded-full" style={{ width: d, height: d, background: color }} />;
+}
+
+/** Stroke thickness: three buttons, or (compact) a drop-down like the color. */
+export function SizePicker({ size, setSize, color, compact, up }: { size: number; setSize: (s: number) => void; color: string; compact: boolean; up?: boolean }) {
+  const options = (onPick?: () => void) =>
+    SIZES.map((o, i) => (
+      <button
+        key={i}
+        data-tip={`${o.label} · ${o.key}`}
+        data-tip-pos={up ? 'top' : undefined}
+        aria-label={o.label}
+        onClick={() => {
+          setSize(i);
+          onPick?.();
+        }}
+        className={clsx('flex h-8 w-8 items-center justify-center rounded-full transition-colors', size === i ? 'bg-surface ring-1 ring-border-strong ring-inset' : 'hover:bg-text/6')}
+      >
+        <SizeDot size={i} color={color} />
+      </button>
+    ));
+  if (!compact) return <div className="flex items-center gap-0.5 rounded-full bg-surface-2 p-0.5">{options()}</div>;
+  return (
+    <Dropdown
+      tip={`Толщина: ${SIZES[size]?.label.toLowerCase() ?? ''}`}
+      up={up}
+      face={
+        <span className="flex h-[22px] w-[22px] items-center justify-center">
+          <SizeDot size={size} color={color} />
+        </span>
+      }
+    >
+      {(close) => <div className="flex items-center gap-0.5">{options(close)}</div>}
+    </Dropdown>
+  );
+}
+
+/** Number the step tool places next (numbering can start from any number). */
+export function StepCounter({ value, onChange, up }: { value: number; onChange: (n: number) => void; up?: boolean }) {
+  const [text, setText] = useState(String(value));
+  const skipCommit = useRef(false);
+  useEffect(() => setText(String(value)), [value]);
+  const commit = () => {
+    if (skipCommit.current) {
+      skipCommit.current = false;
+      setText(String(value));
+      return;
+    }
+    const n = parseInt(text, 10);
+    if (Number.isFinite(n) && n !== value) onChange(n);
+    else setText(String(value));
+  };
+  const step = (d: number) => onChange(Math.min(MAX_STEP, Math.max(1, value + d)));
+  return (
+    <div className="flex items-center rounded-full bg-surface-2 p-0.5" data-tip="Следующий номер" data-tip-pos={up ? 'top' : undefined}>
+      <button aria-label="Меньше" disabled={value <= 1} onClick={() => step(-1)} className="flex h-8 w-7 items-center justify-center rounded-full text-muted transition-colors hover:bg-text/6 hover:text-text disabled:opacity-35">
+        <Minus size={14} />
+      </button>
+      <input
+        aria-label="Следующий номер"
+        inputMode="numeric"
+        value={text}
+        onChange={(e) => setText(e.target.value.replace(/\D/g, '').slice(0, 3))}
+        onFocus={(e) => e.currentTarget.select()}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            step(e.key === 'ArrowUp' ? 1 : -1);
+          } else if (e.key === 'Enter' || e.key === 'Escape') {
+            skipCommit.current = e.key === 'Escape';
+            e.currentTarget.blur();
+          }
+        }}
+        onWheel={(e) => step(e.deltaY < 0 ? 1 : -1)}
+        className="w-9 bg-transparent text-center text-[13px] font-semibold tabular-nums outline-none"
+      />
+      <button aria-label="Больше" disabled={value >= MAX_STEP} onClick={() => step(1)} className="flex h-8 w-7 items-center justify-center rounded-full text-muted transition-colors hover:bg-text/6 hover:text-text disabled:opacity-35">
+        <Plus size={14} />
+      </button>
     </div>
   );
 }

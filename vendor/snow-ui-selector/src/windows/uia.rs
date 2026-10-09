@@ -61,6 +61,12 @@ impl UiaBackend {
         self.window_index.release_cache();
     }
 
+    pub(crate) fn window_at(&self, point: POINT) -> Option<usize> {
+        self.window_index
+            .window_at_point([point.x, point.y])
+            .map(|e| self.windows[e.cache_index].hwnd as usize)
+    }
+
     pub(crate) fn snapshot(&self) -> WindowSnapshot {
         WindowSnapshot {
             windows: self

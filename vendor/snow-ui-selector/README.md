@@ -9,4 +9,6 @@ License: Apache-2.0, Copyright (C) 2026 mg-chao — see `LICENSE` and `COPYRIGHT
 
 `Cargo.toml` was adapted for this workspace. Source changes (Apache-2.0 §4b):
 `src/windows/spatial.rs` and `src/windows/uia/cache.rs` pass the search envelope by value,
-as required by rstar 0.13.
+as required by rstar 0.13; `ElementRegionService::window_at` (in `src/windows/mod.rs`,
+`uia.rs`, `msaa.rs`) returns the window under a point, so the app can pick the MSAA backend
+for Firefox windows.

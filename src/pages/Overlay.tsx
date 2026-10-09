@@ -7,13 +7,14 @@
 // smaller UI element; handles — resize; drag inside the selection (Move tool) — move;
 // with a drawing tool — draw inside the selection; double click — editor;
 // right click — reset selection / cancel.
-// Keys: Enter — editor, Ctrl+C — copy, Ctrl+S — save as, Ctrl+U — upload & copy link,
+// Keys: Enter — editor, Ctrl+C — copy, Ctrl+S — save as (cancelling the dialog returns
+// here), Ctrl+U — upload & copy link,
 // V R E A L P M T N B — tools, 1/2/3 — size, Ctrl+Z / Ctrl+Y — undo / redo, Del — delete shape,
 // arrows — move the shape / selection by 1 px (Shift — 10 px, Ctrl — resize the selection),
 // F — whole monitor, C — copy color, Esc — cancel.
 import clsx from 'clsx';
 import type Konva from 'konva';
-import { Copy, Download, Link2, Pencil, Redo2, Undo2, X } from 'lucide-react';
+import { Copy, Download, Link2, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Group, Layer, Stage } from 'react-konva';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -23,7 +24,7 @@ import { api, shotUrl } from '../lib/ipc';
 import type { Action, OverlayPrepare, Rect } from '../lib/types';
 import { emptyDoc, historyOf, imageScaleFor, translate, type History, type Tool } from './editor/model';
 import type { PixelSource } from './editor/pixelate';
-import { ColorPicker, TOOLS } from './editor/Toolbar';
+import { ColorPicker, SizePicker, StepCounter, TOOLS } from './editor/Toolbar';
 import { isHandle, shapeIdOf, useAnnotator } from './editor/useAnnotator';
 import {
   actionBarPosition,
@@ -565,15 +566,26 @@ export default function Overlay() {
       a.setSelectedId(null);
       // Let React apply a pending text commit before reading the document.
       await new Promise((r) => setTimeout(r, 30));
+      // "Save as…": choose the file while the selection is still on screen — cancelling
+      // the dialog returns to it instead of closing the capture.
+      let savePath: string | undefined;
+      if (action === 'saveAs') {
+        const picked = await api.overlaySavePath(target.width, target.height);
+        if (!picked) {
+          finishing.current = false;
+          return;
+        }
+        savePath = picked;
+      }
       const shapes = docRef.current.shapes;
       if (!shapes.length) {
-        await api.overlayFinish(target, action);
+        await api.overlayFinish(target, action, savePath);
         return;
       }
       const png = await renderAnnotated({ ...target, x: target.x - b.x, y: target.y - b.y });
       // Document relative to the selection, so the editor can keep editing the drawings.
       const doc = { version: 1, crop: null, scale: strokeScale(), shapes: shapes.map((sh) => translate(sh, -(target.x - b.x), -(target.y - b.y))) };
-      await api.overlayFinishAnnotated(target, action, png, JSON.stringify(doc));
+      await api.overlayFinishAnnotated(target, action, png, JSON.stringify(doc), savePath);
     } catch (e) {
       finishing.current = false;
       console.error(e);
@@ -777,6 +789,8 @@ export default function Overlay() {
       if (!st.img) return;
       const a = annRef.current;
       if (a.textEdit) return; // the textarea handles its own keys
+      if ((e.target as HTMLElement | null)?.tagName === 'INPUT') return; // step number field
+      if (finishing.current) return; // e.g. the "Save as…" dialog is open
       const ctrl = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
       const code = e.code;
@@ -948,59 +962,38 @@ export default function Overlay() {
       {barPos && (
         <div
           ref={measureBar}
-          className="animate-pop-in absolute flex w-max flex-wrap items-center justify-end gap-1 rounded-[18px] bg-surface/95 p-1.5 shadow-(--shadow-pop) ring-1 ring-border backdrop-blur"
+          className="animate-pop-in absolute flex w-max flex-wrap items-center justify-end gap-0.5 rounded-[16px] bg-surface/95 p-1 shadow-(--shadow-pop) ring-1 ring-border backdrop-blur"
           style={{ left: barPos.left, top: barPos.top, maxWidth: window.innerWidth - 16 }}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <div className="flex items-center gap-0.5" role="toolbar" aria-label="Инструменты">
+          <div className="flex items-center" role="toolbar" aria-label="Инструменты">
             {OVERLAY_TOOLS.map((t) => (
-              <IconButton key={t.id} tip={`${t.label} · ${t.key}`} tipPos="top" active={tool === t.id} size={36} onClick={() => setTool(t.id)}>
+              <IconButton key={t.id} tip={`${t.label} · ${t.key}`} tipPos="top" active={tool === t.id} size={34} onClick={() => setTool(t.id)}>
                 {t.icon}
               </IconButton>
             ))}
           </div>
           <BarDivider />
           <ColorPicker color={color} setColor={changeColor} compact up={barUp} />
-          <div className="flex items-center rounded-full bg-surface-2 p-0.5">
-            {[0, 1, 2].map((v) => (
-              <button
-                key={v}
-                data-tip={['Тонко · 1', 'Средне · 2', 'Толсто · 3'][v]}
-                data-tip-pos="top"
-                onClick={() => changeSize(v)}
-                className={clsx('flex h-8 w-8 items-center justify-center rounded-full transition-colors', size === v ? 'bg-surface-3' : 'hover:bg-text/6')}
-              >
-                <span className="rounded-full" style={{ width: [5, 9, 14][v], height: [5, 9, 14][v], background: color }} />
-              </button>
-            ))}
-          </div>
+          <SizePicker size={size} setSize={changeSize} color={color} compact up={barUp} />
+          {tool === 'step' && <StepCounter value={ann.stepNext} onChange={ann.setStepNext} up />}
           <BarDivider />
-          <IconButton tip="Отменить · Ctrl+Z" tipPos="top" size={34} disabled={!hist.past.length} onClick={ann.undo}>
-            <Undo2 size={18} />
-          </IconButton>
-          <IconButton tip="Повторить · Ctrl+Y" tipPos="top" size={34} disabled={!hist.future.length} onClick={ann.redo}>
-            <Redo2 size={18} />
-          </IconButton>
-          <BarDivider />
-          <BarButton tip="Открыть в редакторе · Enter" onClick={() => finish('edit')}>
-            <Pencil size={19} />
-          </BarButton>
           <BarButton tip="Копировать · Ctrl+C" onClick={() => finish('copy')}>
-            <Copy size={19} />
+            <Copy size={18} />
           </BarButton>
           <BarButton tip="Сохранить… (куда и под каким именем) · Ctrl+S" onClick={() => finish('saveAs')}>
-            <Download size={19} />
+            <Download size={18} />
           </BarButton>
           <button
             data-tip="Загрузить в Box и скопировать ссылку · Ctrl+U"
             data-tip-pos="top-left"
             onClick={() => finish('upload')}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-full bg-lime px-4 text-[13.5px] font-medium text-on-lime transition hover:brightness-105"
+            className="ml-0.5 inline-flex h-9 items-center justify-center gap-1.5 rounded-full bg-lime px-3.5 text-[13.5px] font-medium text-on-lime transition hover:brightness-105"
           >
-            <Link2 size={18} /> Ссылка
+            <Link2 size={17} /> Ссылка
           </button>
           <BarButton tip="Отмена · Esc" onClick={cancel} danger>
-            <X size={19} />
+            <X size={18} />
           </BarButton>
         </div>
       )}
@@ -1009,7 +1002,7 @@ export default function Overlay() {
 }
 
 function BarDivider() {
-  return <div className="mx-1 h-6 w-px shrink-0 bg-border-strong" />;
+  return <div className="mx-0.5 h-5 w-px shrink-0 bg-border-strong" />;
 }
 
 function BarButton({ children, tip, onClick, danger }: { children: ReactNode; tip: string; onClick: () => void; danger?: boolean }) {
@@ -1019,7 +1012,7 @@ function BarButton({ children, tip, onClick, danger }: { children: ReactNode; ti
       data-tip-pos="top"
       onClick={onClick}
       className={clsx(
-        'inline-flex h-10 w-10 items-center justify-center rounded-full text-text transition-colors',
+        'inline-flex h-9 w-9 items-center justify-center rounded-full text-text transition-colors',
         danger ? 'hover:bg-danger/20 hover:text-danger' : 'hover:bg-text/10',
       )}
     >

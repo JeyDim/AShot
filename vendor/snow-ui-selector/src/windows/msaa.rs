@@ -345,6 +345,11 @@ impl MsaaBackend {
         }
     }
 
+    pub(crate) fn window_at(&self, point: POINT) -> Option<usize> {
+        self.window_at_point(point)
+            .map(|index| self.windows[index].hwnd.0 as usize)
+    }
+
     fn window_at_point(&self, point: POINT) -> Option<usize> {
         self.window_index
             .window_at_point([point.x, point.y])

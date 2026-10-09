@@ -16,16 +16,24 @@ export const api = {
   capture: (mode: CaptureMode) => invoke<void>('capture', { mode }),
   overlayPending: () => invoke<OverlayPrepare | null>('overlay_pending'),
   overlayReady: (sessionId: number) => invoke<void>('overlay_ready', { sessionId }),
-  overlayFinish: (rect: Rect, action: Action) => invoke<void>('overlay_finish', { rect, action }),
+  /** "Save as…" dialog over the overlay (it stays open when cancelled); `null` — cancelled. */
+  overlaySavePath: (width: number, height: number) => invoke<string | null>('overlay_save_path', { width, height }),
+  /** `savePath` — the file chosen with `overlaySavePath` (action `saveAs`). */
+  overlayFinish: (rect: Rect, action: Action, savePath?: string) => invoke<void>('overlay_finish', { rect, action, savePath: savePath ?? null }),
   /** Finish with drawings: the rendered PNG + the editor document (relative to the selection). */
-  overlayFinishAnnotated: (rect: Rect, action: Action, png: Uint8Array, docJson: string) => {
+  overlayFinishAnnotated: (rect: Rect, action: Action, png: Uint8Array, docJson: string, savePath?: string) => {
     const json = new TextEncoder().encode(docJson);
     const body = new Uint8Array(4 + json.length + png.length);
     new DataView(body.buffer).setUint32(0, json.length, true);
     body.set(json, 4);
     body.set(png, 4 + json.length);
     return invoke<void>('overlay_finish_annotated', body, {
-      headers: { 'x-rect': `${rect.x},${rect.y},${rect.width},${rect.height}`, 'x-action': action },
+      headers: {
+        'x-rect': `${rect.x},${rect.y},${rect.width},${rect.height}`,
+        'x-action': action,
+        // Header values must be ASCII; paths may contain Cyrillic letters.
+        ...(savePath ? { 'x-save-path': encodeURIComponent(savePath) } : {}),
+      },
     });
   },
   overlayCancel: () => invoke<void>('overlay_cancel'),

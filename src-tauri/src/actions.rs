@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use chrono::Local;
+use chrono::{DateTime, Local};
 use image::RgbaImage;
 use serde::Serialize;
 use shoter_core::history::HistoryItem;
@@ -10,7 +10,7 @@ use shoter_core::boxapi::{self, BoxError, BoxUser, UploadResult};
 use shoter_core::oauth;
 use shoter_core::settings::{BoxAuthMode, ImageFormat};
 use shoter_core::{filename, imaging, links};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -41,12 +41,14 @@ pub struct Annotated {
 
 /// Stores a fresh capture in the history and performs the requested action.
 /// With `annotated`, the original stays re-editable and the rendered image is used.
+/// `save_to`: the file already chosen in the "Save as…" dialog (the overlay asks first).
 pub async fn process_capture(
     app: &AppHandle,
     image: RgbaImage,
     source: &str,
     action: Action,
     annotated: Option<Annotated>,
+    save_to: Option<PathBuf>,
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
     let (w, h) = image.dimensions();
@@ -82,9 +84,14 @@ pub async fn process_capture(
         Action::Save => {
             save_item(app, &item.id, None).await?;
         }
-        Action::SaveAs => {
-            save_item_as(app, &item.id).await?;
-        }
+        Action::SaveAs => match save_to {
+            Some(path) => {
+                save_item_to(app, &item.id, path).await?;
+            }
+            None => {
+                save_item_as(app, &item.id).await?;
+            }
+        },
         Action::Upload => {
             upload_item(app, &item.id).await?;
         }
@@ -184,19 +191,38 @@ pub async fn save_item(app: &AppHandle, id: &str, dir: Option<PathBuf>) -> Resul
 /// system dialog, the format follows the extension. A copy with the same name also goes
 /// to the screenshots folder, unless the file was saved right there.
 pub async fn save_item_as(app: &AppHandle, id: &str) -> Result<Option<PathBuf>, String> {
+    let item = app.state::<AppState>().history.get(id).map_err(|e| e.to_string())?;
+    let Some(path) = pick_save_path(app, item.created_at, item.width, item.height, None).await? else {
+        return Ok(None);
+    };
+    save_item_to(app, id, path).await.map(Some)
+}
+
+/// The "Save as…" dialog, opened in the last chosen folder with a name from the pattern.
+/// `parent` keeps it above that window (the capture overlay is always on top).
+/// `None` — cancelled.
+pub async fn pick_save_path(
+    app: &AppHandle,
+    created_at: DateTime<Local>,
+    width: u32,
+    height: u32,
+    parent: Option<&WebviewWindow>,
+) -> Result<Option<PathBuf>, String> {
     let state = app.state::<AppState>();
     let settings = state.settings();
-    let item = state.history.get(id).map_err(|e| e.to_string())?;
     let save_dir = state.save_dir();
-    let start_dir = Some(PathBuf::from(&settings.last_save_as_dir)).filter(|d| d.is_dir()).unwrap_or_else(|| save_dir.clone());
-    let name = filename::format(&settings.file_name_pattern, item.created_at, item.width, item.height);
+    let start_dir = Some(PathBuf::from(&settings.last_save_as_dir)).filter(|d| d.is_dir()).unwrap_or(save_dir);
+    let name = filename::format(&settings.file_name_pattern, created_at, width, height);
     let format = settings.image_format;
     let suggested = filename::numbered_path(&start_dir, &name, format.extension());
-    let file_name = suggested.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| name.clone());
+    let file_name = suggested.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(name);
     // The configured format comes first: the dialog starts with its filter.
     let mut filters = vec![(ImageFormat::Png, "PNG", &["png"][..]), (ImageFormat::Jpeg, "JPEG", &["jpg", "jpeg"][..]), (ImageFormat::Webp, "WebP", &["webp"][..])];
     filters.sort_by_key(|(f, _, _)| *f != format);
     let mut dialog = app.dialog().file().set_title("Сохранить снимок").set_directory(&start_dir).set_file_name(file_name);
+    if let Some(window) = parent {
+        dialog = dialog.set_parent(window);
+    }
     for (_, label, exts) in filters {
         dialog = dialog.add_filter(label, exts);
     }
@@ -205,11 +231,18 @@ pub async fn save_item_as(app: &AppHandle, id: &str) -> Result<Option<PathBuf>, 
         let _ = tx.send(path);
     });
     let Some(path) = rx.await.ok().flatten() else { return Ok(None) };
-    let path = path.into_path().map_err(|e| e.to_string())?;
+    path.into_path().map(Some).map_err(|e| e.to_string())
+}
+
+/// Writes the current image of a history item to a file chosen in the "Save as…" dialog.
+pub async fn save_item_to(app: &AppHandle, id: &str, path: PathBuf) -> Result<PathBuf, String> {
+    let state = app.state::<AppState>();
+    let settings = state.settings();
+    let save_dir = state.save_dir();
     let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
     let (format, path) = match ImageFormat::from_extension(&ext) {
         Some(format) => (format, path),
-        None => (format, path.with_extension(format.extension())),
+        None => (settings.image_format, path.with_extension(settings.image_format.extension())),
     };
 
     let data = encode_current(app, id, format).await?;
@@ -218,7 +251,7 @@ pub async fn save_item_as(app: &AppHandle, id: &str) -> Result<Option<PathBuf>, 
     state.update_settings(|s| s.last_save_as_dir = dir.display().to_string());
     let mut message = file_label(&path);
     if !same_dir(&dir, &save_dir) {
-        let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or(name);
+        let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Screenshot".into());
         let copy = filename::numbered_path(&save_dir, &stem, format.extension());
         match write_file(&copy, &data) {
             Ok(()) => message.push_str(" · копия — в папке снимков"),
@@ -227,7 +260,7 @@ pub async fn save_item_as(app: &AppHandle, id: &str) -> Result<Option<PathBuf>, 
     }
     let saved = mark_saved(app, id, &path);
     ui::toast(app, Toast::success("Сохранено").message(message).path(saved).item(id));
-    Ok(Some(path))
+    Ok(path)
 }
 
 fn same_dir(a: &Path, b: &Path) -> bool {

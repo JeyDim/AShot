@@ -172,13 +172,26 @@ const check = (cond, msg) => {
   await page.mouse.down();
   await page.mouse.move(760, 540, { steps: 4 });
   await page.mouse.up();
+  // steps numbered from 5: the field shows the next number
+  await page.keyboard.press('n');
+  const next = page.getByRole('textbox', { name: 'Следующий номер' });
+  await next.fill('5');
+  await next.press('Enter');
+  await page.mouse.click(250, 200);
+  await page.mouse.click(250, 260);
+  check((await next.inputValue()) === '7', `step numbering starts from the typed number (next: ${await next.inputValue()})`);
+  // "Save as…" cancelled (the mock dialog returns null): the capture stays open
+  await page.keyboard.press('Control+s');
+  await page.waitForTimeout(300);
+  check(await page.getByRole('toolbar', { name: 'Инструменты' }).isVisible(), 'cancelled "Save as…" keeps the overlay');
+  check(!(await page.evaluate(() => window.__commits ?? [])).length, 'cancelled "Save as…" sends nothing');
   await page.keyboard.press('Control+c');
   await page.waitForTimeout(800);
   const c = await page.evaluate(() => window.__commits ?? []);
   const k = 1920 / 1440;
   const last = c[c.length - 1];
   check(last?.cmd === 'overlay_finish_annotated', 'Ctrl+C sends the annotated image');
-  check(last?.shapes === 2, `drawings inside the selection only (got ${last?.shapes}, want 2)`);
+  check(last?.shapes === 4, `drawings inside the selection only (got ${last?.shapes}, want 4)`);
   check(last && Math.abs(last.width - Math.round(560 * k)) <= 2 && Math.abs(last.height - Math.round(390 * k)) <= 2, `image has the resized selection size (${last?.width}×${last?.height})`);
   check(errors.length === 0, `no page errors ${errors.join('; ')}`);
   await page.screenshot({ path: process.env.OUT_OVERLAY || '/tmp/overlay-smoke.png' });

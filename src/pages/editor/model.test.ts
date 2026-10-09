@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addShape,
   clampCrop,
+  clampStep,
   commit,
   contrastText,
   emptyDoc,
@@ -45,6 +46,13 @@ describe('editor model', () => {
     ];
     expect(nextStep(shapes)).toBe(5);
     expect(nextStep([])).toBe(1);
+    // Restarted numbering continues from the last added step, not from the maximum.
+    const restarted: Shape[] = [...shapes, { id: '3', type: 'rect', x: 0, y: 0, w: 5, h: 5, color: '#f00', size: 1 }, { id: '4', type: 'step', x: 0, y: 0, n: 2, color: '#f00', size: 1 }];
+    expect(nextStep(restarted)).toBe(3);
+    expect(clampStep(0)).toBe(1);
+    expect(clampStep(12.4)).toBe(12);
+    expect(clampStep(5000)).toBe(999);
+    expect(clampStep(NaN)).toBe(1);
   });
 
   it('geometry helpers', () => {

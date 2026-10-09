@@ -4,6 +4,8 @@
 //! inside a WebView2 callback, and creating a web view there would deadlock.
 
 
+use std::path::PathBuf;
+
 use serde::Serialize;
 use shoter_core::boxapi::BoxUser;
 use shoter_core::history::HistoryItem;
@@ -193,12 +195,23 @@ pub fn overlay_ready(window: WebviewWindow, session_id: u64) {
     overlay::ready(window.app_handle(), window.label(), session_id);
 }
 
+/// "Save as…" from the overlay: the dialog opens over the overlay before it closes, so
+/// cancelling it returns to the selection. `None` — cancelled.
 #[tauri::command]
-pub async fn overlay_finish(app: AppHandle, rect: Rect, action: Action) -> CmdResult<()> {
+pub async fn overlay_save_path(window: WebviewWindow, width: u32, height: u32) -> CmdResult<Option<String>> {
+    let app = window.app_handle().clone();
+    let path = actions::pick_save_path(&app, chrono::Local::now(), width, height, Some(&window)).await?;
+    Ok(path.map(|p| p.display().to_string()))
+}
+
+/// `save_path`: the file chosen with [`overlay_save_path`] (for `saveAs`).
+#[tauri::command]
+pub async fn overlay_finish(app: AppHandle, rect: Rect, action: Action, save_path: Option<String>) -> CmdResult<()> {
     if rect.is_empty() {
         return Err("пустая область".into());
     }
-    if let Err(e) = flow::complete(&app, rect, action).await {
+    let save_to = save_path.filter(|p| !p.is_empty()).map(PathBuf::from);
+    if let Err(e) = flow::complete_with(&app, rect, action, None, save_to).await {
         ui::toast(&app, Toast::error("Не удалось обработать снимок", e.clone()));
         return Err(e);
     }
@@ -206,7 +219,8 @@ pub async fn overlay_finish(app: AppHandle, rect: Rect, action: Action) -> CmdRe
 }
 
 /// Finish with drawings. Body: `u32 LE` JSON length, editor document JSON (relative to
-/// the selection), rendered PNG. Headers: `x-rect` = "x,y,w,h" (virtual screen), `x-action`.
+/// the selection), rendered PNG. Headers: `x-rect` = "x,y,w,h" (virtual screen), `x-action`,
+/// `x-save-path` (URI-encoded, for `saveAs`).
 #[tauri::command]
 pub async fn overlay_finish_annotated(app: AppHandle, request: Request<'_>) -> CmdResult<()> {
     let header = |name: &str| request.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
@@ -230,7 +244,8 @@ pub async fn overlay_finish_annotated(app: AppHandle, request: Request<'_>) -> C
     let doc_json = std::str::from_utf8(&body[4..4 + json_len]).map_err(err)?.to_string();
     let png = body[4 + json_len..].to_vec();
     let annotated = actions::Annotated { png, doc_json };
-    if let Err(e) = flow::complete_with(&app, rect, action, Some(annotated)).await {
+    let save_to = header("x-save-path").map(|p| shoter_core::percent_decode(&p)).filter(|p| !p.is_empty()).map(PathBuf::from);
+    if let Err(e) = flow::complete_with(&app, rect, action, Some(annotated), save_to).await {
         ui::toast(&app, Toast::error("Не удалось обработать снимок", e.clone()));
         return Err(e);
     }
@@ -435,7 +450,7 @@ pub fn open_url(app: AppHandle, url: String) -> CmdResult<()> {
 /// Opens Explorer with the file selected (or the folder itself).
 #[tauri::command]
 pub fn reveal_path(app: AppHandle, path: String) -> CmdResult<()> {
-    let p = std::path::PathBuf::from(&path);
+    let p = PathBuf::from(&path);
     if p.is_file() {
         app.opener().reveal_item_in_dir(p).map_err(err)
     } else {
