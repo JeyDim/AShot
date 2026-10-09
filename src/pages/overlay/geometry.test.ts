@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { actionBarPosition, clamp, fromPoints, hitHandle, moveWithin, resize, rgbToHex, topmostAt } from './geometry';
+import { actionBarPosition, bounding, clamp, fromPoints, hitHandle, moveWithin, resize, rgbToHex, topmostAt, within } from './geometry';
 
 const screen = { x: 0, y: 0, width: 1920, height: 1080 };
 
@@ -13,6 +13,16 @@ describe('overlay geometry', () => {
   it('clamps and moves inside the monitor', () => {
     expect(clamp({ x: -10, y: 1000, width: 100, height: 200 }, screen)).toEqual({ x: 0, y: 1000, width: 90, height: 80 });
     expect(moveWithin({ x: 1800, y: 10, width: 200, height: 100 }, 50, -50, screen)).toEqual({ x: 1720, y: 0, width: 200, height: 100 });
+  });
+
+  it('tells a selection that reaches another monitor', () => {
+    expect(within({ x: 0, y: 0, width: 1920, height: 1080 }, screen)).toBe(true);
+    expect(within({ x: 1800, y: 10, width: 200, height: 100 }, screen)).toBe(false);
+    expect(within({ x: -1, y: 10, width: 20, height: 20 }, screen)).toBe(false);
+    // A 2K monitor on the left, a bit lower: the virtual screen covers both.
+    const desktop = bounding([screen, { x: -2560, y: 200, width: 2560, height: 1440 }]);
+    expect(desktop).toEqual({ x: -2560, y: 0, width: 4480, height: 1640 });
+    expect(moveWithin({ x: 10, y: 10, width: 200, height: 100 }, -50, 0, desktop).x).toBe(-40);
   });
 
   it('resizes with handles and flips', () => {

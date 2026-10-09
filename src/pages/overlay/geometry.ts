@@ -33,6 +33,21 @@ export function moveWithin(r: Rect, dx: number, dy: number, bounds: Rect): Rect 
   return { ...r, x: Math.round(x), y: Math.round(y) };
 }
 
+/** Bounding box of the rectangles (all monitors — the virtual screen). */
+export function bounding(rects: Rect[]): Rect {
+  if (!rects.length) return { x: 0, y: 0, width: 0, height: 0 };
+  const x = Math.min(...rects.map((r) => r.x));
+  const y = Math.min(...rects.map((r) => r.y));
+  const x2 = Math.max(...rects.map((r) => r.x + r.width));
+  const y2 = Math.max(...rects.map((r) => r.y + r.height));
+  return { x, y, width: x2 - x, height: y2 - y };
+}
+
+/** `r` lies entirely inside `bounds`. */
+export function within(r: Rect, bounds: Rect): boolean {
+  return r.x >= bounds.x && r.y >= bounds.y && r.x + r.width <= bounds.x + bounds.width && r.y + r.height <= bounds.y + bounds.height;
+}
+
 export function contains(r: Rect, x: number, y: number): boolean {
   return x >= r.x && y >= r.y && x < r.x + r.width && y < r.y + r.height;
 }

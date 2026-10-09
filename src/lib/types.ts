@@ -161,6 +161,9 @@ export interface OverlayPrepare {
   label: string;
   sessionId: number;
   monitor: MonitorInfo;
+  /** Bounds of all monitors by index (the overlay `overlay-<index>` is over each): a selection
+   *  may reach the other monitors and is handed over to the one under its middle. */
+  monitors: Rect[];
   image: string;
   windows: WindowInfo[];
   mode: CaptureMode;

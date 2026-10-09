@@ -9,6 +9,10 @@
 // with a drawing tool — draw inside the selection (text tool dragged — an arrow to the press
 // point with the text at its tail); double click — editor;
 // right click — reset selection / cancel.
+// Several monitors: one selection per capture, and it may reach the other monitors (each overlay
+// draws its part; drawing on such a selection is left to the editor). It is moved and resized from
+// any monitor; a region started on another monitor replaces it, unless something is drawn on it
+// (then it stays on its monitor and the others are locked).
 // Keys: Enter — editor, Ctrl+C — copy, Ctrl+S — save as (cancelling the dialog returns
 // here), Ctrl+U — upload & copy link,
 // V R E A L P M T N B — tools, 1/2/3 — size, Ctrl+Z / Ctrl+Y — undo / redo, Del — delete shape,
@@ -16,10 +20,11 @@
 // F — whole monitor, C — copy color, Esc — cancel.
 import clsx from 'clsx';
 import type Konva from 'konva';
-import { Copy, Download, Link2, X } from 'lucide-react';
+import { Copy, Download, Link2, Pencil, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Group, Layer, Stage } from 'react-konva';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { emit } from '@tauri-apps/api/event';
+import { getCurrentWindow, Window } from '@tauri-apps/api/window';
 import { useTauriEvent } from '../lib/hooks';
 import { api, shotUrl } from '../lib/ipc';
 import type { Action, AppSettings, OverlayPrepare, Rect, ResizeSettings } from '../lib/types';
@@ -30,6 +35,7 @@ import { isHandle, shapeIdOf, useAnnotator } from './editor/useAnnotator';
 import { useWatermark } from './editor/Watermark';
 import {
   actionBarPosition,
+  bounding,
   clamp,
   contains,
   cursorFor,
@@ -41,6 +47,7 @@ import {
   resize,
   rgbToHex,
   topmostAt,
+  within,
   type Handle,
 } from './overlay/geometry';
 
@@ -56,6 +63,7 @@ interface S {
   img: HTMLImageElement | null;
   sampler: CanvasRenderingContext2D | null;
   bounds: Rect; // monitor rect in local coords (0,0,w,h)
+  virtual: Rect; // all monitors in local coords — where a selection may go
   windows: Rect[]; // local coords, topmost first
   phase: Phase;
   selection: Rect | null;
@@ -73,6 +81,24 @@ interface S {
   lastQuery: { x: number; y: number };
 }
 
+/** The selection of a capture, shared by the overlays of all monitors (`overlay:selection`). */
+interface Shared {
+  sessionId: number;
+  /** Bumped by every change: the newest wins (on a tie — the larger sender label). */
+  rev: number;
+  from: string;
+  /** Overlay holding the selection (its action bar, the keys); `null` — there is none. */
+  owner: string | null;
+  /** Virtual-screen coordinates; `null` while a region is only being started. */
+  selection: Rect | null;
+  /** Chosen, not being dragged out: its handles are shown and it can be grabbed on any monitor. */
+  chosen: boolean;
+  /** Something is drawn on it (or a text is being typed): it stays on its monitor, the others are locked. */
+  drawn: boolean;
+}
+
+const noSelection = (sessionId: number): Shared => ({ sessionId, rev: 0, from: '', owner: null, selection: null, chosen: false, drawn: false });
+
 // Selection frame: the lime accent of the design, visible on almost any screenshot.
 const ACCENT = '#B5F000';
 const SANS = '"Roboto Variable", "Segoe UI", sans-serif';
@@ -84,6 +110,7 @@ function emptyState(): S {
     img: null,
     sampler: null,
     bounds: { x: 0, y: 0, width: 1, height: 1 },
+    virtual: { x: 0, y: 0, width: 1, height: 1 },
     windows: [],
     phase: 'idle',
     selection: null,
@@ -143,13 +170,99 @@ export default function Overlay() {
   /** Something is picked by a click; no free region, crosshair or magnifier. */
   const pickOnly = () => windowsOnly() || screensOnly();
 
+  // The other monitors' overlays. One selection per capture, and it may reach several monitors:
+  // the overlay where it was made or last grabbed holds it (`selection`, the action bar, the keys),
+  // the others draw their part of it and take it over when it is grabbed there. A press elsewhere
+  // starts over (the selection is dropped) unless something is drawn on it — then it stays on its
+  // monitor and the others are locked.
+  const shared = useRef<Shared>(noSelection(-1));
+  const me = () => getCurrentWindow().label;
+  const sharedNow = () => (shared.current.sessionId === s.current.prep?.sessionId ? shared.current : null);
+  /** Another monitor holds the selection (or is starting one): this one only dims. */
+  const selectionElsewhere = () => {
+    const owner = sharedNow()?.owner;
+    return !!owner && owner !== me();
+  };
+  /** …and something is drawn on it: no new region here. */
+  const lockedElsewhere = () => selectionElsewhere() && !!sharedNow()?.drawn;
+  /** The selection held by another monitor, in this monitor's coordinates (its part here is drawn). */
+  const elsewhereRect = (): Rect | null => {
+    const r = selectionElsewhere() ? sharedNow()?.selection : null;
+    return r ? local(r) : null;
+  };
+  /** …once chosen: it can be grabbed here (moved, resized). */
+  const grabbable = () => (sharedNow()?.chosen && !lockedElsewhere() ? elsewhereRect() : null);
+  /** Keys belong to the monitor with the selection. */
+  const focusOwner = () => {
+    const owner = sharedNow()?.owner;
+    if (owner) Window.getByLabel(owner).then((w) => w?.setFocus()).catch(() => {});
+  };
+  /** Where the selection may go: across the monitors, but not with drawings on it (they are made
+   *  and rendered on this monitor) nor in the scroll mode (one page under the mouse). */
+  const area = () => {
+    const st = s.current;
+    return st.prep?.mode === 'scroll' || docRef.current.shapes.length ? st.bounds : st.virtual;
+  };
+  /** Changes the shared selection and tells the other overlays. */
+  const publish = (patch: Pick<Shared, 'owner' | 'selection' | 'chosen' | 'drawn'>) => {
+    const st = s.current;
+    if (!st.prep) return;
+    const sh = sharedNow() ?? noSelection(st.prep.sessionId);
+    shared.current = { ...sh, ...patch, rev: sh.rev + 1, from: me() };
+    emit('overlay:selection', shared.current).catch(() => {});
+  };
+  const toVirtual = (r: Rect): Rect => {
+    const b = s.current.prep!.monitor.bounds;
+    return { x: r.x + b.x, y: r.y + b.y, width: r.width, height: r.height };
+  };
+  /** Publishes the selection held here when it changed (`force` — even if not). */
+  function sync(force = false) {
+    const st = s.current;
+    if (!st.prep) return;
+    const sh = sharedNow();
+    if (!st.selection && st.phase !== 'pending' && st.phase !== 'drawing') {
+      // Reset here: gone everywhere (unless it was handed over or taken by another monitor).
+      if (sh?.owner === me()) publish({ owner: null, selection: null, chosen: false, drawn: false });
+      return;
+    }
+    const next = {
+      owner: me(),
+      selection: st.selection ? toVirtual(st.selection) : null,
+      chosen: st.phase === 'selected' || st.phase === 'moving' || st.phase === 'resizing',
+      drawn: docRef.current.shapes.length > 0 || !!annRef.current.textEdit,
+    };
+    const same =
+      !!sh && sh.owner === next.owner && sh.chosen === next.chosen && sh.drawn === next.drawn && JSON.stringify(sh.selection) === JSON.stringify(next.selection);
+    if (force || !same) publish(next);
+  }
+  /** At the end of a drag: the monitor under the middle of the selection takes it (with the
+   *  action bar and the keys) — e.g. a region dragged out mostly onto the next monitor. */
+  const handOver = (): boolean => {
+    const st = s.current;
+    const r = st.selection;
+    if (!r || !st.prep || st.prep.autoAction || docRef.current.shapes.length) return false;
+    const v = toVirtual(r);
+    const cx = v.x + v.width / 2;
+    const cy = v.y + v.height / 2;
+    if (contains(st.prep.monitor.bounds, cx, cy)) return false;
+    const to = st.prep.monitors.findIndex((m) => contains(m, cx, cy));
+    if (to < 0) return false;
+    publish({ owner: `overlay-${to}`, selection: v, chosen: true, drawn: false });
+    st.selection = null;
+    st.phase = 'idle';
+    syncBar();
+    return true;
+  };
+
   /** Physical pixels per CSS pixel. */
   const scale = () => {
     const img = s.current.img;
     return img && img.naturalWidth ? img.naturalWidth / window.innerWidth : window.devicePixelRatio || 1;
   };
 
+  // Follows every change of the selection, so the other monitors learn about it here.
   const redraw = useCallback(() => {
+    sync();
     cancelAnimationFrame(raf.current);
     raf.current = requestAnimationFrame(() => draw());
   }, []);
@@ -166,10 +279,13 @@ export default function Overlay() {
     return imageScaleFor(b.width, b.height);
   };
   const sel = s.current.selection;
+  /** The selection reaches other monitors: nothing is drawn on it here (the editor can). */
+  const wide = !!sel && !within(sel, s.current.bounds);
+  const drawTool: Tool = wide ? 'select' : tool;
   const ann = useAnnotator({
     hist,
     setHist,
-    tool,
+    tool: drawTool,
     color,
     size,
     // "Downscale to N px" + "thicken": thicker drawings that look normal after downscaling.
@@ -199,9 +315,15 @@ export default function Overlay() {
   });
   const docRef = useRef(hist.present);
   docRef.current = hist.present;
-  const toolRef = useRef(tool);
-  toolRef.current = tool;
+  const toolRef = useRef(drawTool);
+  toolRef.current = drawTool;
   void selectionRev; // re-render trigger for the selection-dependent props above
+  // Drawings lock the other monitors (see `sync`).
+  const typing = !!ann.textEdit;
+  useEffect(() => {
+    sync();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hist.present.shapes.length, typing]);
   // The watermark / copyright follows the selection when it is moved or resized.
   useEffect(() => {
     wm.refit(docRef.current);
@@ -282,8 +404,11 @@ export default function Overlay() {
     const k = scale();
     ctx.clearRect(0, 0, W, H);
 
-    // The hovered window / element stays highlighted while the button is down (a click takes it).
-    const focus = st.selection ?? (st.phase === 'idle' || st.phase === 'pending' ? st.hover : null);
+    // The selection held here or the part of the one held by another monitor; the hovered window /
+    // element stays highlighted while the button is down (a click takes it).
+    const elsewhere = st.selection ? null : elsewhereRect();
+    const selection = st.selection ?? elsewhere;
+    const focus = selection ?? (st.phase === 'idle' || st.phase === 'pending' ? st.hover : null);
     // Dim everything except the focused area.
     ctx.fillStyle = 'rgba(8, 10, 16, 0.5)';
     if (focus) {
@@ -295,8 +420,9 @@ export default function Overlay() {
       ctx.fillRect(0, 0, W, H);
     }
 
-    // Crosshair while choosing a region.
-    if ((st.phase === 'idle' || st.phase === 'drawing' || st.phase === 'pending') && !pickOnly()) {
+    // Crosshair while choosing a region (not while another monitor holds the selection).
+    const away = selectionElsewhere();
+    if ((st.phase === 'idle' || st.phase === 'drawing' || st.phase === 'pending') && !pickOnly() && !away) {
       ctx.save();
       ctx.strokeStyle = 'rgba(255,255,255,0.28)';
       ctx.lineWidth = 1;
@@ -311,7 +437,7 @@ export default function Overlay() {
     }
 
     if (focus) {
-      const isSelection = !!st.selection;
+      const isSelection = !!selection;
       ctx.save();
       ctx.strokeStyle = ACCENT;
       ctx.lineWidth = Math.max(1, Math.round((isSelection ? 2 : 2) * k));
@@ -320,26 +446,30 @@ export default function Overlay() {
       ctx.strokeRect(focus.x - lw / 2, focus.y - lw / 2, focus.width + lw, focus.height + lw);
       ctx.restore();
 
-      // Size label above the area (or inside when there is no room), with the output size
-      // when "downscale to" makes the picture smaller.
-      const out = isSelection ? outputSize(downscaleRef.current, focus.width, focus.height) : null;
-      const label = `${focus.width} × ${focus.height}${out && (out.w !== focus.width || out.h !== focus.height) ? `  →  ${out.w} × ${out.h}` : ''}`;
-      ctx.font = `500 ${Math.round(12 * k)}px ${SANS}`;
-      const tw = ctx.measureText(label).width;
-      const ph = Math.round(22 * k);
-      const pw = tw + 16 * k;
-      let lx = focus.x;
-      let ly = focus.y - ph - 6 * k;
-      if (ly < 4 * k) ly = focus.y + 6 * k;
-      lx = Math.min(Math.max(4 * k, lx), W - pw - 4 * k);
-      roundRect(ctx, lx, ly, pw, ph, 6 * k);
-      ctx.fillStyle = 'rgba(30,30,32,0.88)';
-      ctx.fill();
-      ctx.fillStyle = '#fff';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(label, lx + 8 * k, ly + ph / 2 + 0.5);
+      // Size label above the part seen here (or inside when there is no room), with the output
+      // size when "downscale to" makes the picture smaller; by the monitor holding the selection.
+      if (!elsewhere) {
+        const seen = clamp(focus, st.bounds);
+        const out = isSelection ? outputSize(downscaleRef.current, focus.width, focus.height) : null;
+        const label = `${focus.width} × ${focus.height}${out && (out.w !== focus.width || out.h !== focus.height) ? `  →  ${out.w} × ${out.h}` : ''}`;
+        ctx.font = `500 ${Math.round(12 * k)}px ${SANS}`;
+        const tw = ctx.measureText(label).width;
+        const ph = Math.round(22 * k);
+        const pw = tw + 16 * k;
+        let lx = seen.x;
+        let ly = seen.y - ph - 6 * k;
+        if (ly < 4 * k) ly = seen.y + 6 * k;
+        lx = Math.min(Math.max(4 * k, lx), W - pw - 4 * k);
+        roundRect(ctx, lx, ly, pw, ph, 6 * k);
+        ctx.fillStyle = 'rgba(30,30,32,0.88)';
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, lx + 8 * k, ly + ph / 2 + 0.5);
+      }
 
-      if (isSelection && (st.phase === 'selected' || st.phase === 'moving' || st.phase === 'resizing')) {
+      const chosen = elsewhere ? !!sharedNow()?.chosen : st.phase === 'selected' || st.phase === 'moving' || st.phase === 'resizing';
+      if (isSelection && chosen) {
         const hs = Math.round(5 * k);
         for (const h of HANDLES) {
           const [hx, hy] = handlePoint(focus, h);
@@ -355,7 +485,8 @@ export default function Overlay() {
     }
 
     // The magnifier is for precise region edges — not needed to pick a window.
-    if (st.prep?.showMagnifier && !pickOnly() && st.phase !== 'selected' && st.phase !== 'moving' && st.mouse.x >= 0) {
+    // (Only over this monitor: a region dragged out onto the next one leaves the mouse there.)
+    if (st.prep?.showMagnifier && !pickOnly() && !away && st.phase !== 'selected' && st.phase !== 'moving' && contains(st.bounds, st.mouse.x, st.mouse.y)) {
       drawMagnifier(ctx, st, k, W, H);
     }
 
@@ -461,6 +592,10 @@ export default function Overlay() {
   function updateHover() {
     const st = s.current;
     if (st.phase !== 'idle' && st.phase !== 'pending') return;
+    if (selectionElsewhere()) {
+      st.hover = null;
+      return;
+    }
     const { x, y } = st.mouse;
     if (screensOnly()) {
       st.hover = contains(st.bounds, x, y) ? st.bounds : null;
@@ -524,6 +659,8 @@ export default function Overlay() {
       if (p.label !== getCurrentWindow().label) return;
       if (st.prep?.sessionId === p.sessionId) return;
       finishing.current = false;
+      // Another overlay may have reported on this capture before this one got its picture.
+      if (shared.current.sessionId !== p.sessionId) shared.current = noSelection(p.sessionId);
       const next = emptyState();
       next.prep = p;
       s.current = next;
@@ -544,6 +681,7 @@ export default function Overlay() {
       next.img = img;
       next.bounds = { x: 0, y: 0, width: img.naturalWidth, height: img.naturalHeight };
       next.windows = p.windows.map((w) => clamp(local(w.bounds), next.bounds)).filter((r) => r.width > 0 && r.height > 0);
+      next.virtual = local(bounding([p.monitor.bounds, ...p.monitors]));
       // Pixel sampler for the color picker.
       const c = document.createElement('canvas');
       c.width = img.naturalWidth;
@@ -566,6 +704,7 @@ export default function Overlay() {
       setImageSrc(img.src);
       draw();
       syncBar();
+      sync();
       // No requestAnimationFrame here: the window is still hidden and hidden pages may not
       // get animation frames. The picture is decoded and drawn, so it can be shown now.
       api.overlayReady(p.sessionId);
@@ -580,7 +719,41 @@ export default function Overlay() {
   }, [prepare]);
 
   useTauriEvent<OverlayPrepare>('overlay:prepare', (e) => prepare(e.payload));
+  useTauriEvent<Shared>('overlay:selection', (e) => {
+    const p = e.payload;
+    const st = s.current;
+    const sh = shared.current;
+    if (st.prep && p.sessionId < st.prep.sessionId) return;
+    // Older than what is known (or the echo of this overlay's own change).
+    if (p.sessionId === sh.sessionId && (p.rev < sh.rev || (p.rev === sh.rev && p.from <= sh.from))) return;
+    shared.current = p;
+    if (st.prep?.sessionId !== p.sessionId) return;
+    const mine = p.owner === me();
+    if (mine && !st.selection && p.selection) {
+      // Handed over: the selection is mostly on this monitor now.
+      st.selection = local(p.selection);
+      st.phase = 'selected';
+      syncBar();
+      setSelectionRev((v) => v + 1);
+      getCurrentWindow().setFocus().catch(() => {});
+    } else if (!mine && st.selection) {
+      // Taken by another monitor (or reset there) — unless something is drawn on it here: then it
+      // stays (that monitor is locked; this only settles a race).
+      if (docRef.current.shapes.length || annRef.current.textEdit) sync(true);
+      else {
+        st.selection = null;
+        st.phase = 'idle';
+        syncBar();
+      }
+    }
+    if (p.owner) {
+      st.hover = null;
+      setHint(false);
+    }
+    redraw();
+  });
   useTauriEvent('overlay:reset', () => {
+    shared.current = noSelection(-1);
     s.current = emptyState();
     setImageSrc('');
     setBar(null);
@@ -668,6 +841,7 @@ export default function Overlay() {
       finish(st.prep.autoAction, r);
       return;
     }
+    if (handOver()) return;
     syncBar();
     setSelectionRev((v) => v + 1);
   };
@@ -692,6 +866,12 @@ export default function Overlay() {
     const k = scale();
     switch (st.phase) {
       case 'idle':
+        if (selectionElsewhere()) {
+          // Its part here can be grabbed; a press elsewhere starts over (unless it is locked).
+          const r = grabbable();
+          setCursor(lockedElsewhere() ? 'default' : cursorFor(r && hitHandle(r, p.x, p.y, 8 * k), !!r && contains(r, p.x, p.y)));
+          break;
+        }
         updateHover();
         if (Math.abs(p.x - st.lastQuery.x) + Math.abs(p.y - st.lastQuery.y) > 2) queryElements();
         setCursor(pickOnly() ? 'default' : 'crosshair');
@@ -708,13 +888,13 @@ export default function Overlay() {
           st.phase = 'drawing';
           setHint(false);
         }
-        st.selection = clamp(fromPoints(st.start.x, st.start.y, p.x, p.y, e.shiftKey), st.bounds);
+        st.selection = clamp(fromPoints(st.start.x, st.start.y, p.x, p.y, e.shiftKey), area());
         break;
       case 'moving':
-        if (st.dragOrigin) st.selection = moveWithin(st.dragOrigin, p.x - st.start.x, p.y - st.start.y, st.bounds);
+        if (st.dragOrigin) st.selection = moveWithin(st.dragOrigin, p.x - st.start.x, p.y - st.start.y, area());
         break;
       case 'resizing':
-        if (st.dragOrigin && st.handle) st.selection = resize(st.dragOrigin, st.handle, p.x, p.y, st.bounds);
+        if (st.dragOrigin && st.handle) st.selection = resize(st.dragOrigin, st.handle, p.x, p.y, area());
         break;
       case 'selected': {
         const h = st.selection ? hitHandle(st.selection, p.x, p.y, 8 * k) : null;
@@ -731,10 +911,18 @@ export default function Overlay() {
   const onMouseDown = (e: PointerLike) => {
     const st = s.current;
     if (!st.img || e.button !== 0) return;
+    // Drawings on another monitor's selection are kept, as a press outside it there keeps them.
+    if (st.phase === 'idle' && lockedElsewhere()) return focusOwner();
     const p = point(e);
     st.mouse = p;
     st.start = p;
     const k = scale();
+    // Its part on this monitor is grabbed: from now on it is moved / resized from here.
+    const r = st.phase === 'idle' ? grabbable() : null;
+    if (r && (hitHandle(r, p.x, p.y, 8 * k) || contains(r, p.x, p.y))) {
+      st.selection = r;
+      st.phase = 'selected';
+    }
     if (st.phase === 'selected' && st.selection) {
       const h = hitHandle(st.selection, p.x, p.y, 8 * k);
       if (h) {
@@ -780,6 +968,7 @@ export default function Overlay() {
         st.phase = 'selected';
         st.dragOrigin = null;
         st.handle = null;
+        if (handOver()) break;
         syncBar();
         setSelectionRev((v) => v + 1);
         break;
@@ -802,6 +991,11 @@ export default function Overlay() {
       updateHover();
       syncBar();
       redraw();
+    } else if (!st.selection && grabbable()) {
+      // The selection of another monitor reaching this one: reset it as there.
+      publish({ owner: null, selection: null, chosen: false, drawn: false });
+      updateHover();
+      redraw();
     } else {
       cancel();
     }
@@ -817,13 +1011,13 @@ export default function Overlay() {
       const p = point(e.evt);
       const frameHandle = hitHandle(st.selection, p.x, p.y, 8 * scale());
       const inside = contains(st.selection, p.x, p.y);
-      const toAnnotator = isHandle(e.target) || (!frameHandle && (shapeIdOf(e.target) !== null || (tool !== 'select' && inside)));
+      const toAnnotator = isHandle(e.target) || (!frameHandle && (shapeIdOf(e.target) !== null || (drawTool !== 'select' && inside)));
       if (toAnnotator && ann.onMouseDown(e)) {
         setHint(false);
         return;
       }
       if (ann.textEdit) ann.commitText();
-      if (!frameHandle && inside && tool === 'select') ann.setSelectedId(null);
+      if (!frameHandle && inside && drawTool === 'select') ann.setSelectedId(null);
       // Keep the drawings: no new region once something is drawn.
       if (!frameHandle && !inside && docRef.current.shapes.length) return;
     }
@@ -838,7 +1032,7 @@ export default function Overlay() {
     onMouseUp(e.evt);
   };
   const stageDblClick = (e: Konva.KonvaEventObject<MouseEvent>) => {
-    if (shapeIdOf(e.target) !== null || tool !== 'select') return;
+    if (shapeIdOf(e.target) !== null || drawTool !== 'select') return;
     onDoubleClick(e.evt);
   };
 
@@ -891,6 +1085,7 @@ export default function Overlay() {
         return;
       }
       if (!ctrl && (code === 'KeyF' || key === 'f') && !docRef.current.shapes.length) {
+        if (lockedElsewhere()) return;
         select({ ...st.bounds });
         return redraw();
       }
@@ -906,8 +1101,8 @@ export default function Overlay() {
         const [dx, dy] = arrows[e.key];
         if (!ctrl && a.nudgeSelected(dx * step, dy * step)) return;
         st.selection = ctrl
-          ? clamp({ ...st.selection, width: Math.max(1, st.selection.width + dx * step), height: Math.max(1, st.selection.height + dy * step) }, st.bounds)
-          : moveWithin(st.selection, dx * step, dy * step, st.bounds);
+          ? clamp({ ...st.selection, width: Math.max(1, st.selection.width + dx * step), height: Math.max(1, st.selection.height + dy * step) }, area())
+          : moveWithin(st.selection, dx * step, dy * step, area());
         syncBar();
         setSelectionRev((v) => v + 1);
         redraw();
@@ -955,9 +1150,11 @@ export default function Overlay() {
   // The toolbar hugs its content; its measured size is used for placement.
   const barW = Math.min(barSize.w, window.innerWidth - 16);
   const barH = barSize.h;
-  const barPos = bar
+  // By the part of the selection on this monitor (it may reach the others).
+  const barSel = bar ? clamp(bar.sel, s.current.bounds) : null;
+  const barPos = barSel
     ? actionBarPosition(
-        { x: bar.sel.x / k, y: bar.sel.y / k, width: bar.sel.width / k, height: bar.sel.height / k },
+        { x: barSel.x / k, y: barSel.y / k, width: barSel.width / k, height: barSel.height / k },
         barW,
         barH,
         window.innerWidth,
@@ -969,7 +1166,13 @@ export default function Overlay() {
   return (
     <div
       className="fixed inset-0 overflow-hidden bg-black select-none"
-      onMouseEnter={() => getCurrentWindow().setFocus().catch(() => {})}
+      // The keys stay with the monitor that holds the selection.
+      onMouseEnter={() => !selectionElsewhere() && getCurrentWindow().setFocus().catch(() => {})}
+      // A region is dragged out onto the next monitor: the moves and the release outside this
+      // window still come here.
+      onPointerDown={(e) => {
+        if (e.button === 0 && (e.target as HTMLElement).tagName === 'CANVAS') (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+      }}
       onMouseLeave={() => {
         s.current.mouse = { x: -1000, y: -1000 };
         if (s.current.phase === 'idle') s.current.hover = null;
@@ -1050,15 +1253,26 @@ export default function Overlay() {
           style={{ left: barPos.left, top: barPos.top, maxWidth: window.innerWidth - 16 }}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <div className="flex items-center" role="toolbar" aria-label="Инструменты">
-            <ToolButtons tools={OVERLAY_TOOLS} tool={tool} setTool={setTool} size={34} up={barUp} tipsUp />
-            <div className="mx-0.5 h-5 w-px shrink-0 bg-border-strong" />
-            {wm.picker(34, barUp, true)}
-          </div>
-          <BarDivider />
-          <ColorPicker color={color} setColor={changeColor} compact up={barUp} />
-          <SizePicker size={size} setSize={changeSize} color={color} compact up={barUp} />
-          {tool === 'step' && <StepPicker value={ann.stepNext} onChange={ann.setStepNext} color={color} up={barUp} />}
+          {wide ? (
+            // The selection reaches other monitors: this one sees only its part — draw in the editor.
+            <div className="flex items-center" role="toolbar" aria-label="Инструменты">
+              <BarButton tip="Рисовать — в редакторе (снимок на несколько мониторов) · Enter" onClick={() => finish('edit')}>
+                <Pencil size={18} />
+              </BarButton>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center" role="toolbar" aria-label="Инструменты">
+                <ToolButtons tools={OVERLAY_TOOLS} tool={tool} setTool={setTool} size={34} up={barUp} tipsUp />
+                <div className="mx-0.5 h-5 w-px shrink-0 bg-border-strong" />
+                {wm.picker(34, barUp, true)}
+              </div>
+              <BarDivider />
+              <ColorPicker color={color} setColor={changeColor} compact up={barUp} />
+              <SizePicker size={size} setSize={changeSize} color={color} compact up={barUp} />
+              {tool === 'step' && <StepPicker value={ann.stepNext} onChange={ann.setStepNext} color={color} up={barUp} />}
+            </>
+          )}
           <BarDivider />
           <ResizePicker value={downscale} onChange={changeDownscale} source={bar ? { w: Math.round(bar.sel.width), h: Math.round(bar.sel.height) } : null} up={barUp} />
           <BarDivider />

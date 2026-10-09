@@ -106,6 +106,8 @@ export async function installMocks() {
     label: 'overlay-0',
     sessionId: 1,
     monitor: { index: 0, name: 'DISPLAY1', bounds: { x: 0, y: 0, width: 1920, height: 1080 }, workArea: { x: 0, y: 0, width: 1920, height: 1040 }, scale: 1, primary: true },
+    // `&monitors=2` — one more monitor on the right (a selection may reach it).
+    monitors: [{ x: 0, y: 0, width: 1920, height: 1080 }, ...(query.get('monitors') === '2' ? [{ x: 1920, y: 0, width: 1920, height: 1080 }] : [])],
     image: 'session/1/0.bmp',
     windows: [
       { title: 'Box', bounds: { x: 560, y: 120, width: 1100, height: 700 } },

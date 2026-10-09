@@ -285,6 +285,131 @@ const check = (cond, msg) => {
   await page.close();
 }
 
+// ---------------------------------------------------------------- multi-monitor: one selection per capture
+// This overlay is the left monitor (`overlay-0`); `other` is what the overlay of the right one says.
+{
+  const page = await browser.newPage({ viewport: { width: 1440, height: 810 } });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const calls = [];
+  await page.exposeFunction('__record', (c) => calls.push(c));
+  await page.goto(`${base}?mock&monitors=2#/overlay`);
+  await page.waitForTimeout(900);
+  await page.evaluate(() => {
+    window.__sent = [];
+    const t = window.__TAURI_INTERNALS__;
+    const orig = t.invoke;
+    t.invoke = (cmd, args, opts) => {
+      if (cmd === 'plugin:event|emit' && args?.event === 'overlay:selection') window.__sent.push(args.payload);
+      if (cmd === 'overlay_finish') window.__record({ cmd, args });
+      return orig(cmd, args, opts);
+    };
+  });
+  const k = 1920 / 1440;
+  let rev = 0;
+  const other = async (patch) => {
+    rev += 1000;
+    const payload = { sessionId: 1, rev, from: 'overlay-1', owner: 'overlay-1', selection: null, chosen: true, drawn: false, ...patch };
+    await page.evaluate((payload) => window.__TAURI_INTERNALS__.invoke('plugin:event|emit', { event: 'overlay:selection', payload }), payload);
+    await page.waitForTimeout(150);
+  };
+  const lastSent = () => page.evaluate(() => window.__sent.filter((p) => p.from === 'overlay-0').at(-1));
+  const toolbar = page.getByRole('toolbar', { name: 'Инструменты' });
+  const editorButton = page.locator('[data-tip^="Рисовать — в редакторе"]');
+  const drag = async (x1, y1, x2, y2) => {
+    await page.mouse.move(x1, y1);
+    await page.mouse.down();
+    await page.mouse.move(x2, y2, { steps: 8 });
+    await page.mouse.up();
+    await page.waitForTimeout(150);
+  };
+  // CSS pixels of this overlay for a virtual-screen point on this monitor.
+  const css = (x, y) => [x / k, y / k];
+
+  // Something is drawn on the other monitor's selection: no second one here (neither a drag nor F).
+  await other({ selection: { x: 2100, y: 100, width: 300, height: 200 }, drawn: true });
+  await drag(100, 100, 400, 300);
+  await page.keyboard.press('f');
+  await page.waitForTimeout(150);
+  check(!(await toolbar.isVisible()), 'no second selection while the other monitor has drawings');
+
+  // A bare selection there: a region here replaces it.
+  await other({ selection: { x: 2100, y: 100, width: 300, height: 200 } });
+  await drag(100, 100, 400, 300);
+  check(await toolbar.isVisible(), 'a region replaces a bare selection on the other monitor');
+  let sent = await lastSent();
+  check(sent?.owner === 'overlay-0' && sent?.selection && sent.sessionId === 1, `the other monitors are told (${JSON.stringify(sent)})`);
+
+  // A region started there drops the one here.
+  await other({ selection: null, chosen: false });
+  check(!(await toolbar.isVisible()), 'a region started on the other monitor drops the selection here');
+
+  // A selection of the other monitor reaching this one: its part is grabbed here and moved so
+  // that its middle is on this monitor — this overlay holds it from now on (the action bar, no
+  // drawing tools: the editor draws on a selection over several monitors).
+  await other({ selection: { x: 1700, y: 200, width: 600, height: 300 } });
+  await drag(...css(1800, 350), ...css(1600, 350));
+  sent = await lastSent();
+  check(await toolbar.isVisible(), 'the part of a selection reaching this monitor can be grabbed');
+  check(sent?.owner === 'overlay-0' && sent.selection?.x === 1500 && sent.selection?.width === 600, `…and moved from here (${JSON.stringify(sent?.selection)})`);
+  check(await editorButton.isVisible(), 'a selection on several monitors offers the editor instead of drawing tools');
+
+  // Right click on the part of the other monitor's selection resets it, as there.
+  await other({ selection: { x: 1700, y: 200, width: 600, height: 300 } });
+  check(!(await toolbar.isVisible()), 'taken back by the other monitor');
+  await page.mouse.click(...css(1800, 350), { button: 'right' });
+  await page.waitForTimeout(150);
+  sent = await lastSent();
+  check(sent?.owner === null && sent?.selection === null, `right click resets it (${JSON.stringify(sent)})`);
+
+  // Moved past the edge of this monitor: the capture takes the virtual-screen rectangle.
+  await drag(...css(1500, 300), ...css(1900, 600));
+  for (let i = 0; i < 5; i++) await page.keyboard.press('Shift+ArrowRight');
+  await page.waitForTimeout(150);
+  check(await editorButton.isVisible(), 'a region moved over the edge reaches the next monitor');
+  await page.keyboard.press('Control+u');
+  for (let i = 0; i < 50 && !calls.some((c) => c.cmd === 'overlay_finish'); i++) await page.waitForTimeout(100);
+  const fin = calls.find((c) => c.cmd === 'overlay_finish');
+  check(!!fin && fin.args.rect.x + fin.args.rect.width > 1920, `the capture spans both monitors ${JSON.stringify(fin?.args.rect)}`);
+  check(errors.length === 0, `no page errors ${errors.join('; ')}`);
+  await page.close();
+}
+
+// ---------------------------------------------------------------- multi-monitor: hand over
+{
+  const page = await browser.newPage({ viewport: { width: 1440, height: 810 } });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(`${base}?mock&monitors=2#/overlay`);
+  await page.waitForTimeout(900);
+  await page.evaluate(() => {
+    window.__sent = [];
+    const t = window.__TAURI_INTERNALS__;
+    const orig = t.invoke;
+    t.invoke = (cmd, args, opts) => {
+      if (cmd === 'plugin:event|emit' && args?.event === 'overlay:selection') window.__sent.push(args.payload);
+      return orig(cmd, args, opts);
+    };
+  });
+  // A wide region moved mostly onto the right monitor: that monitor takes it (and the action bar).
+  await page.keyboard.press('v');
+  await page.mouse.move(5, 100);
+  await page.mouse.down();
+  await page.mouse.move(600, 400, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForTimeout(150);
+  await page.mouse.move(20, 200);
+  await page.mouse.down();
+  await page.mouse.move(1435, 200, { steps: 12 });
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+  const sent = await page.evaluate(() => window.__sent.filter((p) => p.from === 'overlay-0').at(-1));
+  check(sent?.owner === 'overlay-1' && sent.selection && sent.selection.x + sent.selection.width / 2 > 1920, `handed over to the monitor under its middle (${JSON.stringify(sent)})`);
+  check(!(await page.getByRole('toolbar', { name: 'Инструменты' }).isVisible()), 'the action bar goes with it');
+  check(errors.length === 0, `no page errors ${errors.join('; ')}`);
+  await page.close();
+}
+
 // ---------------------------------------------------------------- drawing on the overlay
 {
   const page = await browser.newPage({ viewport: { width: 1440, height: 810 } });

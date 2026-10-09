@@ -25,6 +25,9 @@ pub struct OverlayPrepare {
     pub label: String,
     pub session_id: u64,
     pub monitor: MonitorInfo,
+    /// Bounds of all monitors by index (the overlay `overlay-<index>` is over each): a selection
+    /// may reach the other monitors and is handed over to the one under its middle.
+    pub monitors: Vec<Rect>,
     /// Path for the `shot` protocol, e.g. `session/3/0.bmp`.
     pub image: String,
     /// Windows intersecting this monitor (virtual-screen coordinates), topmost first.
@@ -170,6 +173,7 @@ pub fn open(
         }
     }
 
+    let monitors: Vec<Rect> = session.monitors.iter().map(|m| m.bounds).collect();
     let mut payloads = Vec::with_capacity(session.monitors.len());
     for m in &session.monitors {
         let preselect_here = preselect.and_then(|r| {
@@ -180,6 +184,7 @@ pub fn open(
             label: label(m.index),
             session_id: session.id,
             monitor: m.clone(),
+            monitors: monitors.clone(),
             image: format!("session/{}/{}.bmp", session.id, m.index),
             windows: session.windows.iter().filter(|w| w.bounds.intersect(&m.bounds).is_some()).cloned().collect(),
             mode,
