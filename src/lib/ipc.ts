@@ -1,6 +1,6 @@
 // Typed wrappers around the Rust commands.
 import { invoke } from '@tauri-apps/api/core';
-import type { Action, ActionResult, AppInfo, AppSettings, BoxStatus, BoxUser, CaptureMode, HistoryItem, OverlayPrepare, PatchResult, Rect, SettingsView, ToastPayload, UpdateState } from './types';
+import type { Action, ActionResult, AppInfo, AppSettings, BoxStatus, BoxUser, CaptureMode, HistoryItem, OverlayPrepare, PatchResult, Rect, SettingsView, ToastPayload, UpdateState, UploadStatus } from './types';
 
 /** Sections of the settings window (`links` is an alias of `box`). */
 export type SettingsSection = 'general' | 'hotkeys' | 'saving' | 'box' | 'links' | 'about';
@@ -88,6 +88,9 @@ export const api = {
   boxTest: () => invoke<BoxUser>('box_test'),
   boxLogin: () => invoke<BoxUser>('box_login'),
   boxLogout: () => invoke<void>('box_logout'),
+  uploadStatus: () => invoke<UploadStatus>('upload_status'),
+  s3SetSecret: (value: string) => invoke<void>('s3_set_secret', { value }),
+  s3Test: () => invoke<void>('s3_test'),
   linkPreview: (template: string) => invoke<string>('link_preview', { template }),
 
   updateState: () => invoke<UpdateState>('update_state'),

@@ -9,7 +9,8 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use shoter_core::boxapi::{self, BoxClient, Credentials, OAuthTokens, TokenSink};
 use shoter_core::history::HistoryStore;
-use shoter_core::settings::{AppSettings, BoxAuthMode};
+use shoter_core::s3::{self, S3Config};
+use shoter_core::settings::{AppSettings, BoxAuthMode, UploadProvider};
 use tauri::{AppHandle, Manager};
 
 use crate::capture::CaptureSession;
@@ -238,6 +239,67 @@ impl AppState {
     pub fn reset_box_client(&self) {
         *self.box_client.lock().unwrap() = None;
     }
+
+    /// Where uploads go: the choice in the settings, otherwise the build's.
+    pub fn upload_provider(&self) -> UploadProvider {
+        self.settings.read().unwrap().upload_provider.unwrap_or_else(default_upload_provider)
+    }
+
+    /// The S3 storage: the fields of the settings, else the build's values, else Yandex Object
+    /// Storage. The key: the own one from the settings when given, else the build's.
+    /// Missing values stay empty (the upload then says what is missing).
+    pub fn s3_config(&self) -> S3Config {
+        let s = self.settings.read().unwrap().s3.clone();
+        let pick = |own: &str, built: Option<&'static str>, fallback: &str| {
+            let built = built.map(str::trim).filter(|v| !v.is_empty());
+            if !own.is_empty() { own.to_string() } else { built.unwrap_or(fallback).to_string() }
+        };
+        let (access_key_id, secret_access_key) = if !s.access_key_id.is_empty() {
+            (s.access_key_id.clone(), self.secrets.lock().unwrap().s3_secret_access_key.clone())
+        } else {
+            builtin_s3_key().unwrap_or_default()
+        };
+        S3Config {
+            endpoint: pick(&s.endpoint, option_env!("SHOTER_S3_ENDPOINT"), s3::DEFAULT_ENDPOINT),
+            region: pick(&s.region, option_env!("SHOTER_S3_REGION"), s3::DEFAULT_REGION),
+            bucket: pick(&s.bucket, option_env!("SHOTER_S3_BUCKET"), ""),
+            prefix: s3::normalize_prefix(&pick(&s.prefix, option_env!("SHOTER_S3_PREFIX"), "")),
+            access_key_id,
+            secret_access_key,
+        }
+    }
+
+    /// Link template used when the settings leave it empty: the proxy domain compiled into
+    /// this build (`SHOTER_PROXY_DOMAIN`), otherwise the Box embed link or the direct S3 URL.
+    pub fn default_link_template(&self) -> String {
+        let proxy = option_env!("SHOTER_PROXY_DOMAIN").map(shoter_core::links::normalize_template).filter(|t| !t.is_empty());
+        match (proxy, self.upload_provider()) {
+            (Some(t), _) => t,
+            (None, UploadProvider::Box) => shoter_core::links::BOX_EMBED_TEMPLATE.into(),
+            (None, UploadProvider::S3) => self.s3_config().link_template(),
+        }
+    }
+
+    /// Template of the links with the current settings.
+    pub fn link_template(&self) -> String {
+        let own = self.settings.read().unwrap().links.template.clone();
+        if own.trim().is_empty() { self.default_link_template() } else { own }
+    }
+}
+
+/// The build's choice of storage: S3 when a storage key is built in, otherwise Box.
+pub fn default_upload_provider() -> UploadProvider {
+    if builtin_s3_key().is_some() { UploadProvider::S3 } else { UploadProvider::Box }
+}
+
+/// The S3 key compiled into this build (`SHOTER_S3_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY`).
+pub fn builtin_s3_key() -> Option<(String, String)> {
+    match (option_env!("SHOTER_S3_ACCESS_KEY_ID"), option_env!("SHOTER_S3_SECRET_ACCESS_KEY")) {
+        (Some(id), Some(secret)) if !id.trim().is_empty() && !secret.trim().is_empty() => {
+            Some((id.trim().to_string(), secret.trim().to_string()))
+        }
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -246,17 +308,6 @@ pub struct OAuthApp {
     pub client_secret: String,
     /// Redirect URI registered for the app, if known (otherwise it is detected at sign-in).
     pub redirect_uri: Option<String>,
-}
-
-/// Link template used when the settings leave it empty: the proxy domain compiled into
-/// this build (`SHOTER_PROXY_DOMAIN`), otherwise the Box embed link.
-pub fn default_link_template() -> String {
-    shoter_core::links::default_template(option_env!("SHOTER_PROXY_DOMAIN"))
-}
-
-/// Template for rewriting Box links with the current settings.
-pub fn link_template(links: &shoter_core::settings::LinkSettings) -> String {
-    if links.template.trim().is_empty() { default_link_template() } else { links.template.clone() }
 }
 
 /// Dev build of a pull request ("AShot Dev"): its label, e.g. "PR #12"; empty otherwise.

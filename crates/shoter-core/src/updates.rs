@@ -16,6 +16,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::hex;
+
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateError {
     #[error("сеть: {0}")]
@@ -160,9 +162,6 @@ pub async fn download(http: &Client, url: &str, file: &FileEntry, dest: &Path, m
     Ok(())
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
 
 #[cfg(test)]
 mod tests {

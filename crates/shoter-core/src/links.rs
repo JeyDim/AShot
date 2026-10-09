@@ -1,7 +1,8 @@
-//! Rewriting Box.com shared links: to a custom proxy domain
-//! (`https://app.box.com/s/3rud4dfakga5r953wt77anhyzo27tm7r` →
+//! Links to uploaded screenshots by a template: Box.com shared links rewritten to a custom
+//! proxy domain (`https://app.box.com/s/3rud4dfakga5r953wt77anhyzo27tm7r` →
 //! `https://proxy.example/3rud4dfakga5r953wt77anhyzo27tm7r` with the template
-//! `https://proxy.example/{id}`) or, without a proxy, to the Box embed preview.
+//! `https://proxy.example/{id}`) or, without a proxy, to the Box embed preview; for S3 the
+//! `{id}` is the random id the object was stored under.
 
 use url::Url;
 
@@ -74,13 +75,17 @@ pub fn rewrite(box_link: &str, template: &str, file_name: Option<&str>) -> Strin
     let Some(id) = extract_shared_id(box_link) else {
         return box_link.to_string();
     };
-    let template = default_template(Some(template));
+    fill(&default_template(Some(template)), &id, file_name)
+}
+
+/// The link by a template (placeholders as in [`rewrite`]).
+pub fn fill(template: &str, id: &str, file_name: Option<&str>) -> String {
     let ext = file_name
         .and_then(|n| n.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()))
         .unwrap_or_default();
     let name = file_name.map(encode_component).unwrap_or_default();
     template
-        .replace("{id}", &id)
+        .replace("{id}", id)
         .replace("{ext}", &ext)
         .replace("{name}", &name)
 }
@@ -91,7 +96,8 @@ pub fn display(link: &str) -> String {
     without_scheme.trim_end_matches('/').to_string()
 }
 
-fn encode_component(s: &str) -> String {
+/// Percent-encodes everything except the unreserved characters of RFC 3986.
+pub(crate) fn encode_component(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
@@ -160,6 +166,12 @@ mod tests {
             rewrite(link, "https://advant.one/{id}/{name}", Some("Скрин 1.png")),
             "https://advant.one/abc/%D0%A1%D0%BA%D1%80%D0%B8%D0%BD%201.png"
         );
+    }
+
+    #[test]
+    fn fills_s3_ids() {
+        assert_eq!(fill("https://advant.one/{id}", "k3m9x2p7q4r8s5t6", Some("a.png")), "https://advant.one/k3m9x2p7q4r8s5t6");
+        assert_eq!(fill("https://i.example.com/{id}.{ext}", "k3m9", Some("Shot.WEBP")), "https://i.example.com/k3m9.webp");
     }
 
     #[test]

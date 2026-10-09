@@ -1,5 +1,5 @@
-//! Secrets (Box client secret, tokens) stored separately from settings and encrypted
-//! with Windows DPAPI for the current user.
+//! Secrets (Box client secret, tokens, the S3 secret key) stored separately from settings and
+//! encrypted with Windows DPAPI for the current user.
 
 use std::path::Path;
 
@@ -16,6 +16,8 @@ pub struct Secrets {
     pub box_account: Option<BoxUser>,
     /// Redirect URI that Box accepted at the last sign-in (tried first next time).
     pub box_redirect: Option<LearnedRedirect>,
+    /// Secret of the own S3 key (`settings.s3.access_key_id`).
+    pub s3_secret_access_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

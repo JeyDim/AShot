@@ -29,7 +29,7 @@ import { acceleratorFromEvent, hotkeyLabel, plural } from '../lib/format';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useTauriEvent } from '../lib/hooks';
 import { api, errorText, type SettingsSection } from '../lib/ipc';
-import type { AppInfo, AppSettings, BoxStatus, Hotkeys, SettingsView, UpdateState } from '../lib/types';
+import type { AppInfo, AppSettings, BoxStatus, Hotkeys, S3Status, SettingsView, UpdateState, UploadProvider, UploadStatus } from '../lib/types';
 
 type Section = Exclude<SettingsSection, 'links'>;
 
@@ -209,7 +209,7 @@ export default function Settings({ initial }: { initial?: string }) {
             {section === 'general' && <General s={settings} update={update} />}
             {section === 'hotkeys' && <HotkeysSection value={settings.hotkeys} scroll={settings.experimental.scrollCapture} onChange={(h) => update({ hotkeys: h })} />}
             {section === 'saving' && <Saving s={settings} update={update} view={view} />}
-            {section === 'box' && <BoxSection s={settings} update={update} flush={flush} defaultTemplate={view.defaultLinkTemplate} />}
+            {section === 'box' && <UploadSection s={settings} update={update} flush={flush} />}
             {section === 'about' && <About s={settings} update={update} />}
           </div>
         </div>
@@ -580,30 +580,232 @@ function Saving({ s, update, view }: { s: AppSettings; update: Update; view: Set
 
 const SAMPLE_BOX_LINK = 'https://app.box.com/s/3rud4dfakga5r953wt77anhyzo27tm7r';
 
-function BoxSection({ s, update, flush, defaultTemplate }: { s: AppSettings; update: Update; flush: () => Promise<void>; defaultTemplate: string }) {
+/** The section: the storage (S3 or Box), its settings, then the links — common to both. */
+function UploadSection({ s, update, flush }: { s: AppSettings; update: Update; flush: () => Promise<void> }) {
+  const [status, setStatus] = useState<UploadStatus | null>(null);
+  const refresh = () => api.uploadStatus().then(setStatus).catch(() => {});
+  useEffect(() => {
+    refresh();
+  }, []);
+  useTauriEvent('upload:changed', () => refresh());
+  const provider = s.uploadProvider ?? status?.defaultProvider ?? 'box';
+  const links = <LinkGroups s={s} update={update} provider={provider} defaultTemplate={status?.defaultLinkTemplate ?? ''} />;
+
+  return (
+    <>
+      <Title sub={provider === 's3' ? 'Снимки загружаются в хранилище S3, ссылка сразу копируется' : 'Снимки загружаются в ваш Box, ссылка сразу копируется'}>
+        Загрузка и ссылки
+      </Title>
+      <Row label="Хранилище" hint={status && provider === status.defaultProvider ? 'Как в этой сборке' : undefined}>
+        <Segmented
+          accent
+          value={provider}
+          onChange={(v) => update({ uploadProvider: v })}
+          options={[
+            { value: 's3', label: 'S3' },
+            { value: 'box', label: 'Box' },
+          ]}
+        />
+      </Row>
+      {provider === 's3' ? (
+        <S3Section s={s} update={update} flush={flush} status={status?.s3 ?? null}>
+          {links}
+        </S3Section>
+      ) : (
+        <BoxSection s={s} update={update} flush={flush}>
+          {links}
+        </BoxSection>
+      )}
+    </>
+  );
+}
+
+/** Links and what happens after an upload; the same for every storage. */
+function LinkGroups({ s, update, provider, defaultTemplate }: { s: AppSettings; update: Update; provider: UploadProvider; defaultTemplate: string }) {
+  const [preview, setPreview] = useState('');
+  const links = s.links;
+  useEffect(() => {
+    api.linkPreview(links.template).then(setPreview).catch(() => setPreview(''));
+  }, [links.template, provider, defaultTemplate]);
+  const strip = (u: string) => u.replace(/^https?:\/\//, '');
+  const box = provider === 'box';
+
+  return (
+    <>
+      <Group title="Ссылки">
+        <Row
+          label={box ? 'Заменять ссылку Box по шаблону' : 'Ссылка по шаблону'}
+          hint={box ? 'Выключено — обычная ссылка app.box.com/s/…' : 'Выключено — прямая ссылка на файл в бакете (откроется, только если бакет открыт на чтение)'}
+        >
+          <Switch checked={links.rewrite} onChange={(v) => update({ links: { rewrite: v } })} label="Ссылка по шаблону" />
+        </Row>
+        {links.rewrite && (
+          <Row label="Шаблон ссылки" hint={`Пусто — по умолчанию сборки. {id} — ${box ? 'код Box' : 'код снимка'}, {ext} — расширение, {name} — имя файла`}>
+            <TextField className="font-mono" value={links.template} placeholder={defaultTemplate} onChange={(v) => update({ links: { template: v } }, TYPING)} />
+          </Row>
+        )}
+      </Group>
+
+      <Group title="После загрузки">
+        <Row label="Копировать ссылку в буфер обмена">
+          <Switch checked={links.copyAfterUpload} onChange={(v) => update({ links: { copyAfterUpload: v } })} label="Копировать ссылку в буфер обмена" />
+        </Row>
+        <Row label="Открывать ссылку в браузере">
+          <Switch checked={links.openAfterUpload} onChange={(v) => update({ links: { openAfterUpload: v } })} label="Открывать ссылку в браузере" />
+        </Row>
+      </Group>
+
+      {links.rewrite && (
+        <div className="flex flex-col gap-0.5 overflow-hidden rounded-xl bg-surface-2 px-3.5 py-3 font-mono text-[12px] leading-[1.7]">
+          {box ? (
+            <>
+              <div className="truncate">
+                <span className="text-muted">было{'  '}</span>
+                {strip(SAMPLE_BOX_LINK)}
+              </div>
+              <div className="truncate">
+                <span className="text-muted">стало </span>
+                {strip(preview || SAMPLE_BOX_LINK)}
+              </div>
+            </>
+          ) : (
+            <div className="truncate">
+              <span className="text-muted">ссылка </span>
+              {strip(preview)}
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+/** S3 storage: the bucket and the folder; the address, the region and an own key — advanced. */
+function S3Section({ s, update, flush, status, children }: { s: AppSettings; update: Update; flush: () => Promise<void>; status: S3Status | null; children: ReactNode }) {
+  const [secret, setSecret] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  const [advanced, setAdvanced] = useState(false);
+  const s3 = s.s3;
+  // Builds without a storage key need the own key in the advanced fields.
+  useEffect(() => {
+    if (status && !status.builtinKey) setAdvanced(true);
+  }, [status?.builtinKey]);
+
+  // Settings are saved as they change; the secret only when used.
+  const persist = async () => {
+    await flush();
+    if (secret) {
+      await api.s3SetSecret(secret);
+      setSecret('');
+    }
+  };
+  const test = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await persist();
+      await api.s3Test();
+      setMsg({ kind: 'ok', text: 'Запись в бакет работает' });
+    } catch (e) {
+      setMsg({ kind: 'error', text: errorText(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const host = (u: string) => u.replace(/^https?:\/\//, '');
+  const ownKey = !!s3.accessKeyId;
+
+  return (
+    <>
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-3 rounded-[14px] bg-surface-2 p-3.5">
+          <div className={clsx('flex h-9 w-9 shrink-0 items-center justify-center rounded-full', status?.ready ? 'bg-lime text-on-lime' : 'bg-surface-3 text-muted')}>
+            <Cloud size={18} />
+          </div>
+          <div className="min-w-0 flex-1 text-[14px] font-medium">
+            <div className="truncate">{status?.ready ? `Бакет ${status.bucket}` : 'Хранилище не настроено'}</div>
+            <div className="truncate text-[12px] font-normal text-muted">
+              {status?.ready
+                ? [ownKey ? 'свой ключ' : 'ключ сборки', host(status.endpoint)].join(' · ')
+                : status?.builtinKey || ownKey
+                  ? 'Укажите бакет'
+                  : 'В этой сборке нет ключа — укажите свой в «Дополнительно»'}
+            </div>
+          </div>
+          <Button variant="outline" size="sm" className="h-8" loading={busy} onClick={test}>
+            Проверить
+          </Button>
+        </div>
+        {msg && <p className={clsx('px-1 text-[12px] whitespace-pre-line', msg.kind === 'error' ? 'text-danger' : 'text-success')}>{msg.text}</p>}
+      </div>
+
+      <Group title="Куда загружать">
+        <Row label="Бакет" hint="Имя бакета в Object Storage">
+          <TextField className="font-mono" value={s3.bucket} placeholder={status?.bucket || 'имя бакета'} onChange={(v) => update({ s3: { bucket: v.trim() } }, TYPING)} />
+        </Row>
+        <Row label="Папка в бакете" hint="Необязательно: например, shots/">
+          <TextField className="font-mono" value={s3.prefix} placeholder={status?.prefix || 'корень бакета'} onChange={(v) => update({ s3: { prefix: v } }, TYPING)} />
+        </Row>
+      </Group>
+
+      {children}
+
+      <section className="flex flex-col gap-0.5">
+        <button onClick={() => setAdvanced((a) => !a)} className="flex items-center gap-1 self-start pb-1.5 text-[12px] text-muted transition-colors hover:text-text">
+          <ChevronRight size={14} className={clsx('transition-transform', advanced && 'rotate-90')} />
+          Дополнительно
+        </button>
+        {advanced && (
+          <>
+            <Row label="Адрес хранилища" hint="Любое S3-совместимое: Yandex Object Storage, MinIO, Cloudflare R2…">
+              <TextField className="font-mono" value={s3.endpoint} placeholder={status?.endpoint} onChange={(v) => update({ s3: { endpoint: v.trim() } }, TYPING)} />
+            </Row>
+            <Row label="Регион">
+              <TextField className="font-mono" value={s3.region} placeholder={status?.region} onChange={(v) => update({ s3: { region: v.trim() } }, TYPING)} />
+            </Row>
+            <Row
+              label="Свой ключ: идентификатор"
+              hint={status?.builtinKey ? 'Необязательно: вместо ключа, встроенного в сборку' : 'Статический ключ доступа сервисного аккаунта (только запись в бакет)'}
+            >
+              <TextField className="font-mono" value={s3.accessKeyId} placeholder="YCAJE…" onChange={(v) => update({ s3: { accessKeyId: v.trim() } }, TYPING)} />
+            </Row>
+            <Row label="Секретный ключ" hint={status?.hasSecret ? 'Сохранён (зашифрован в Windows)' : 'Хранится зашифрованным в Windows'}>
+              <Input
+                type="password"
+                className="w-[250px] shrink-0 font-mono"
+                value={secret}
+                onChange={(e) => setSecret(e.target.value)}
+                onBlur={() => secret && persist().catch(() => {})}
+                placeholder={status?.hasSecret ? '••••••••' : 'Секретный ключ'}
+              />
+            </Row>
+          </>
+        )}
+      </section>
+    </>
+  );
+}
+
+function BoxSection({ s, update, flush, children }: { s: AppSettings; update: Update; flush: () => Promise<void>; children: ReactNode }) {
   const [status, setStatus] = useState<BoxStatus | null>(null);
   const [secret, setSecret] = useState('');
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const [advanced, setAdvanced] = useState(false);
-  const [preview, setPreview] = useState('');
   const box = s.box;
-  const links = s.links;
 
   const refresh = () => api.boxStatus().then(setStatus).catch(() => {});
   useEffect(() => {
     refresh();
   }, []);
-  useTauriEvent('box:changed', () => refresh());
+  useTauriEvent('upload:changed', () => refresh());
   // Builds without an embedded Box app need the advanced fields.
   useEffect(() => {
     if (status && (box.authMode !== 'oAuth' || (!status.builtinApp && !status.customApp))) setAdvanced(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status?.builtinApp, status?.customApp]);
-  useEffect(() => {
-    api.linkPreview(links.template).then(setPreview).catch(() => setPreview(''));
-  }, [links.template]);
 
   const run = async (name: string, fn: () => Promise<void>) => {
     setBusy(name);
@@ -646,12 +848,9 @@ function BoxSection({ s, update, flush, defaultTemplate }: { s: AppSettings; upd
   const oauth = box.authMode === 'oAuth';
   const noApp = oauth && status && !status.builtinApp && !status.customApp;
   const account = status?.account;
-  const strip = (u: string) => u.replace(/^https?:\/\//, '');
 
   return (
     <>
-      <Title sub="Снимки загружаются в ваш Box, ссылка сразу копируется">Загрузка и ссылки</Title>
-
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-3 rounded-[14px] bg-surface-2 p-3.5">
           {oauth && status?.signedIn ? (
@@ -723,38 +922,7 @@ function BoxSection({ s, update, flush, defaultTemplate }: { s: AppSettings; upd
         </Row>
       </Group>
 
-      <Group title="Ссылки">
-        <Row label="Заменять ссылку Box по шаблону" hint="Выключено — обычная ссылка app.box.com/s/…">
-          <Switch checked={links.rewrite} onChange={(v) => update({ links: { rewrite: v } })} label="Заменять ссылку Box по шаблону" />
-        </Row>
-        {links.rewrite && (
-          <Row label="Шаблон ссылки" hint="Пусто — по умолчанию сборки. {id} — код Box, {ext} — расширение, {name} — имя файла">
-            <TextField className="font-mono" value={links.template} placeholder={defaultTemplate} onChange={(v) => update({ links: { template: v } }, TYPING)} />
-          </Row>
-        )}
-      </Group>
-
-      <Group title="После загрузки">
-        <Row label="Копировать ссылку в буфер обмена">
-          <Switch checked={links.copyAfterUpload} onChange={(v) => update({ links: { copyAfterUpload: v } })} label="Копировать ссылку в буфер обмена" />
-        </Row>
-        <Row label="Открывать ссылку в браузере">
-          <Switch checked={links.openAfterUpload} onChange={(v) => update({ links: { openAfterUpload: v } })} label="Открывать ссылку в браузере" />
-        </Row>
-      </Group>
-
-      {links.rewrite && (
-        <div className="flex flex-col gap-0.5 overflow-hidden rounded-xl bg-surface-2 px-3.5 py-3 font-mono text-[12px] leading-[1.7]">
-          <div className="truncate">
-            <span className="text-muted">было{'  '}</span>
-            {strip(SAMPLE_BOX_LINK)}
-          </div>
-          <div className="truncate">
-            <span className="text-muted">стало </span>
-            {strip(preview || SAMPLE_BOX_LINK)}
-          </div>
-        </div>
-      )}
+      {children}
 
       <section className="flex flex-col gap-0.5">
         <button onClick={() => setAdvanced((a) => !a)} className="flex items-center gap-1 self-start pb-1.5 text-[12px] text-muted transition-colors hover:text-text">

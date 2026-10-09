@@ -34,6 +34,20 @@ export interface BoxSettings {
   redirectUri: string;
 }
 
+/** Where "Get link" uploads screenshots to. */
+export type UploadProvider = 'box' | 's3';
+
+/** S3 storage (Yandex Object Storage); empty fields — the build's values. */
+export interface S3Settings {
+  endpoint: string;
+  region: string;
+  bucket: string;
+  /** Folder in the bucket (`shots/`). */
+  prefix: string;
+  /** Own key instead of the build's one (its secret is stored encrypted). */
+  accessKeyId: string;
+}
+
 export interface LinkSettings {
   rewrite: boolean;
   template: string;
@@ -99,7 +113,10 @@ export interface AppSettings {
   imageFormat: ImageFormat;
   jpegQuality: number;
   hotkeys: Hotkeys;
+  /** `null` — the build's choice (`UploadStatus.defaultProvider`). */
+  uploadProvider: UploadProvider | null;
   box: BoxSettings;
+  s3: S3Settings;
   links: LinkSettings;
   editor: EditorPrefs;
   resize: ResizeSettings;
@@ -218,6 +235,29 @@ export interface BoxUser {
   id: string;
   name: string;
   login: string;
+}
+
+export interface UploadStatus {
+  /** Where uploads go now. */
+  provider: UploadProvider;
+  /** The build's choice (while the settings have none). */
+  defaultProvider: UploadProvider;
+  /** Link template while `links.template` is empty (depends on the storage). */
+  defaultLinkTemplate: string;
+  s3: S3Status;
+}
+
+export interface S3Status {
+  ready: boolean;
+  /** The build has a storage key built in. */
+  builtinKey: boolean;
+  /** The secret of the own key is saved. */
+  hasSecret: boolean;
+  /** Values in effect (the settings', else the build's / defaults). */
+  endpoint: string;
+  region: string;
+  bucket: string;
+  prefix: string;
 }
 
 export interface ActionResult {

@@ -3898,6 +3898,7 @@ name = "shoter-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "getrandom 0.3.4",
  "image",
  "log",
  "reqwest",

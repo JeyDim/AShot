@@ -11,6 +11,7 @@ pub mod history;
 pub mod imaging;
 pub mod links;
 pub mod oauth;
+pub mod s3;
 pub mod settings;
 pub mod stitch;
 pub mod updates;
@@ -26,12 +27,28 @@ pub fn plural(n: u64, one: &'static str, few: &'static str, many: &'static str) 
     }
 }
 
+/// Letters of random strings: lowercase alphanumeric without ambiguous characters (32 of them,
+/// so a random byte maps to a letter without bias).
+const ALPHABET: &[u8] = b"abcdefghijkmnpqrstuvwxyz23456789";
+
+/// Random id from the operating system's secure generator, in the letters of `random_string`:
+/// ids of uploaded screenshots (their links must not be guessable).
+pub fn random_id(len: usize) -> String {
+    let mut bytes = vec![0u8; len];
+    getrandom::fill(&mut bytes).expect("no system random number generator");
+    bytes.iter().map(|b| ALPHABET[*b as usize % ALPHABET.len()] as char).collect()
+}
+
+/// Lowercase hex of bytes (hashes, signatures).
+pub fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Random lowercase alphanumeric string (no ambiguous characters).
 /// Not cryptographically strong; used for file names and OAuth `state`.
 pub fn random_string(len: usize) -> String {
     use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};
-    const ALPHABET: &[u8] = b"abcdefghijkmnpqrstuvwxyz23456789";
     let mut out = String::with_capacity(len);
     let mut seed = 0u64;
     while out.len() < len {
@@ -88,6 +105,15 @@ mod tests {
         let a = super::random_string(12);
         assert_eq!(a.len(), 12);
         assert_ne!(a, super::random_string(12));
+        let id = super::random_id(16);
+        assert_eq!(id.len(), 16);
+        assert!(id.bytes().all(|b| super::ALPHABET.contains(&b)));
+        assert_ne!(id, super::random_id(16));
+    }
+
+    #[test]
+    fn hex_bytes() {
+        assert_eq!(super::hex(&[0x00, 0x0f, 0xab]), "000fab");
     }
 
     #[test]

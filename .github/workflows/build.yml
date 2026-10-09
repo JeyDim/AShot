@@ -144,7 +144,15 @@ jobs:
           SHOTER_BOX_CLIENT_ID: ${{ secrets.BOX_CLIENT_ID }}
           SHOTER_BOX_CLIENT_SECRET: ${{ secrets.BOX_CLIENT_SECRET }}
           SHOTER_BOX_REDIRECT_URI: ${{ secrets.BOX_REDIRECT_URI }}
-          # Links: https://<PROXY_DOMAIN>/{id}; empty – Box embed links.
+          # S3 storage (Yandex Object Storage, see README): with a key built in, uploads go
+          # there by default; empty – Box, or the key from the settings.
+          SHOTER_S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          SHOTER_S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          SHOTER_S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          SHOTER_S3_PREFIX: ${{ secrets.S3_PREFIX }}
+          SHOTER_S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+          SHOTER_S3_REGION: ${{ secrets.S3_REGION }}
+          # Links: https://<PROXY_DOMAIN>/{id}; empty – Box embed links / direct S3 URLs.
           SHOTER_PROXY_DOMAIN: ${{ secrets.PROXY_DOMAIN }}
           # Self-update: latest.json on an own server (e.g. IIS, see README), else the
           # releases of this repository. AShot Dev does not update itself.

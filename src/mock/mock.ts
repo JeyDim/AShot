@@ -2,10 +2,13 @@
 // http://localhost:1420/?mock#/panel. Used for UI development and screenshots.
 import { emit } from '@tauri-apps/api/event';
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
-import type { AppSettings, CaptureMode, HistoryItem, OverlayPrepare, ToastPayload } from '../lib/types';
+import type { AppSettings, CaptureMode, HistoryItem, OverlayPrepare, ToastPayload, UploadProvider } from '../lib/types';
 import { fakeDesktop, fakeThumb } from './fakeImages';
 
 const query = new URLSearchParams(location.search);
+
+// `&provider=s3` — a build with a storage key (uploads go to S3 by default).
+const defaultProvider: UploadProvider = query.get('provider') === 's3' ? 's3' : 'box';
 
 const settings: AppSettings = {
   showCursor: false,
@@ -22,7 +25,9 @@ const settings: AppSettings = {
   imageFormat: 'png',
   jpegQuality: 90,
   hotkeys: { region: 'Control+PrintScreen', window: 'Alt+PrintScreen', fullscreen: 'Shift+PrintScreen', scroll: 'Control+Shift+PrintScreen' },
+  uploadProvider: null,
   box: { authMode: 'oAuth', clientId: 'k2x8v1n0q9example', enterpriseId: '', userId: '', folderId: '', folderName: 'AShot', sharedLinkAccess: 'open', redirectUri: '' },
+  s3: { endpoint: '', region: '', bucket: '', prefix: '', accessKeyId: '' },
   links: { rewrite: true, template: '', copyAfterUpload: true, openAfterUpload: false },
   editor: { color: '#FF3B30', size: 1 },
   resize: { enabled: false, side: 'width', size: 740, thicken: true },
@@ -143,11 +148,38 @@ export async function installMocks() {
           };
         case 'settings_get':
           return { settings: structuredClone(settings), defaultSaveFolder: 'C:\\Users\\ivan\\Pictures\\AShot', historyFolder: 'C:\\Users\\ivan\\AppData\\Local\\one.advant.shoter\\history', defaultLinkTemplate: 'https://app.box.com/embed/s/{id}' };
-        case 'settings_patch':
-          deepAssign(settings as unknown as Record<string, unknown>, a.patch as Record<string, unknown>);
+        case 'settings_patch': {
+          const patch = a.patch as Record<string, unknown>;
+          deepAssign(settings as unknown as Record<string, unknown>, patch);
           // Copies, like the real IPC: pages must never share (and mutate) one object.
           emit('settings:changed', structuredClone(settings));
+          if ('uploadProvider' in patch || 's3' in patch || 'box' in patch) emit('upload:changed');
           return { settings: structuredClone(settings), problems: [] };
+        }
+        case 'upload_status': {
+          const provider = settings.uploadProvider ?? defaultProvider;
+          // `&nos3key` — a build without a storage key.
+          const builtinKey = !query.has('nos3key');
+          return {
+            provider,
+            defaultProvider,
+            defaultLinkTemplate: provider === 's3' ? 'https://advant.one/{id}' : 'https://app.box.com/embed/s/{id}',
+            s3: {
+              ready: builtinKey || !!settings.s3.accessKeyId,
+              builtinKey,
+              hasSecret: false,
+              endpoint: settings.s3.endpoint || 'https://storage.yandexcloud.net',
+              region: settings.s3.region || 'ru-central1',
+              bucket: settings.s3.bucket || 'advant-shots',
+              prefix: settings.s3.prefix || 'shots/',
+            },
+          };
+        }
+        case 's3_set_secret':
+          return null;
+        case 's3_test':
+          await new Promise((r) => setTimeout(r, 400));
+          return null;
         case 'pick_folder':
           return 'D:\\Screenshots';
         case 'watermark_pick':
@@ -197,7 +229,9 @@ export async function installMocks() {
           await emit('update:state', { phase: 'installing', version: '0.1.58' });
           return null;
         case 'link_preview':
-          return String(a.template || 'https://app.box.com/embed/s/{id}').replace('{id}', '3rud4dfakga5r953wt77anhyzo27tm7r');
+          return (settings.uploadProvider ?? defaultProvider) === 's3'
+            ? String(a.template || 'https://advant.one/{id}').replace('{id}', 'k3m9x2p7q4r8s5t6')
+            : String(a.template || 'https://app.box.com/embed/s/{id}').replace('{id}', '3rud4dfakga5r953wt77anhyzo27tm7r');
         case 'toast_current':
           return null;
         case 'overlay_pending':

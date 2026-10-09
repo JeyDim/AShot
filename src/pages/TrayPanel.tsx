@@ -25,7 +25,7 @@ import { Button, DevBadge, IconButton, Kbd, Logo, Spinner } from '../components/
 import { hotkeyParts, relativeTime, sizeLabel } from '../lib/format';
 import { useKeyDown, useTauriEvent } from '../lib/hooks';
 import { api, errorText, shotUrl } from '../lib/ipc';
-import type { AppSettings, BoxStatus, CaptureMode, HistoryItem } from '../lib/types';
+import type { AppSettings, BoxStatus, CaptureMode, HistoryItem, UploadStatus } from '../lib/types';
 
 type Run = (id: string, label: string, fn: () => Promise<unknown>) => Promise<void>;
 type MenuState = { item: HistoryItem; x: number; y: number };
@@ -34,6 +34,7 @@ export default function TrayPanel() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [box, setBox] = useState<BoxStatus | null>(null);
+  const [upload, setUpload] = useState<UploadStatus | null>(null);
   const [busy, setBusy] = useState<Record<string, string>>({});
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [showAll, setShowAll] = useState(false);
@@ -50,10 +51,11 @@ export default function TrayPanel() {
 
   const refresh = useCallback(async () => {
     try {
-      const [s, list, status] = await Promise.all([api.settingsGet(), api.historyList(), api.boxStatus()]);
+      const [s, list, status, uploadStatus] = await Promise.all([api.settingsGet(), api.historyList(), api.boxStatus(), api.uploadStatus()]);
       setSettings(s.settings);
       setItems(list);
       setBox(status);
+      setUpload(uploadStatus);
     } catch (e) {
       console.error(e);
     }
@@ -66,7 +68,7 @@ export default function TrayPanel() {
   }, [refresh]);
 
   useTauriEvent('history:changed', () => refresh());
-  useTauriEvent('box:changed', () => refresh());
+  useTauriEvent('upload:changed', () => refresh());
   useTauriEvent<AppSettings>('settings:changed', (e) => setSettings(e.payload));
   useTauriEvent('panel:shown', () => {
     refresh();
@@ -117,7 +119,7 @@ export default function TrayPanel() {
           </span>
           {channel && <DevBadge channel={channel} />}
           <div className="flex-1" data-tauri-drag-region />
-          <BoxPill box={box} refresh={refresh} />
+          <UploadPill box={box} upload={upload} refresh={refresh} />
           <IconButton tip="Настройки" tipPos="left" size={30} onClick={() => api.openSettings()}>
             <SettingsIcon size={19} />
           </IconButton>
@@ -187,9 +189,24 @@ function capture(mode: CaptureMode) {
   api.capture(mode);
 }
 
-function BoxPill({ box, refresh }: { box: BoxStatus | null; refresh: () => void }) {
+/** Where links come from: S3 (configured or not) or Box (signed in, or "Sign in"). */
+function UploadPill({ box, upload, refresh }: { box: BoxStatus | null; upload: UploadStatus | null; refresh: () => void }) {
   const [signingIn, setSigningIn] = useState(false);
-  if (!box) return null;
+  if (upload?.provider === 's3') {
+    const s3 = upload.s3;
+    return (
+      <button
+        className="flex h-7 items-center gap-1.5 rounded-full bg-surface-2 px-2.5 text-[12px] transition-colors hover:bg-surface-3"
+        data-tip={s3.ready ? `Бакет ${s3.bucket}\n${s3.endpoint.replace(/^https?:\/\//, '')}` : 'Укажите бакет и ключ в настройках'}
+        data-tip-pos="left"
+        onClick={() => api.openSettings('box')}
+      >
+        <span className={clsx('h-[7px] w-[7px] rounded-full', s3.ready ? 'bg-success' : 'bg-warning')} />
+        {s3.ready ? 'S3' : 'Настроить S3'}
+      </button>
+    );
+  }
+  if (!box || !upload) return null;
   if (box.ready) {
     return (
       <button
@@ -297,7 +314,7 @@ function Hero({
       <div className="flex items-center gap-2 p-2.5">
         {uploading ? (
           <div className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-[10px] bg-surface px-3 text-[12px] text-muted">
-            <Spinner size={14} /> Загрузка в Box…
+            <Spinner size={14} /> Загрузка…
           </div>
         ) : item.shortLink ? (
           <button
@@ -324,7 +341,7 @@ function Hero({
             className="h-9"
             icon={<Link2 size={16} />}
             disabled={uploading}
-            tip="Загрузить в Box и скопировать ссылку"
+            tip="Загрузить и скопировать ссылку"
             tipPos="top-left"
             onClick={() => run(item.id, 'upload', () => api.historyUpload(item.id))}
           >

@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use serde::Serialize;
 use shoter_core::boxapi::BoxUser;
 use shoter_core::history::HistoryItem;
-use shoter_core::settings::{AppSettings, BoxAuthMode};
-use shoter_core::{imaging, links, Rect};
+use shoter_core::settings::{AppSettings, BoxAuthMode, UploadProvider};
+use shoter_core::{imaging, links, s3, Rect};
 use tauri::ipc::{InvokeBody, Request};
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
@@ -82,7 +82,7 @@ pub fn settings_get(app: AppHandle) -> SettingsView {
         settings: state.settings(),
         default_save_folder: state.paths.default_save_dir.display().to_string(),
         history_folder: state.paths.history_dir.display().to_string(),
-        default_link_template: crate::state::default_link_template(),
+        default_link_template: state.default_link_template(),
     }
 }
 
@@ -151,7 +151,9 @@ async fn apply_changes(app: &AppHandle, before: &AppSettings, after: &AppSetting
             })?;
         }
         state.reset_box_client();
-        let _ = app.emit("box:changed", ());
+        let _ = app.emit("upload:changed", ());
+    } else if before.s3 != after.s3 || before.upload_provider != after.upload_provider {
+        let _ = app.emit("upload:changed", ());
     }
     if before.theme != after.theme {
         ui::apply_theme(app);
@@ -637,7 +639,7 @@ pub fn box_set_secret(app: AppHandle, kind: String, value: String) -> CmdResult<
         _ => {}
     })?;
     state.reset_box_client();
-    let _ = app.emit("box:changed", ());
+    let _ = app.emit("upload:changed", ());
     Ok(())
 }
 
@@ -669,11 +671,82 @@ pub fn box_logout(app: AppHandle) -> CmdResult<()> {
     actions::box_logout(&app)
 }
 
-/// Preview of the link rewriting for the settings page.
+// ---------------------------------------------------------------- S3 and the choice of storage
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadStatus {
+    /// Where uploads go now.
+    provider: UploadProvider,
+    /// The build's choice (while the settings have none).
+    default_provider: UploadProvider,
+    /// Link template used while `links.template` is empty (depends on the storage).
+    default_link_template: String,
+    s3: S3Status,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct S3Status {
+    /// Everything for an upload is there (it may still fail on the server).
+    ready: bool,
+    /// This build has a storage key built in.
+    builtin_key: bool,
+    /// The secret of the own key is saved.
+    has_secret: bool,
+    /// Values in effect (the settings', else the build's / defaults) — placeholders of the fields.
+    endpoint: String,
+    region: String,
+    bucket: String,
+    prefix: String,
+}
+
 #[tauri::command]
-pub fn link_preview(template: String) -> String {
-    let template = if template.trim().is_empty() { crate::state::default_link_template() } else { template };
-    links::rewrite("https://app.box.com/s/3rud4dfakga5r953wt77anhyzo27tm7r", &template, Some("Screenshot.png"))
+pub fn upload_status(app: AppHandle) -> UploadStatus {
+    let state = app.state::<AppState>();
+    let config = state.s3_config();
+    let has_secret = !state.secrets.lock().unwrap().s3_secret_access_key.is_empty();
+    UploadStatus {
+        provider: state.upload_provider(),
+        default_provider: crate::state::default_upload_provider(),
+        default_link_template: state.default_link_template(),
+        s3: S3Status {
+            ready: !config.bucket.is_empty() && !config.access_key_id.is_empty() && !config.secret_access_key.is_empty(),
+            builtin_key: crate::state::builtin_s3_key().is_some(),
+            has_secret,
+            endpoint: config.endpoint,
+            region: config.region,
+            bucket: config.bucket,
+            prefix: config.prefix,
+        },
+    }
+}
+
+/// Stores the secret of the own S3 key. Empty value clears it.
+#[tauri::command]
+pub fn s3_set_secret(app: AppHandle, value: String) -> CmdResult<()> {
+    let state = app.state::<AppState>();
+    state.update_secrets(|s| s.s3_secret_access_key = value.trim().to_string())?;
+    let _ = app.emit("upload:changed", ());
+    Ok(())
+}
+
+/// Writes a tiny object to check the storage settings and the key.
+#[tauri::command]
+pub async fn s3_test(app: AppHandle) -> CmdResult<()> {
+    let state = app.state::<AppState>();
+    s3::check(&shoter_core::boxapi::http_client(), &state.s3_config()).await.map_err(err)
+}
+
+/// Preview of the link for the settings page: by `template` (empty — the default one).
+#[tauri::command]
+pub fn link_preview(app: AppHandle, template: String) -> String {
+    let state = app.state::<AppState>();
+    let template = if template.trim().is_empty() { state.default_link_template() } else { template };
+    match state.upload_provider() {
+        UploadProvider::Box => links::rewrite("https://app.box.com/s/3rud4dfakga5r953wt77anhyzo27tm7r", &template, Some("Screenshot.png")),
+        UploadProvider::S3 => links::fill(&template, "k3m9x2p7q4r8s5t6", Some("Screenshot.png")),
+    }
 }
 
 // ---------------------------------------------------------------- updates

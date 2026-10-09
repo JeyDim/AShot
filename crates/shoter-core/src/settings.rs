@@ -180,10 +180,36 @@ impl Default for BoxSettings {
     }
 }
 
+/// Where "Get link" uploads screenshots to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UploadProvider {
+    /// Box.com: the shared link of the uploaded file.
+    Box,
+    /// S3-compatible storage (Yandex Object Storage): the object under a random id.
+    S3,
+}
+
+/// S3 storage. Empty fields = the build's values (CI secrets), then Yandex Object Storage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct S3Settings {
+    /// `https://storage.yandexcloud.net`.
+    pub endpoint: String,
+    pub region: String,
+    pub bucket: String,
+    /// Folder in the bucket (`shots/`).
+    pub prefix: String,
+    /// Own key (advanced), used instead of the build's one; its secret is kept with the other
+    /// secrets (encrypted).
+    pub access_key_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct LinkSettings {
-    /// Replace `https://app.box.com/s/<id>` using the template.
+    /// Make the link by the template (Box: instead of `https://app.box.com/s/<id>`; S3: instead
+    /// of the direct object URL).
     pub rewrite: bool,
     /// Empty = the build's default: the proxy domain or the Box embed link.
     pub template: String,
@@ -377,8 +403,11 @@ pub struct AppSettings {
     pub image_format: ImageFormat,
     pub jpeg_quality: u8,
     pub hotkeys: Hotkeys,
+    /// `None` — the build's choice: S3 when it has a storage key built in, otherwise Box.
+    pub upload_provider: Option<UploadProvider>,
     #[serde(rename = "box")]
     pub box_: BoxSettings,
+    pub s3: S3Settings,
     pub links: LinkSettings,
     pub editor: EditorPrefs,
     pub resize: ResizeSettings,
@@ -411,7 +440,9 @@ impl Default for AppSettings {
             image_format: ImageFormat::Png,
             jpeg_quality: 90,
             hotkeys: Hotkeys::default(),
+            upload_provider: None,
             box_: BoxSettings::default(),
+            s3: S3Settings::default(),
             links: LinkSettings::default(),
             editor: EditorPrefs::default(),
             resize: ResizeSettings::default(),
@@ -453,6 +484,12 @@ impl AppSettings {
         if !matches!(self.box_.shared_link_access.as_str(), "open" | "company" | "collaborators") {
             self.box_.shared_link_access = "open".into();
         }
+        let endpoint = self.s3.endpoint.trim().trim_end_matches('/');
+        self.s3.endpoint = if endpoint.is_empty() || endpoint.contains("://") { endpoint.into() } else { format!("https://{endpoint}") };
+        self.s3.region = self.s3.region.trim().to_string();
+        self.s3.bucket = self.s3.bucket.trim().to_string();
+        self.s3.prefix = crate::s3::normalize_prefix(&self.s3.prefix);
+        self.s3.access_key_id = self.s3.access_key_id.trim().to_string();
         self.links.template = crate::links::normalize_template(&self.links.template);
         self
     }
@@ -674,6 +711,23 @@ mod tests {
         assert_eq!(s.history_limit, 1);
         assert_eq!(s.box_.shared_link_access, "open");
         assert_eq!(s.links.template, "https://advant.one/{id}");
+    }
+
+    #[test]
+    fn upload_provider_and_s3() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        // Files of older versions: the build decides.
+        std::fs::write(&path, br#"{"showCursor":true}"#).unwrap();
+        let s = AppSettings::load(&path);
+        assert_eq!(s.upload_provider, None);
+        assert_eq!(s.s3, S3Settings::default());
+        std::fs::write(&path, br#"{"uploadProvider":"s3","s3":{"bucket":" ashot ","prefix":"/shots","endpoint":"storage.yandexcloud.net/"}}"#).unwrap();
+        let s = AppSettings::load(&path);
+        assert_eq!(s.upload_provider, Some(UploadProvider::S3));
+        assert_eq!((s.s3.bucket.as_str(), s.s3.prefix.as_str(), s.s3.endpoint.as_str()), ("ashot", "shots/", "https://storage.yandexcloud.net"));
+        std::fs::write(&path, br#"{"uploadProvider":"box"}"#).unwrap();
+        assert_eq!(AppSettings::load(&path).upload_provider, Some(UploadProvider::Box));
     }
 
     #[test]

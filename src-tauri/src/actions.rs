@@ -1,4 +1,4 @@
-//! What happens with a screenshot: copy, save, upload to Box, open in the editor.
+//! What happens with a screenshot: copy, save, upload to Box or S3, open in the editor.
 
 use std::path::{Path, PathBuf};
 
@@ -8,7 +8,8 @@ use serde::Serialize;
 use shoter_core::history::HistoryItem;
 use shoter_core::boxapi::{self, BoxError, BoxUser, UploadResult};
 use shoter_core::oauth;
-use shoter_core::settings::{BoxAuthMode, ImageFormat, ResizeSettings};
+use shoter_core::s3::{self, S3Error};
+use shoter_core::settings::{BoxAuthMode, ImageFormat, ResizeSettings, UploadProvider};
 use shoter_core::{filename, imaging, links};
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
@@ -297,11 +298,12 @@ fn same_dir(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// Uploads the current image of a history item to Box, creates the shared link,
-/// rewrites it to the proxy domain and copies it to the clipboard.
+/// Uploads the current image of a history item (to Box or S3, as the settings say), makes the
+/// link by the template (the proxy domain) and copies it to the clipboard.
 pub async fn upload_item(app: &AppHandle, id: &str) -> Result<String, String> {
     let state = app.state::<AppState>();
     let settings = state.settings();
+    let provider = state.upload_provider();
     let (item, png) = read_current(app, id)?;
     let (out_w, out_h) = settings.resize.output_size(item.width, item.height);
     let progress = || {
@@ -310,7 +312,11 @@ pub async fn upload_item(app: &AppHandle, id: &str) -> Result<String, String> {
         } else {
             format!("{out_w} × {out_h}")
         };
-        Toast::progress("Загрузка в Box…").message(hint).item(id)
+        let title = match provider {
+            UploadProvider::Box => "Загрузка в Box…",
+            UploadProvider::S3 => "Загрузка…",
+        };
+        Toast::progress(title).message(hint).item(id)
     };
     ui::toast(app, progress());
 
@@ -327,39 +333,14 @@ pub async fn upload_item(app: &AppHandle, id: &str) -> Result<String, String> {
     );
     let mime = format.mime();
 
-    let mut result = upload_once(app, &name, data.clone(), mime).await;
-    // Not signed in yet / token expired or revoked: open the Box sign-in page right away
-    // and continue the upload after the user grants access — like Greenshot.
-    if settings.box_.auth_mode == BoxAuthMode::OAuth && matches!(result, Err(BoxError::NotConfigured(_) | BoxError::Auth(_))) {
-        result = match box_login(app).await {
-            Ok(_) => {
-                ui::toast(app, progress());
-                upload_once(app, &name, data, mime).await
-            }
-            Err(e) => {
-                ui::toast(app, Toast::error("Вход в Box не выполнен", e.clone()).item(id));
-                return Err(e);
-            }
-        };
-    }
-    let result = result.map_err(|e| e.to_string());
-
-    let uploaded = match result {
-        Ok(r) => r,
-        Err(e) => {
-            ui::toast(app, Toast::error("Не удалось загрузить в Box", e.clone()).item(id).retry_upload());
-            return Err(e);
-        }
+    let published = match provider {
+        UploadProvider::Box => publish_box(app, id, &name, data, mime, progress).await?,
+        UploadProvider::S3 => publish_s3(app, id, &name, data, mime).await?,
     };
-    let box_url = uploaded.shared_link.url.clone();
-    let share = if settings.links.rewrite {
-        links::rewrite(&box_url, &crate::state::link_template(&settings.links), Some(&uploaded.file_name))
-    } else {
-        box_url.clone()
-    };
+    let share = published.link.clone();
     let _ = state.history.modify(id, |i| {
-        i.box_file_id = Some(uploaded.file_id.clone());
-        i.box_url = Some(box_url.clone());
+        i.box_file_id = published.box_file_id.clone();
+        i.box_url = published.box_url.clone();
         i.share_url = Some(share.clone());
         i.uploaded_revision = Some(i.revision);
     });
@@ -372,19 +353,94 @@ pub async fn upload_item(app: &AppHandle, id: &str) -> Result<String, String> {
     if settings.links.open_after_upload {
         let _ = app.opener().open_url(share.clone(), None::<&str>);
     }
-    let restricted = uploaded
-        .shared_link
-        .effective_access
-        .as_deref()
-        .is_some_and(|a| a != "open" && settings.box_.shared_link_access == "open");
-    let mut toast = Toast::success(if copied { "Ссылка скопирована" } else { "Загружено в Box" }).link(share.clone()).item(id).timeout(7000);
-    if restricted {
-        toast = toast.message("Администратор Box запретил публичные ссылки — без входа в Box (например, с телефона) ссылка может не открыться.");
+    let mut toast = Toast::success(if copied { "Ссылка скопирована" } else { published.done }).link(share.clone()).item(id).timeout(7000);
+    if let Some(note) = published.note {
+        toast = toast.message(note);
         toast.kind = "info".into();
         toast.timeout_ms = 12000;
     }
     ui::toast(app, toast);
     Ok(share)
+}
+
+/// A screenshot put into the storage.
+struct Published {
+    /// The link given to the user.
+    link: String,
+    box_file_id: Option<String>,
+    /// Box shared link (`https://app.box.com/s/...`).
+    box_url: Option<String>,
+    /// Title of the toast when the link was not copied.
+    done: &'static str,
+    /// A warning shown with the link.
+    note: Option<&'static str>,
+}
+
+/// Box: the file and its shared link. Not signed in yet (or the token was revoked): the
+/// sign-in opens right away and the upload continues after it — like Greenshot.
+async fn publish_box(app: &AppHandle, id: &str, name: &str, data: Vec<u8>, mime: &str, progress: impl Fn() -> Toast) -> Result<Published, String> {
+    let state = app.state::<AppState>();
+    let settings = state.settings();
+    let mut result = upload_once(app, name, data.clone(), mime).await;
+    if settings.box_.auth_mode == BoxAuthMode::OAuth && matches!(result, Err(BoxError::NotConfigured(_) | BoxError::Auth(_))) {
+        result = match box_login(app).await {
+            Ok(_) => {
+                ui::toast(app, progress());
+                upload_once(app, name, data, mime).await
+            }
+            Err(e) => {
+                ui::toast(app, Toast::error("Вход в Box не выполнен", e.clone()).item(id));
+                return Err(e);
+            }
+        };
+    }
+    let uploaded = match result.map_err(|e| e.to_string()) {
+        Ok(r) => r,
+        Err(e) => {
+            ui::toast(app, Toast::error("Не удалось загрузить в Box", e.clone()).item(id).retry_upload());
+            return Err(e);
+        }
+    };
+    let box_url = uploaded.shared_link.url.clone();
+    let link = if settings.links.rewrite {
+        links::rewrite(&box_url, &state.link_template(), Some(&uploaded.file_name))
+    } else {
+        box_url.clone()
+    };
+    let restricted = uploaded
+        .shared_link
+        .effective_access
+        .as_deref()
+        .is_some_and(|a| a != "open" && settings.box_.shared_link_access == "open");
+    Ok(Published {
+        link,
+        box_file_id: Some(uploaded.file_id),
+        box_url: Some(box_url),
+        done: "Загружено в Box",
+        note: restricted.then_some("Администратор Box запретил публичные ссылки — без входа в Box (например, с телефона) ссылка может не открыться."),
+    })
+}
+
+/// S3: the object under a random id; the link — the template with that id (the proxy domain),
+/// or the direct object URL.
+async fn publish_s3(app: &AppHandle, id: &str, name: &str, data: Vec<u8>, mime: &str) -> Result<Published, String> {
+    let state = app.state::<AppState>();
+    match s3::upload(&boxapi::http_client(), &state.s3_config(), name, data, mime).await {
+        Ok(up) => {
+            let link = if state.settings().links.rewrite { links::fill(&state.link_template(), &up.id, Some(name)) } else { up.url };
+            Ok(Published { link, box_file_id: None, box_url: None, done: "Загружено", note: None })
+        }
+        Err(S3Error::NotConfigured(what)) => {
+            let e = format!("{what} — «Настройки → Загрузка и ссылки»");
+            ui::toast(app, Toast::error("Хранилище не настроено", e.clone()).item(id));
+            Err(e)
+        }
+        Err(e) => {
+            let e = e.to_string();
+            ui::toast(app, Toast::error("Не удалось загрузить", e.clone()).item(id).retry_upload());
+            Err(e)
+        }
+    }
 }
 
 async fn upload_once(app: &AppHandle, name: &str, data: Vec<u8>, mime: &str) -> Result<UploadResult, BoxError> {
@@ -455,7 +511,7 @@ pub async fn box_login(app: &AppHandle) -> Result<BoxUser, String> {
     state.reset_box_client();
     let user = state.box_client(app)?.current_user().await.map_err(|e| e.to_string())?;
     state.update_secrets(|s| s.box_account = Some(user.clone()))?;
-    let _ = app.emit("box:changed", ());
+    let _ = app.emit("upload:changed", ());
     let who = if user.name.is_empty() { user.login.clone() } else { format!("{} · {}", user.name, user.login) };
     ui::toast(app, Toast::success("Box подключён").message(who));
     Ok(user)
@@ -469,6 +525,6 @@ pub fn box_logout(app: &AppHandle) -> Result<(), String> {
         s.box_account = None;
     })?;
     state.reset_box_client();
-    let _ = app.emit("box:changed", ());
+    let _ = app.emit("upload:changed", ());
     Ok(())
 }

@@ -23,6 +23,11 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SHOTER_BOX_CLIENT_ID");
     println!("cargo:rerun-if-env-changed=SHOTER_BOX_CLIENT_SECRET");
     println!("cargo:rerun-if-env-changed=SHOTER_BOX_REDIRECT_URI");
+    // S3 storage (Yandex Object Storage) – CI secrets, see README; with a key built in,
+    // uploads go there by default.
+    for name in ["ACCESS_KEY_ID", "SECRET_ACCESS_KEY", "BUCKET", "PREFIX", "ENDPOINT", "REGION"] {
+        println!("cargo:rerun-if-env-changed=SHOTER_S3_{name}");
+    }
     // Proxy domain for links (CI secret PROXY_DOMAIN); empty = Box embed links.
     println!("cargo:rerun-if-env-changed=SHOTER_PROXY_DOMAIN");
     // Self-update source: own server (CI secret UPDATE_URL) or the GitHub repository.
