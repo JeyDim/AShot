@@ -86,20 +86,30 @@ try {
         return # nothing new
     }
 
-    foreach ($kind in 'installer', 'portable', 'msi') {
-        $entry = $manifest.files.$kind
-        if (-not $entry) { continue }
-        $name = [IO.Path]::GetFileName(([Uri] $entry.url).AbsolutePath)
-        $asset = $release.assets | Where-Object { $_.name -eq $name } | Select-Object -First 1
-        if (-not $asset) { throw "$name is listed in latest.json but missing in release $($release.tag_name)" }
-        $file = Join-Path $work $name
-        Save-Asset $asset $file
-        $hash = (Get-FileHash -Algorithm SHA256 -Path $file).Hash
-        if ((Get-Item $file).Length -ne $entry.size -or $hash -ne $entry.sha256) {
-            throw "${name}: size or SHA-256 differs from latest.json"
+    # Files of each platform; `files` is the old name of `win_amd64` (the same files),
+    # still read by versions before the ARM64 builds.
+    $saved = @{}
+    foreach ($platform in 'win_amd64', 'win_arm64', 'files') {
+        $files = $manifest.$platform
+        if (-not $files) { continue }
+        foreach ($kind in 'installer', 'portable') {
+            $entry = $files.$kind
+            if (-not $entry) { continue }
+            $name = [IO.Path]::GetFileName(([Uri] $entry.url).AbsolutePath)
+            if (-not $saved.ContainsKey($name)) {
+                $asset = $release.assets | Where-Object { $_.name -eq $name } | Select-Object -First 1
+                if (-not $asset) { throw "$name is listed in latest.json but missing in release $($release.tag_name)" }
+                $file = Join-Path $work $name
+                Save-Asset $asset $file
+                $hash = (Get-FileHash -Algorithm SHA256 -Path $file).Hash
+                if ((Get-Item $file).Length -ne $entry.size -or $hash -ne $entry.sha256) {
+                    throw "${name}: size or SHA-256 differs from latest.json"
+                }
+                Move-Item -Force -Path $file -Destination (Join-Path $Target $name)
+                $saved[$name] = $true
+            }
+            $entry.url = $name # relative: clients download it from this folder
         }
-        Move-Item -Force -Path $file -Destination (Join-Path $Target $name)
-        $entry.url = $name # relative: clients download it from this folder
     }
     # The release page of a private repository is not reachable for users; the app then
     # shows the notes from the manifest instead of a "what's new" link.

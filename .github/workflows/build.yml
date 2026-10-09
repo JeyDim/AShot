@@ -70,25 +70,38 @@ jobs:
           npm run smoke
 
   windows:
-    name: Windows build
+    name: Windows build (${{ matrix.arch }})
     if: github.event.action != 'closed'
     runs-on: windows-latest
     timeout-minutes: 45
     permissions:
-      contents: write # draft release, dev prerelease
-      pull-requests: write # the dev build comment in the pull request
-      issues: write
+      contents: read
+      pull-requests: read # is the branch in an open pull request
+    strategy:
+      matrix:
+        include:
+          - arch: x64
+            target: x86_64-pc-windows-msvc
+            machine: '0x8664'
+          # Cross-compiled: the image has the MSVC ARM64 tools, and Windows on ARM runners
+          # are free only for public repositories.
+          - arch: arm64
+            target: aarch64-pc-windows-msvc
+            machine: '0xAA64'
+    # The same in both builds; the publish job takes them from here.
     outputs:
       version: ${{ steps.version.outputs.version }}
+      pr: ${{ steps.dev.outputs.pr }}
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0 # tags and history for the release notes
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          key: windows
+          key: ${{ matrix.arch }}
           save-if: ${{ env.SAVE_CACHE }}
       - uses: actions/setup-node@v7
         with:
@@ -126,18 +139,17 @@ jobs:
           $config = [ordered]@{ version = $v }
           if ($env:PR) {
             # AShot Dev: installs next to AShot (own settings, history, sign-in, autostart entry),
-            # no self-update; only the NSIS installer.
+            # no self-update.
             $config.productName = 'AShot Dev'
             $config.mainBinaryName = 'AShot-Dev'
             $config.identifier = 'one.advant.shoter.dev'
-            $config.bundle = [ordered]@{ targets = @('nsis') }
           }
           $config | ConvertTo-Json -Depth 5 | Set-Content -Path "${{ runner.temp }}/version.json" -Encoding utf8NoBOM
           Get-Content "${{ runner.temp }}/version.json"
           "version=$v" >> $env:GITHUB_OUTPUT
           Write-Host "Version $v"
-      - name: Build installer (NSIS + MSI; AShot Dev — NSIS)
-        run: npx tauri build --config "${{ runner.temp }}/version.json"
+      - name: Build installer (NSIS)
+        run: npx tauri build --target ${{ matrix.target }} --config "${{ runner.temp }}/version.json"
         env:
           # Built-in Box app: users only press "Sign in with Box" (see README).
           # Empty when the secrets are not set – then the app asks for an own Box app.
@@ -161,10 +173,64 @@ jobs:
           # AShot Dev shows which pull request it is.
           # (quoted: an unquoted " #" would start a YAML comment)
           SHOTER_CHANNEL: "${{ steps.dev.outputs.pr != '' && format('PR #{0}', steps.dev.outputs.pr) || '' }}"
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          $v = "${{ steps.version.outputs.version }}"
+          $pr = "${{ steps.dev.outputs.pr }}"
+          $arch = "${{ matrix.arch }}"
+          $release = "target/${{ matrix.target }}/release"
+          $exe = Get-Item "$release/$(if ($pr) { 'AShot-Dev.exe' } else { 'AShot.exe' })"
+          $exeVersion = $exe.VersionInfo.ProductVersion
+          if (-not $exeVersion.StartsWith($v)) { throw "$($exe.Name) has version $exeVersion, expected $v" }
+          # The PE header names the processor the exe is built for.
+          $bytes = [IO.File]::ReadAllBytes($exe.FullName)
+          $machine = [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3C) + 4)
+          if ($machine -ne ${{ matrix.machine }}) { throw ('{0} is built for machine 0x{1:X4}, expected ${{ matrix.machine }}' -f $exe.Name, $machine) }
+          New-Item -ItemType Directory -Force out | Out-Null
+          if ($pr) {
+            # Stable names: the links in the pull request stay the same from build to build.
+            $name = if ($arch -eq 'x64') { "AShot-Dev-PR$pr" } else { "AShot-Dev-PR$pr-$arch" }
+            Copy-Item (Get-ChildItem "$release/bundle/nsis/*.exe" | Select-Object -First 1).FullName "out/$name-setup.exe"
+            Copy-Item $exe.FullName "out/$name-portable.exe"
+          } else {
+            Copy-Item "$release/bundle/nsis/*.exe" out/
+            Copy-Item $exe.FullName "out/AShot_${v}_${arch}-portable.exe"
+          }
+          Get-ChildItem out | Format-Table Name, Length
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.dev.outputs.pr != '' && 'AShot-Dev' || 'AShot' }}-windows-${{ matrix.arch }}-${{ steps.version.outputs.version }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 14
+
+  # Both builds together: the update manifest and a draft release, or the dev prerelease.
+  publish:
+    name: Publish the builds
+    needs: windows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # draft release, dev prerelease
+      pull-requests: write # the dev build comment in the pull request
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.windows.outputs.version }}
+      PR: ${{ needs.windows.outputs.pr }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0 # tags and history for the release notes
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: '*-windows-*'
+          path: out
+          merge-multiple: true
       - name: Release notes (commits since the previous release)
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
+        if: env.PR == ''
         run: |
           # HEAD — the commit built (a pull request's own head, not the merge commit of github.sha)
           prev=$(gh release view --json tagName --jq .tagName 2>/dev/null || true)
@@ -173,57 +239,42 @@ jobs:
           git log --no-merges --format='- %s' "$range" | head -n 40 > "${{ runner.temp }}/notes.md"
           [ -s "${{ runner.temp }}/notes.md" ] || git log -1 --format='- %s' HEAD > "${{ runner.temp }}/notes.md"
           cat "${{ runner.temp }}/notes.md"
-      - name: Collect artifacts and the update manifest
+      - name: Update manifest (latest.json)
+        if: env.PR == ''
         shell: pwsh
         run: |
-          $v = "${{ steps.version.outputs.version }}"
-          $pr = "${{ steps.dev.outputs.pr }}"
-          $exe = if ($pr) { 'AShot-Dev.exe' } else { 'AShot.exe' }
-          $exeVersion = (Get-Item "target/release/$exe").VersionInfo.ProductVersion
-          if (-not $exeVersion.StartsWith($v)) { throw "$exe has version $exeVersion, expected $v" }
-          New-Item -ItemType Directory -Force out | Out-Null
-          if ($pr) {
-            # Stable names: the links in the pull request stay the same from build to build.
-            Copy-Item (Get-ChildItem target/release/bundle/nsis/*.exe | Select-Object -First 1).FullName "out/AShot-Dev-PR$pr-setup.exe"
-            Copy-Item "target/release/$exe" "out/AShot-Dev-PR$pr-portable.exe"
-            Get-ChildItem out | Format-Table Name, Length
-            exit 0
-          }
-          Copy-Item target/release/bundle/nsis/*.exe out/
-          Copy-Item target/release/bundle/msi/*.msi out/
-          Copy-Item target/release/AShot.exe "out/AShot_${v}_x64-portable.exe"
+          $v = $env:VERSION
           # latest.json: what the app reads to update (from GitHub or from a mirror such as IIS).
           $base = "${{ github.server_url }}/${{ github.repository }}/releases/download/v$v"
           function Entry($file) {
             $f = Get-Item $file
             [ordered]@{ url = "$base/$($f.Name)"; size = $f.Length; sha256 = (Get-FileHash $f -Algorithm SHA256).Hash.ToLower() }
           }
+          function Files($arch) {
+            [ordered]@{
+              installer = Entry "out/AShot_${v}_${arch}-setup.exe"
+              portable = Entry "out/AShot_${v}_${arch}-portable.exe"
+            }
+          }
+          $amd64 = Files x64
           [ordered]@{
             version = $v
             notes = (Get-Content -Raw "${{ runner.temp }}/notes.md").Trim()
             url = "${{ github.server_url }}/${{ github.repository }}/releases/tag/v$v"
-            files = [ordered]@{
-              installer = Entry (Get-ChildItem out/*-setup.exe)
-              portable = Entry "out/AShot_${v}_x64-portable.exe"
-              msi = Entry (Get-ChildItem out/*.msi)
-            }
+            win_amd64 = $amd64
+            win_arm64 = Files arm64
+            # The old name of win_amd64: versions before the ARM64 builds read only it and reject
+            # a manifest without it. To be dropped once they are gone (see README → Обновления).
+            files = $amd64
           } | ConvertTo-Json -Depth 5 | Set-Content out/latest.json -Encoding utf8NoBOM
           Get-Content out/latest.json
           Get-ChildItem out | Format-Table Name, Length
-      - uses: actions/upload-artifact@v7
-        with:
-          name: ${{ steps.dev.outputs.pr != '' && 'AShot-Dev' || 'AShot' }}-windows-${{ steps.version.outputs.version }}
-          path: out/*
-          if-no-files-found: error
-          retention-days: 14
       # Default-branch builds: a draft release, published by the next job once the tests pass.
       - name: Draft release
         if: env.IS_RELEASE == 'true'
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          $v = "${{ steps.version.outputs.version }}"
+          $v = $env:VERSION
           $files = (Get-ChildItem out).FullName
           gh release view "v$v" *> $null
           if ($LASTEXITCODE -eq 0) {
@@ -235,12 +286,8 @@ jobs:
       # Pull requests: one prerelease per pull request, replaced by every build. Never
       # "latest" — the apps and the update mirror read only the latest release.
       - name: Dev build → prerelease and a comment in the pull request
-        if: steps.dev.outputs.pr != ''
-        shell: bash
+        if: env.PR != ''
         env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ steps.dev.outputs.pr }}
-          VERSION: ${{ steps.version.outputs.version }}
           SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -260,6 +307,7 @@ jobs:
 
           - [Установщик]($base/AShot-Dev-PR$PR-setup.exe) — ставится рядом с AShot как «AShot Dev»
           - [Portable]($base/AShot-Dev-PR$PR-portable.exe) — без установки
+          - Windows на ARM: [установщик]($base/AShot-Dev-PR$PR-arm64-setup.exe) · [portable]($base/AShot-Dev-PR$PR-arm64-portable.exe)
 
           AShot Dev — отдельная программа: свои настройки, история и вход в Box, метка «DEV» в панели, сама не обновляется. Горячие клавиши те же, что у AShot, — на время проверки выйдите из AShot (трей → «Выход»).
           Ссылки не меняются: сборка заменяется при каждом пуше в этот pull request и удаляется, когда он закрыт.
@@ -300,7 +348,7 @@ jobs:
 
   release:
     name: Publish release
-    needs: [checks, windows]
+    needs: [checks, windows, publish]
     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
     timeout-minutes: 10

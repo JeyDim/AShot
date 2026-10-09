@@ -18,7 +18,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi"],
+    "targets": ["nsis"],
     "publisher": "Advant",
     "copyright": "© Advant",
     "category": "Utility",
@@ -37,9 +37,6 @@
         "installMode": "currentUser",
         "languages": ["Russian", "English"],
         "displayLanguageSelector": false
-      },
-      "wix": {
-        "language": "ru-RU"
       }
     }
   }

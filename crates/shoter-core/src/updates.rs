@@ -2,9 +2,14 @@
 //!
 //! ```json
 //! { "version": "0.1.17", "notes": "- …", "url": "https://…/releases/tag/v0.1.17",
-//!   "files": { "installer": { "url": "AShot_0.1.17_x64-setup.exe", "size": 1, "sha256": "…" },
-//!              "portable":  { "url": "…", "size": 1, "sha256": "…" } } }
+//!   "win_amd64": { "installer": { "url": "AShot_0.1.17_x64-setup.exe", "size": 1, "sha256": "…" },
+//!                  "portable":  { "url": "…", "size": 1, "sha256": "…" } },
+//!   "win_arm64": { "installer": { "url": "AShot_0.1.17_arm64-setup.exe", … }, … },
+//!   "files": { … } }
 //! ```
+//!
+//! `files` is the old name of `win_amd64`: versions without ARM64 builds read only it (and
+//! fail without it), so CI still writes a copy until those versions are gone.
 //!
 //! The manifest is read from GitHub (`…/releases/latest/download/latest.json`) or from an
 //! own server (IIS) that mirrors the releases. File URLs may be absolute or relative to
@@ -44,14 +49,16 @@ pub struct Manifest {
     /// Release page ("what's new"); may be empty.
     #[serde(default)]
     pub url: String,
-    pub files: Files,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub win_amd64: Option<Files>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub win_arm64: Option<Files>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Files {
     pub installer: Option<FileEntry>,
     pub portable: Option<FileEntry>,
-    pub msi: Option<FileEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,10 +79,17 @@ pub enum InstallKind {
 }
 
 impl Manifest {
+    /// The file that updates the running build.
     pub fn file(&self, kind: InstallKind) -> Option<&FileEntry> {
+        self.file_for(kind, cfg!(target_arch = "aarch64"))
+    }
+
+    /// An ARM64 build takes only ARM64 files: the x64 ones would run too, but emulated.
+    pub fn file_for(&self, kind: InstallKind, arm64: bool) -> Option<&FileEntry> {
+        let files = if arm64 { self.win_arm64.as_ref()? } else { self.win_amd64.as_ref()? };
         match kind {
-            InstallKind::Installer => self.files.installer.as_ref(),
-            InstallKind::Portable => self.files.portable.as_ref(),
+            InstallKind::Installer => files.installer.as_ref(),
+            InstallKind::Portable => files.portable.as_ref(),
         }
     }
 }
@@ -200,6 +214,29 @@ mod tests {
         assert_eq!(file_url("https://github.com/o/r/releases/latest/download/latest.json", &abs).unwrap(), abs.url);
     }
 
+    #[test]
+    fn files_of_the_architecture() {
+        let entry = |url: &str| Some(FileEntry { url: url.into(), size: 1, sha256: String::new() });
+        let json = |m: &Manifest| serde_json::to_value(m).unwrap();
+        let mut manifest = Manifest {
+            version: "0.1.60".into(),
+            notes: String::new(),
+            url: String::new(),
+            win_amd64: Some(Files { installer: entry("x64-setup.exe"), portable: entry("x64-portable.exe") }),
+            win_arm64: None,
+        };
+        // A manifest without ARM64 files does not update an ARM64 build (nor mentions them).
+        assert!(json(&manifest).get("win_arm64").is_none());
+        assert!(manifest.file_for(InstallKind::Installer, true).is_none());
+        assert_eq!(manifest.file_for(InstallKind::Portable, false).unwrap().url, "x64-portable.exe");
+
+        manifest.win_arm64 = Some(Files { installer: entry("arm64-setup.exe"), portable: None });
+        let manifest: Manifest = serde_json::from_value(json(&manifest)).unwrap();
+        assert_eq!(manifest.file_for(InstallKind::Installer, true).unwrap().url, "arm64-setup.exe");
+        assert!(manifest.file_for(InstallKind::Portable, true).is_none());
+        assert_eq!(manifest.file_for(InstallKind::Installer, false).unwrap().url, "x64-setup.exe");
+    }
+
     #[tokio::test]
     async fn fetches_and_downloads_with_checks() {
         let server = MockServer::start().await;
@@ -209,7 +246,9 @@ mod tests {
             .and(path("/ashot/latest.json"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "version": "0.1.58", "notes": "- fix", "url": "",
-                "files": { "portable": { "url": "AShot_0.1.58_x64-portable.exe", "size": body.len(), "sha256": sha } }
+                "win_amd64": { "portable": { "url": "AShot_0.1.58_x64-portable.exe", "size": body.len(), "sha256": sha } },
+                // The old name of `win_amd64`, written for older versions: ignored.
+                "files": { "portable": { "url": "old.exe", "size": 1, "sha256": "" } }
             })))
             .mount(&server)
             .await;
@@ -223,8 +262,8 @@ mod tests {
         let murl = manifest_url(&format!("{}/ashot/", server.uri())).unwrap();
         let manifest = fetch_manifest(&http, &murl).await.unwrap();
         assert_eq!(manifest.version, "0.1.58");
-        assert!(manifest.file(InstallKind::Installer).is_none());
-        let file = manifest.file(InstallKind::Portable).unwrap().clone();
+        assert!(manifest.file_for(InstallKind::Installer, false).is_none());
+        let file = manifest.file_for(InstallKind::Portable, false).unwrap().clone();
         let url = file_url(&murl, &file).unwrap();
 
         let dir = tempfile::tempdir().unwrap();
